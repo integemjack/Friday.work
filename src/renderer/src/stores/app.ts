@@ -512,6 +512,15 @@ export const useAppStore = defineStore('app', {
         const key = item.kind === 'conversation' ? `conversation:${item.conversationID}` : item.kind
         if (seen.has(key)) continue
         seen.add(key)
+        // 幂等：恢复只往空桌面加窗口，桌上已有的同类不再叠一份。
+        // 不然 HMR 重挂载 App.vue → onMounted 重跑 restoreLayout 重入，每重入一次多叠一个，
+        // saveLayout 再原样存档 → 滚雪球（实测用户存档里攒了 19 个重复 machines 就是这么来的）
+        const already =
+          item.kind === 'conversation'
+            ? this.windows.some((entry) => entry.kind === 'conversation' && entry.conversationID === item.conversationID) ||
+              this.pendingConversations.some((entry) => entry.conversationID === item.conversationID)
+            : this.windows.some((entry) => entry.kind === item.kind)
+        if (already) continue
         if (item.kind === 'conversation') {
           // 会话要重新订阅（机器连上、列表到手才有），先排队
           if (!item.conversationID || this.pendingConversations.length >= 8) continue
