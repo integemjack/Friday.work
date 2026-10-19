@@ -17,6 +17,7 @@ function run(cmd, args) {
 run('npx', ['esbuild', 'src/protocol/rpc/MessagePatcher.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/patcher.cjs'])
 run('npx', ['esbuild', 'src/protocol/transport/WsTransport.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/wsfp.cjs', '--external:ws'])
 run('npx', ['esbuild', 'src/protocol/rpc/protocol.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/protocol.cjs'])
+run('npx', ['esbuild', 'src/protocol/rpc/ConversationPath.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/path.cjs'])
 run('node', ['--test', 'test/'])
 
 rmSync(tmp, { recursive: true, force: true })

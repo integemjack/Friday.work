@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
+import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
 import type {
   ActivityEventParams,
   AssistantEntry,
@@ -38,8 +39,12 @@ export interface EngineView {
 
 export interface ConversationDetail {
   conversationID: string
-  /** 消息按显示顺序 */
+  /** 消息按当前选中的分支展开的显示顺序 */
   messages: MessageWithVersion[]
+  /** 全部节点（分支没选中的也在，切换分支时用） */
+  nodes: ChatMessage[]
+  /** 每个父节点选中的孩子（REMOTE.md §5：selectedChildren） */
+  selectedChildren: Record<string, string>
   runtime: Runtime | null
   versions: Record<string, number>
 }
@@ -106,6 +111,8 @@ export const useAppStore = defineStore('app', {
     summaries: [] as ConversationSummary[],
     /** 每段打开的会话的完整视图（多窗口并存：每段会话一个窗口） */
     details: {} as Record<string, ConversationDetail>,
+    /** 一段会话的分支信息：消息 id → 同父几个孩子、当前第几个 */
+    branchInfo: {} as Record<string, Record<string, BranchInfo>>,
     /** 当前活动会话（输入框、审批横幅作用在它上面） */
     activeConversationID: '',
     /** 桌面上打开的窗口 */
@@ -521,9 +528,12 @@ export const useAppStore = defineStore('app', {
         this.details[conversationID] = {
           conversationID,
           messages,
+          nodes: [...conversation.nodes],
+          selectedChildren: { ...(conversation.selectedChildren ?? {}) },
           runtime: payload.runtime ?? null,
           versions: { ...(payload.versions ?? {}) }
         }
+        this.rebuildPath(this.details[conversationID]!)
         this.activeConversationID = conversationID
         const summary = this.summaries.find((item) => item.id === conversationID)
         this.openWindow('conversation', {
@@ -733,28 +743,20 @@ export const useAppStore = defineStore('app', {
       const detail = this.details[snapshot.conversation.id]
       if (!detail) return
       const versions = { ...detail.versions, ...(snapshot.versions ?? {}) }
+      const incoming = snapshot.conversation.nodes
       if (snapshot.partial) {
-        // partial：按前缀合并（REMOTE.md §5）——本地前缀一致的部分保留，后面整体换掉；版本用它带的
-        const local = detail.messages.map((entry) => entry.message)
-        const incoming = snapshot.conversation.nodes
-        let split = 0
-        const limit = Math.min(local.length, incoming.length)
-        while (split < limit && local[split]!.id === incoming[split]!.id) split += 1
-        const messages: MessageWithVersion[] = local.slice(0, split).map((message) => ({
-          message,
-          version: versions[message.id] ?? 0
-        }))
-        for (const message of incoming.slice(split)) {
-          messages.push({ message, version: versions[message.id] ?? 0 })
-        }
-        detail.messages = messages
+        // partial：要么是「只给了新的一截」，要么是把局部截出的树（REMOTE.md §5）；按 id 合并到现有节点里
+        const byID = new Map(detail.nodes.map((node) => [node.id, node]))
+        for (const node of incoming) byID.set(node.id, node)
+        detail.nodes = [...byID.values()]
       } else {
-        detail.messages = snapshot.conversation.nodes.map((message) => ({
-          message,
-          version: versions[message.id] ?? 0
-        }))
+        detail.nodes = [...incoming]
+      }
+      if (snapshot.conversation.selectedChildren) {
+        detail.selectedChildren = { ...detail.selectedChildren, ...snapshot.conversation.selectedChildren }
       }
       detail.versions = versions
+      this.rebuildPath(detail)
       // 标题跟着更新（会话窗口标题）
       const window = this.windows.find(
         (item) => item.kind === 'conversation' && item.conversationID === snapshot.conversation.id
@@ -762,18 +764,51 @@ export const useAppStore = defineStore('app', {
       if (window && snapshot.conversation.title) window.title = snapshot.conversation.title
     },
 
+    /** 按 parentID + selectedChildren 重建显示路径（分支切换后也调这个） */
+    rebuildPath(detail: ConversationDetail) {
+      const { path, branches } = conversationPath(detail.nodes, detail.selectedChildren)
+      detail.messages = path.map((message) => ({ message, version: detail.versions[message.id] ?? 0 }))
+      this.branchInfo[detail.conversationID] = branches
+    },
+
+    /** 切到另一条分支（方案 §5.3；runner.selectBranch {conversationID, child, parentKey}） */
+    async selectBranch(conversationID: string, messageID: string) {
+      const detail = this.details[conversationID]
+      const info = this.branchInfo[conversationID]?.[messageID]
+      if (!detail || !info || !this.currentMachine) return
+      try {
+        await rpc(this.currentMachine, 'runner.selectBranch', {
+          conversationID,
+          child: messageID,
+          parentKey: info.parentKey
+        })
+        // 本地先改（乐观更新），服务端的 conversation 快照会再对齐
+        detail.selectedChildren[info.parentKey] = messageID
+        this.rebuildPath(detail)
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error)
+      }
+    },
+
+    /** 同父的兄弟分支里前后跳（delta = ±1） */
+    async switchBranch(conversationID: string, messageID: string, delta: number) {
+      const info = this.branchInfo[conversationID]?.[messageID]
+      if (!info) return
+      const next = (info.index + delta + info.count) % info.count
+      const target = info.siblings[next]
+      if (target) await this.selectBranch(conversationID, target)
+    },
+
     applyWholeMessage(params: unknown) {
       const payload = params as { conversationID: string; message: ChatMessage; version?: number }
       const detail = this.details[payload.conversationID]
       if (!detail) return
       const version = payload.version ?? 0
-      const index = detail.messages.findIndex((entry) => entry.message.id === payload.message.id)
-      if (index >= 0) {
-        detail.messages[index] = { message: payload.message, version }
-      } else {
-        detail.messages.push({ message: payload.message, version })
-      }
+      const index = detail.nodes.findIndex((node) => node.id === payload.message.id)
+      if (index >= 0) detail.nodes[index] = payload.message
+      else detail.nodes.push(payload.message)
       detail.versions[payload.message.id] = version
+      this.rebuildPath(detail)
     },
 
     applyPatch(params: unknown) {
@@ -787,12 +822,12 @@ export const useAppStore = defineStore('app', {
       }
       const detail = this.details[patch.conversationID]
       if (!detail) return
-      const entry = detail.messages.find((candidate) => candidate.message.id === patch.messageID)
-      if (!entry || entry.version !== patch.base) {
+      const node = detail.nodes.find((candidate) => candidate.id === patch.messageID)
+      if (!node || (detail.versions[patch.messageID] ?? 0) !== patch.base) {
         void this.refetchMessage(patch.messageID, patch.conversationID)
         return
       }
-      const applied = applyMessagePatch(entry.message, {
+      const applied = applyMessagePatch(node, {
         conversationID: patch.conversationID,
         messageID: patch.messageID,
         base: patch.base,
@@ -804,8 +839,10 @@ export const useAppStore = defineStore('app', {
         void this.refetchMessage(patch.messageID, patch.conversationID)
         return
       }
-      entry.version = patch.version
       detail.versions[patch.messageID] = patch.version
+      // 块是原地改的，只为触发视图更新重建一次（保留对象引用）
+      const entry = detail.messages.find((candidate) => candidate.message.id === patch.messageID)
+      if (entry) entry.version = patch.version
     },
 
     /** 补丁打不上：拉整条 */
@@ -820,9 +857,11 @@ export const useAppStore = defineStore('app', {
         })) as { message: ChatMessage; version: number }
         const detail = this.details[conversationID]
         if (!detail) return
-        const index = detail.messages.findIndex((entry) => entry.message.id === messageID)
-        if (index >= 0) detail.messages[index] = { message: result.message, version: result.version }
+        const index = detail.nodes.findIndex((node) => node.id === messageID)
+        if (index >= 0) detail.nodes[index] = result.message
+        else detail.nodes.push(result.message)
         detail.versions[messageID] = result.version
+        this.rebuildPath(detail)
       } catch {
         // 拉不到就先不动（下一条补丁/快照会再对齐）
       }

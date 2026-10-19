@@ -45,6 +45,11 @@ async function submit(text: string, attachments: Array<{ path: string; name: str
   await scrollToBottom(true)
 }
 
+/** 这条消息的同父分支信息（没有 = 不显示切换器） */
+function branchOf(messageID: string) {
+  return store.branchInfo[conversationID.value]?.[messageID]
+}
+
 const statusLine = computed(() => {
   const current = runtime.value
   if (!current) return ''
@@ -85,7 +90,21 @@ const statusLine = computed(() => {
 
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
       <div class="messages">
-        <MessageItem v-for="entry in messages" :key="entry.message.id" :message="entry.message" />
+        <div v-for="entry in messages" :key="entry.message.id" class="message-wrap">
+          <!-- 分叉切换器（方案 §5.3：同父多个孩子时显示） -->
+          <div v-if="branchOf(entry.message.id)" class="branch-row">
+            <button class="branch-btn" title="上一条分支" @click="store.switchBranch(conversationID, entry.message.id, -1)">
+              ‹
+            </button>
+            <span class="branch-pos">
+              {{ (branchOf(entry.message.id)?.index ?? 0) + 1 }}/{{ branchOf(entry.message.id)?.count }}
+            </span>
+            <button class="branch-btn" title="下一条分支" @click="store.switchBranch(conversationID, entry.message.id, 1)">
+              ›
+            </button>
+          </div>
+          <MessageItem :message="entry.message" />
+        </div>
         <div v-if="messages.length === 0" class="no-messages">这段会话还没有消息，说第一句吧。</div>
       </div>
     </div>
@@ -200,6 +219,46 @@ const statusLine = computed(() => {
   min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
+}
+
+.message-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 分叉切换器：同父多个孩子时显示在消息上方 */
+.branch-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  align-self: flex-start;
+  padding: 0 2px;
+}
+
+.branch-btn {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.branch-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.branch-pos {
+  font-size: 11px;
+  color: var(--text-3);
+  min-width: 26px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .messages {
