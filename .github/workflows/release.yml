@@ -53,6 +53,8 @@ jobs:
       - name: Package (electron-builder)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # 构建提交进客户端（__APP_COMMIT__）：自动更新用它判断 rolling 通道的新构建
+          GIT_COMMIT: ${{ github.sha }}
         run: npx electron-builder ${{ steps.plat.outputs.flag }} --${{ matrix.arch }} --publish never
 
       - name: Collect artifacts
@@ -72,6 +74,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -88,6 +96,13 @@ jobs:
             echo "title=Friday Work Rolling（main 最新构建）" >> "$GITHUB_OUTPUT"
           fi
           ls -la artifacts
+
+      - name: Generate update manifest (latest.json)
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          REPO_SLUG: ${{ github.repository }}
+          GIT_COMMIT: ${{ github.sha }}
+        run: node scripts/make-update-manifest.cjs artifacts "$TAG" > artifacts/latest.json
 
       - name: Publish to GitHub Release
         uses: ncipollo/release-action@v1
@@ -106,4 +121,6 @@ jobs:
             - **Linux**：AppImage + deb
 
             提交：${{ github.sha }}
+
+            客户端内「设置 → 客户端更新」可检查并安装新版（读这份 Release 里的 latest.json）。
           artifacts: 'artifacts/*'

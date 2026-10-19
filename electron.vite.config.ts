@@ -4,6 +4,8 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   main: {
+    // 构建提交：CI 打包时传 GIT_COMMIT（release.yml），本地 dev 是 'dev'
+    define: { __APP_COMMIT__: JSON.stringify(process.env.GIT_COMMIT || 'dev') },
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {

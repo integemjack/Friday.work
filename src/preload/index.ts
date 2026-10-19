@@ -4,6 +4,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { PickedFile } from '../shared/api.js'
+import type { UpdateState } from '../shared/update.js'
 
 // 数据面端口：页面加载完成后请求主进程建一对，主进程把 port1 发来，这里转给主世界
 ipcRenderer.on('friday-port', (event) => {
@@ -35,6 +36,15 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     const handler = (_event: unknown, conversationID: string): void => listener(conversationID)
     ipcRenderer.on('friday-open-conversation', handler)
     return () => ipcRenderer.removeListener('friday-open-conversation', handler)
+  },
+  /** 客户端更新：拉当前状态 / 手动检查 / 下载并装（状态变化经 onUpdateState 推送） */
+  updateState: (): Promise<UpdateState> => ipcRenderer.invoke('update:state'),
+  updateCheck: (): Promise<UpdateState> => ipcRenderer.invoke('update:check'),
+  updateInstall: (): Promise<UpdateState> => ipcRenderer.invoke('update:install'),
+  onUpdateState: (listener: (state: UpdateState) => void): (() => void) => {
+    const handler = (_event: unknown, state: UpdateState): void => listener(state)
+    ipcRenderer.on('update:state', handler)
+    return () => ipcRenderer.removeListener('update:state', handler)
   }
 })
 

@@ -4,6 +4,7 @@
 
 import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
 import { join } from 'node:path'
+import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
 import { IpcBridge } from './ipc/bridge.js'
@@ -25,6 +26,9 @@ function resolveHandle(handle: string): string | null {
 }
 
 let bridge: IpcBridge | null = null
+
+// 客户端自动更新：状态推给渲染层（设置窗口），退出时接手静默安装（仅 Windows）
+const updater = new ClientUpdate(() => mainWindow?.webContents ?? null)
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -70,6 +74,9 @@ app.whenReady().then(() => {
   protocolProcessHost.start()
   bridge = new IpcBridge(protocolProcessHost, () => mainWindow)
   bridge.register()
+  updater.register()
+  updater.spawnInstallerOnQuit()
+  updater.autoCheck()
   createWindow()
 
   app.on('activate', () => {

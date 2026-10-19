@@ -2,9 +2,9 @@
 // 桌面（用户 2026-10-19 定稿的范式）：应用本身是一个桌面，
 // 会话 / 终端 / 文件 / 浏览器 / 子 Agent / 活动总览 / 机器与会话 都以窗口显示：
 // 可拖动、可缩放、可最小化/最大化、可层叠，底部任务栏切换。
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import type { WindowKind } from './stores/app.js'
-import { useAppStore } from './stores/app.js'
+import { saveLayout, useAppStore } from './stores/app.js'
 import TitleBar from './components/TitleBar.vue'
 import ConversationView from './components/ConversationView.vue'
 import TerminalCard from './components/TerminalCard.vue'
@@ -23,9 +23,31 @@ import WindowFrame from './desktop/WindowFrame.vue'
 
 const store = useAppStore()
 
+// 布局持久化：窗口开/关/拖/缩后防抖存一份（saveLayout 里已有内容签名比对，重复状态不落盘）
+let saveTimer = 0
+let lastSignature = ''
+function layoutSignature(): string {
+  return JSON.stringify([store.windows, store.nextZ, store.cascade, store.currentMachine])
+}
+function scheduleLayoutSave(): void {
+  window.clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(() => {
+    const signature = layoutSignature()
+    if (signature === lastSignature) return
+    lastSignature = signature
+    saveLayout(store)
+  }, 300)
+}
+
+onBeforeUnmount(() => {
+  window.clearTimeout(saveTimer)
+})
+
 onMounted(() => {
+  // 先恢复上次的窗口布局（会话窗口等机器连上后再补开），再接协议事件；恢复不到才开「机器与会话」
+  store.restoreLayout()
   store.bindHost()
-  // 没有窗口时先开「机器与会话」，桌面不至于空着
+  store.$subscribe(() => scheduleLayoutSave(), { detached: true })
   if (!store.windows.length) store.openWindow('machines')
 })
 

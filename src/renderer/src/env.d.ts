@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import type { PickedFile } from '../../shared/api.js'
+import type { UpdateState } from '../../shared/update.js'
 
 declare global {
   interface Window {
@@ -15,6 +16,11 @@ declare global {
       notify(payload: { title: string; body?: string; conversationID?: string }): void
       /** 点通知回会话 */
       onOpenConversation(listener: (conversationID: string) => void): () => void
+      /** 客户端更新（设置窗口展示；状态变化由主进程推送） */
+      updateState(): Promise<UpdateState>
+      updateCheck(): Promise<UpdateState>
+      updateInstall(): Promise<UpdateState>
+      onUpdateState(listener: (state: UpdateState) => void): () => void
     }
   }
 }

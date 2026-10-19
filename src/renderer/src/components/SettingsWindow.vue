@@ -23,6 +23,20 @@ const server = ref<Record<string, unknown> | null>(null)
 
 const machine = computed(() => store.currentMachineInfo)
 
+// 客户端更新（主进程 ClientUpdate；状态在 store.update，启动时主进程自动查过一次）
+const update = computed(() => store.update)
+const updateBusy = computed(() => update.value.phase === 'checking' || update.value.phase === 'downloading')
+const canInstall = computed(() => update.value.phase === 'available' || update.value.phase === 'ready')
+const installLabel = computed(() =>
+  update.value.phase === 'ready' ? '重新下载' : update.value.platform === 'win32' ? '下载并安装' : '下载安装包'
+)
+const commitText = computed(() => {
+  const commit = update.value.currentCommit
+  if (!commit || commit === 'dev') return '开发版'
+  return commit.slice(0, 7)
+})
+const percentText = computed(() => `${Math.round(update.value.progress * 100)}%`)
+
 async function load(): Promise<void> {
   if (!store.currentMachine || !store.connected) return
   loading.value = true
@@ -99,6 +113,39 @@ onMounted(load)
         {{ loading ? '读取中…' : '刷新' }}
       </button>
     </div>
+
+    <section>
+      <h3>客户端更新</h3>
+      <div class="row">
+        <span class="key">当前版本</span>
+        <span class="value">{{ update.currentVersion || '…' }}（{{ commitText }}）</span>
+      </div>
+      <div v-if="update.version" class="row">
+        <span class="key">可用更新</span>
+        <span class="value">
+          {{ update.version }}<span v-if="update.commit">（{{ update.commit.slice(0, 7) }}）</span>
+        </span>
+      </div>
+      <div v-if="update.phase === 'downloading'" class="progress">
+        <div class="bar" :style="{ width: percentText }" />
+      </div>
+      <div v-if="update.phase === 'uptodate'" class="note">已是最新版本。</div>
+      <div v-if="update.note" class="note">{{ update.note }}</div>
+      <div v-if="update.error" class="error">{{ update.error }}</div>
+      <div class="update-actions">
+        <button class="small-btn" :disabled="updateBusy" @click="store.checkUpdate()">
+          {{ update.phase === 'checking' ? '检查中…' : '检查更新' }}
+        </button>
+        <button
+          v-if="canInstall"
+          class="small-btn strong"
+          :disabled="updateBusy"
+          @click="store.installUpdate()"
+        >
+          {{ update.phase === 'downloading' ? `下载中 ${percentText}` : installLabel }}
+        </button>
+      </div>
+    </section>
 
     <div v-if="error" class="error">{{ error }}</div>
     <div v-if="!store.connected" class="empty">先连上一台机器。</div>
@@ -182,6 +229,32 @@ onMounted(load)
 
 .small-btn:disabled {
   opacity: 0.5;
+}
+
+.small-btn.strong {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+.progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--chip);
+  overflow: hidden;
+  margin: 6px 0;
+}
+
+.bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--text-3);
+  transition: width 0.2s ease;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 6px;
 }
 
 section {

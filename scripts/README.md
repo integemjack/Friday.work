@@ -8,6 +8,7 @@
 | 脚本 | 做什么 |
 |---|---|
 | `run-tests.cjs` | `npm test` 的入口：esbuild 打包协议层为 cjs，再 `node --test test/` |
+| `make-update-manifest.cjs` | CI 的 release job 用：扫产物目录生成 latest.json（客户端自动更新的数据源） |
 
 ## 真机联调（协议层）
 

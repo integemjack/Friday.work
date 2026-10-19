@@ -21,6 +21,7 @@ import type {
   TerminalInfo
 } from '../../../protocol/rpc/protocol.js'
 import type { MachineStateInfo } from '../../../shared/api.js'
+import type { UpdateState } from '../../../shared/update.js'
 
 export interface MessageWithVersion {
   message: Conversation['nodes'][number]
@@ -132,6 +133,78 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   timeline: { title: '助手时间线', icon: '🗒' }
 }
 
+// MARK: 窗口布局持久化（方案 §2「本地只留：…UI 偏好」；存 localStorage，重启恢复）
+
+interface SavedWindow {
+  kind: WindowKind
+  title: string
+  icon: string
+  x: number
+  y: number
+  w: number
+  h: number
+  minimized: boolean
+  maximized: boolean
+  z: number
+  restore?: { x: number; y: number; w: number; h: number }
+  conversationID?: string
+  /** 会话窗口记它属于哪台机器（恢复时路由） */
+  machineID?: string
+}
+
+/** 会话窗口补开时要套用的几何（restoreLayout 存下，openConversation 用） */
+export interface WindowGeometry {
+  x: number
+  y: number
+  w: number
+  h: number
+  minimized: boolean
+  maximized: boolean
+  restore?: { x: number; y: number; w: number; h: number }
+}
+
+const LAYOUT_KEY = 'friday.work.layout.v1'
+const LAYOUT_WINDOW_LIMIT = 20
+
+/** localStorage 里存的那份布局（restoreLayout 读，saveLayout 写） */
+interface SavedLayout {
+  nextZ?: number
+  cascade?: number
+  windows?: SavedWindow[]
+}
+
+/** 把当前桌面布局写进 localStorage（App.vue 订阅状态、防抖后调；恢复在 store.restoreLayout） */
+export function saveLayout(store: {
+  windows: DesktopWindow[]
+  currentMachine: string
+  nextZ: number
+  cascade: number
+}): void {
+  try {
+    const windows: SavedWindow[] = store.windows
+      .filter((item) => item.kind !== 'call') // 通话是一次性的，不恢复
+      .slice(0, LAYOUT_WINDOW_LIMIT)
+      .map((item) => ({
+        kind: item.kind,
+        title: item.title,
+        icon: item.icon,
+        x: item.x,
+        y: item.y,
+        w: item.w,
+        h: item.h,
+        minimized: item.minimized,
+        maximized: item.maximized,
+        z: item.z,
+        restore: item.restore,
+        conversationID: item.conversationID,
+        machineID: item.kind === 'conversation' ? store.currentMachine : ''
+      }))
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ nextZ: store.nextZ, cascade: store.cascade, windows }))
+  } catch {
+    // 存不下就算了（隐私模式 / 超配额）
+  }
+}
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     machines: [] as MachineStateInfo[],
@@ -236,7 +309,27 @@ export const useAppStore = defineStore('app', {
     /** 文件卡片里选中的文件（null = 只开目录树） */
     activeFile: null as null | { path: string; name: string },
     /** 全局提示（错误横幅） */
-    error: ''
+    error: '',
+    /** 客户端更新状态（主进程 ClientUpdate 推送；设置窗口展示） */
+    update: {
+      phase: 'idle',
+      currentVersion: '',
+      currentCommit: '',
+      platform: '',
+      version: '',
+      commit: '',
+      builtAt: '',
+      progress: 0,
+      note: '',
+      error: ''
+    } as UpdateState,
+    /** 布局恢复：存下来的会话窗口等机器连上后再补开（restoreLayout 填，maybeRestoreConversations 消化） */
+    pendingConversations: [] as Array<{
+      machineID: string
+      conversationID: string
+      title?: string
+      geometry?: WindowGeometry
+    }>
   }),
 
   getters: {
@@ -386,6 +479,76 @@ export const useAppStore = defineStore('app', {
       }
     },
 
+    // MARK: 布局恢复（saveLayout 的另一半；App.vue 启动时调）
+
+    /** 启动时恢复上次的窗口布局：非会话窗口直接摆回去；会话窗口等机器连上后由 maybeRestoreConversations 补开 */
+    restoreLayout(): boolean {
+      let saved: SavedLayout | null = null
+      try {
+        saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? 'null') as SavedLayout | null
+      } catch {
+        return false
+      }
+      const items = saved?.windows
+      if (!Array.isArray(items) || items.length === 0) return false
+      const desktopWidth = window.innerWidth
+      const desktopHeight = window.innerHeight
+      for (const item of items) {
+        if (item.kind === 'call' || !WINDOW_SIZE[item.kind]) continue
+        if (item.kind === 'conversation') {
+          // 会话要重新订阅（机器连上、列表到手才有），先排队
+          if (!item.conversationID || this.pendingConversations.length >= 8) continue
+          this.pendingConversations.push({
+            machineID: item.machineID ?? '',
+            conversationID: item.conversationID,
+            title: item.title,
+            geometry: {
+              x: item.x,
+              y: item.y,
+              w: item.w,
+              h: item.h,
+              minimized: item.minimized,
+              maximized: item.maximized,
+              restore: item.restore
+            }
+          })
+          continue
+        }
+        const limits = WINDOW_SIZE[item.kind]!
+        const w = Math.min(Math.max(item.w, limits.minW), Math.max(limits.minW, desktopWidth - 16))
+        const h = Math.min(Math.max(item.h, limits.minH), Math.max(limits.minH, desktopHeight - 100))
+        this.windows.push({
+          id: `${item.kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          kind: item.kind,
+          title: item.title || WINDOW_TITLE[item.kind].title,
+          icon: WINDOW_TITLE[item.kind].icon,
+          x: Math.max(-w + 120, Math.min(item.x, Math.max(8, desktopWidth - 120))),
+          y: Math.max(0, Math.min(item.y, Math.max(8, desktopHeight - 90))),
+          w,
+          h,
+          minimized: item.minimized,
+          maximized: item.maximized,
+          z: ++this.nextZ,
+          restore: item.restore
+        })
+      }
+      this.nextZ = Math.max(this.nextZ, Number(saved?.nextZ) || 0)
+      this.cascade = Math.max(this.cascade, Number(saved?.cascade) || 0)
+      return this.windows.length > 0
+    },
+
+    /** 布局恢复第二步：机器连上、会话列表到手后，把存下来的会话窗口重新订阅开出来（会话已删的就丢弃） */
+    async maybeRestoreConversations(): Promise<void> {
+      if (!this.pendingConversations.length || !this.currentMachine) return
+      const queue = this.pendingConversations
+      for (let index = queue.length - 1; index >= 0; index--) {
+        const entry = queue[index]!
+        if (entry.machineID !== this.currentMachine) continue
+        queue.splice(index, 1)
+        await this.openConversation(entry.conversationID, { geometry: entry.geometry, fallbackTitle: entry.title })
+      }
+    },
+
     bindHost() {
       host.onMachines((info) => {
         this.machines = info.machines
@@ -419,7 +582,7 @@ export const useAppStore = defineStore('app', {
               .catch(() => this.activitySubscribed.delete(machine.id))
             if (machine.id === this.currentMachine) {
               void this.refreshLiveState()
-              void this.refreshSummaries()
+              void this.refreshSummaries().then(() => this.maybeRestoreConversations())
             }
           } else if (machine.state !== 'ready') {
             // 掉线：等重连后重新订阅
@@ -449,6 +612,16 @@ export const useAppStore = defineStore('app', {
       host.onCallSignal((signal) => {
         this.callSignalCount += 1
         this.callSignals.push({ seq: this.callSignalCount, signal })
+      })
+      // 客户端更新（主进程 ClientUpdate）：先拉一次当前状态，之后由主进程推送
+      window.fridayBridge
+        ?.updateState()
+        .then((state) => {
+          this.update = state
+        })
+        .catch(() => {})
+      window.fridayBridge?.onUpdateState((state) => {
+        this.update = state
       })
     },
 
@@ -490,6 +663,7 @@ export const useAppStore = defineStore('app', {
       if (info?.state === 'ready') {
         await this.refreshSummaries()
         await this.refreshLiveState()
+        await this.maybeRestoreConversations()
       }
     },
 
@@ -596,8 +770,8 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 打开一段会话：订阅拿整段，并在桌面上开一个窗口（已在就置顶） */
-    async openConversation(conversationID: string) {
+    /** 打开一段会话：订阅拿整段，并在桌面上开一个窗口（已在就置顶）；布局恢复时带原几何与标题 */
+    async openConversation(conversationID: string, options: { geometry?: WindowGeometry; fallbackTitle?: string } = {}) {
       if (!this.currentMachine) return
       // 已在就置顶
       const existing = this.windows.find(
@@ -631,10 +805,26 @@ export const useAppStore = defineStore('app', {
         this.rebuildPath(this.details[conversationID]!)
         this.activeConversationID = conversationID
         const summary = this.summaries.find((item) => item.id === conversationID)
-        this.openWindow('conversation', {
+        const windowID = this.openWindow('conversation', {
           conversationID,
-          title: summary?.title || conversation.title || '会话'
+          title: summary?.title || conversation.title || options.fallbackTitle || '会话'
         })
+        // 布局恢复：套用上次关掉时的几何（已在的窗口本来就是原位，不走这里）
+        const geometry = options.geometry
+        if (geometry) {
+          const item = this.windows.find((entry) => entry.id === windowID)
+          if (item) {
+            item.x = geometry.x
+            item.y = geometry.y
+            item.w = geometry.w
+            item.h = geometry.h
+            item.minimized = geometry.minimized
+            if (geometry.maximized) {
+              item.restore = geometry.restore
+              item.maximized = true
+            }
+          }
+        }
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
       }
@@ -1121,6 +1311,29 @@ export const useAppStore = defineStore('app', {
         path: string
       }
       return result.path
+    },
+
+    // MARK: 客户端更新（主进程 ClientUpdate；状态在 this.update，平时由推送维护）
+
+    async checkUpdate(): Promise<void> {
+      const bridge = window.fridayBridge
+      if (!bridge) return
+      this.update = { ...this.update, phase: 'checking', error: '' }
+      try {
+        this.update = await bridge.updateCheck()
+      } catch (error) {
+        this.update = { ...this.update, phase: 'error', error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+
+    async installUpdate(): Promise<void> {
+      const bridge = window.fridayBridge
+      if (!bridge) return
+      try {
+        this.update = await bridge.updateInstall()
+      } catch (error) {
+        this.update = { ...this.update, phase: 'error', error: error instanceof Error ? error.message : String(error) }
+      }
     }
   }
 })
