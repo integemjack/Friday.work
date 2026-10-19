@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 一段会话的窗口内容：任务状态条、审批横幅、消息流、输入框（方案 §5.3）。
 // 每个窗口对应一段会话（多会话可同时开窗）。
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import MessageItem from './MessageItem.vue'
 import Composer from './Composer.vue'
@@ -10,6 +10,7 @@ const props = defineProps<{ conversationId?: string }>()
 
 const store = useAppStore()
 const scrollEl = ref<HTMLDivElement | null>(null)
+const messagesEl = ref<HTMLDivElement | null>(null)
 const stickToBottom = ref(true)
 
 const conversationID = computed(() => props.conversationId ?? '')
@@ -29,9 +30,22 @@ const hiddenCount = computed(() => Math.max(0, allMessages.value.length - messag
 const runtime = computed(() => detail.value?.runtime ?? null)
 const approvals = computed(() => store.approvals[conversationID.value] ?? [])
 
+/** 流式增量只改块内容、数组引用不变，watch(messages) 不触发；
+ *  用 ResizeObserver 盯消息容器高度，停在底部时即时跟滚。 */
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   if (conversationID.value) store.activeConversationID = conversationID.value
+  resizeObserver = new ResizeObserver(() => {
+    if (stickToBottom.value) void scrollToBottom()
+  })
+  if (messagesEl.value) resizeObserver.observe(messagesEl.value)
   void scrollToBottom(true)
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 
 function onScroll() {
@@ -120,7 +134,7 @@ const statusLine = computed(() => {
     </div>
 
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
-      <div class="messages">
+      <div ref="messagesEl" class="messages">
         <div v-if="hiddenCount > 0" class="earlier">上面还有 {{ hiddenCount }} 条更早的消息（向上滑加载）</div>
         <div v-for="entry in messages" :key="entry.message.id" class="message-wrap">
           <!-- 分叉切换器（方案 §5.3：同父多个孩子时显示） -->
@@ -250,7 +264,6 @@ const statusLine = computed(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  scroll-behavior: smooth;
 }
 
 .earlier {
