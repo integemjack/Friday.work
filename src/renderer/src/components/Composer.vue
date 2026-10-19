@@ -1,7 +1,9 @@
 <script setup lang="ts">
-// 输入框（方案 §5.3）：发送、停止、附件（对话框 + 拖放，经主进程背书上传）
+// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，底行左侧附件、右侧圆形发送键；
+// 生成中发送键变成停止。附件（对话框 + 拖放，经主进程背书上传）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import type { EngineView } from '../stores/app.js'
 import type { PickedFile } from '../lib/host.js'
 
 const emit = defineEmits<{ submit: [text: string, attachments: Array<{ path: string; name: string }>] }>()
@@ -10,6 +12,7 @@ const store = useAppStore()
 const props = defineProps<{ conversationId?: string }>()
 const text = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
+const focused = ref(false)
 
 // 「让 Friday 改」：文件卡片预填一条消息（方案 §5.5）
 function onPrefill(event: Event): void {
@@ -27,17 +30,61 @@ const busy = ref(false)
 const attachments = ref<Array<{ handle: string; name: string; size: number }>>([])
 const uploadError = ref('')
 
+// MARK: 模型选择（方案 §5.3：runner.setEngine；照 Friday 输入框底行的模型选择器）
+const modelOpen = ref(false)
+const modelWrap = ref<HTMLDivElement | null>(null)
+const switchError = ref('')
+
+const availableEngines = computed<EngineView[]>(() => store.engines.filter((engine) => !engine.disabled))
+const currentEngineID = computed(
+  () => store.summaries.find((summary) => summary.id === props.conversationId)?.engineID ?? ''
+)
+const currentEngine = computed(() => availableEngines.value.find((engine) => engine.id === currentEngineID.value))
+/** 没选过时显示新对话默认引擎的标题（REMOTE.md：engineID 空 = 跟随默认） */
+const currentEngineTitle = computed(
+  () =>
+    currentEngine.value?.title ??
+    availableEngines.value.find((engine) => engine.id === store.defaultEngineID)?.title ??
+    '默认模型'
+)
+
+function toggleModelMenu() {
+  modelOpen.value = !modelOpen.value
+  if (!modelOpen.value) switchError.value = ''
+}
+
+async function chooseEngine(engine: EngineView) {
+  modelOpen.value = false
+  switchError.value = ''
+  if (!props.conversationId || engine.id === currentEngineID.value) return
+  try {
+    await store.setEngine(props.conversationId, engine.id)
+  } catch (error) {
+    switchError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+function onDocClick(event: MouseEvent) {
+  if (modelOpen.value && modelWrap.value && !modelWrap.value.contains(event.target as Node)) {
+    modelOpen.value = false
+  }
+}
+onMounted(() => document.addEventListener('click', onDocClick))
+onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
+
 const sending = computed(() => {
   const id = props.conversationId
   const runtime = id ? store.details[id]?.runtime : store.runtime
   return runtime?.generating ?? false
 })
 
+const canSend = computed(() => Boolean(text.value.trim()) || attachments.value.length > 0)
+
 function resize() {
   const el = textarea.value
   if (!el) return
   el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  el.style.height = `${Math.min(el.scrollHeight, 200)}px`
 }
 
 async function handleAttachments(picked: PickedFile[]) {
@@ -102,53 +149,121 @@ function stop() {
 
 <template>
   <div class="composer" @drop.prevent="onDrop" @dragover.prevent>
-    <div v-if="attachments.length > 0" class="attachments">
-      <div v-for="(attachment, index) in attachments" :key="attachment.handle" class="attachment">
-        <span class="att-name">{{ attachment.name }}</span>
-        <span class="att-size">{{ (attachment.size / 1024).toFixed(0) }} KB</span>
-        <button class="att-remove" @click="removeAttachment(index)">×</button>
+    <div class="composer-card" :class="{ focused }">
+      <!-- 附件 chips：卡片内、文本区上方 -->
+      <div v-if="attachments.length > 0" class="attachments">
+        <div v-for="(attachment, index) in attachments" :key="attachment.handle" class="attachment">
+          <span class="att-name">{{ attachment.name }}</span>
+          <span class="att-size">{{ (attachment.size / 1024).toFixed(0) }} KB</span>
+          <button class="att-remove" title="移除" @click="removeAttachment(index)">×</button>
+        </div>
       </div>
-    </div>
 
-    <textarea
-      ref="textarea"
-      v-model="text"
-      rows="1"
-      placeholder="发给这台机器上的 Friday……（Enter 发送，Shift+Enter 换行）"
-      @input="resize"
-      @keydown="onKeydown"
-    />
+      <textarea
+        ref="textarea"
+        v-model="text"
+        rows="1"
+        placeholder="有什么可以帮你？"
+        @input="resize"
+        @keydown="onKeydown"
+        @focus="focused = true"
+        @blur="focused = false"
+      />
 
-    <div class="row">
-      <button class="btn" title="添加附件" @click="pick">📎</button>
-      <span v-if="uploadError" class="error">{{ uploadError }}</span>
-      <span class="spacer" />
-      <button v-if="sending" class="btn warn" @click="stop">■ 停止</button>
-      <button
-        class="btn primary"
-        :disabled="busy || (!text.trim() && attachments.length === 0)"
-        @click="send"
-      >
-        {{ busy ? '上传中…' : '发送' }}
-      </button>
+      <div class="row">
+        <button class="icon-btn" title="添加附件" @click="pick">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+          </svg>
+        </button>
+
+        <!-- 模型选择（Friday 输入框底行的模型选择器） -->
+        <div ref="modelWrap" class="model-wrap">
+          <button
+            class="model-chip"
+            :class="{ open: modelOpen }"
+            :title="switchError || `当前模型：${currentEngineTitle}`"
+            @click="toggleModelMenu"
+          >
+            <span class="model-name">{{ currentEngineTitle }}</span>
+            <span class="model-caret">▾</span>
+          </button>
+          <div v-if="modelOpen" class="model-menu">
+            <div v-if="availableEngines.length === 0" class="model-empty">这台机器没有可用引擎</div>
+            <button
+              v-for="engine in availableEngines"
+              :key="engine.id"
+              class="model-item"
+              :class="{ current: engine.id === currentEngineID }"
+              :title="engine.model"
+              @click="chooseEngine(engine)"
+            >
+              <span class="model-item-main">
+                <span class="model-item-title">{{ engine.title }}</span>
+                <span v-if="engine.model && engine.model !== engine.title" class="model-item-model">{{ engine.model }}</span>
+              </span>
+              <span v-if="engine.id === currentEngineID" class="model-check">✓</span>
+            </button>
+          </div>
+        </div>
+
+        <span v-if="switchError" class="error">{{ switchError }}</span>
+        <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
+        <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+        <span class="spacer" />
+        <button v-if="sending" class="round-btn stop" title="停止生成" @click="stop">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="5" y="5" width="14" height="14" rx="2.5" />
+          </svg>
+        </button>
+        <button
+          v-else
+          class="round-btn send"
+          title="发送"
+          :disabled="busy || !canSend"
+          @click="send"
+        >
+          <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 19V5" />
+            <path d="M5 12l7-7 7 7" />
+          </svg>
+          <span v-else class="busy-dot" />
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .composer {
-  border-top: 1px solid var(--border);
+  flex: none;
+  padding: 8px 14px 12px;
   background: var(--panel);
-  padding: 8px 14px 10px;
+}
+
+.composer-card {
+  max-width: 760px;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel-2);
+  padding: 4px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.composer-card.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
 }
 
 .attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 8px 8px 0;
 }
 
 .attachment {
@@ -159,7 +274,7 @@ function stop() {
   border-radius: 8px;
   padding: 3px 8px;
   font-size: 12.5px;
-  background: var(--panel-2);
+  background: var(--panel);
 }
 
 .att-name {
@@ -187,37 +302,222 @@ function stop() {
 textarea {
   width: 100%;
   resize: none;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 12px;
-  background: var(--panel-2);
-  color: var(--text);
+  border: none;
   outline: none;
+  padding: 10px 10px 2px;
+  background: transparent;
+  color: var(--text);
   line-height: 1.6;
-  min-height: 38px;
+  min-height: 40px;
+  max-height: 200px;
 }
 
-textarea:focus {
-  border-color: var(--accent);
+textarea::placeholder {
+  color: var(--text-3);
 }
 
 .row {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 2px 4px 0;
 }
 
-.btn.warn {
-  color: var(--warn);
-  border-color: var(--warn);
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  flex: none;
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* 模型选择器（Friday 样式：ghost chip + 上拉菜单） */
+.model-wrap {
+  position: relative;
+  flex: none;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.model-chip:hover,
+.model-chip.open {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-caret {
+  font-size: 9px;
+  color: var(--text-3);
+}
+
+.model-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 240px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  padding: 5px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-empty {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.model-item:hover {
+  background: var(--hover);
+}
+
+.model-item.current {
+  background: var(--selected);
+}
+
+.model-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.model-item-title {
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-item-model {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-check {
+  flex: none;
+  color: var(--accent);
+  font-size: 13px;
 }
 
 .error {
   color: var(--fail);
   font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .hint {
+    display: none;
+  }
 }
 
 .spacer {
   flex: 1;
+}
+
+/* 圆形发送 / 停止键（Friday 样式） */
+.round-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.round-btn.send {
+  background: var(--accent);
+  color: #fff;
+  transition: filter 0.12s, opacity 0.12s;
+}
+
+.round-btn.send:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.round-btn.send:disabled {
+  background: var(--chip);
+  color: var(--text-3);
+  cursor: default;
+}
+
+.round-btn.stop {
+  border: 1px solid var(--fail);
+  color: var(--fail);
+  background: transparent;
+}
+
+.round-btn.stop:hover {
+  background: var(--fail);
+  color: #fff;
+}
+
+.busy-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 </style>

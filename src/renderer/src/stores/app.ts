@@ -300,6 +300,8 @@ export const useAppStore = defineStore('app', {
     assistantEnabled: false,
     /** 这台机器的引擎（hello 快照 + engines 事件；设置窗口只读展示） */
     engines: [] as EngineView[],
+    /** 新对话默认引擎（liveState；输入框的模型选择器在未选过时显示它） */
+    defaultEngineID: '',
     /** 正在朗读的那条（朗读时界面显示暂停按钮） */
     speakingEntryID: '',
     /** 当前在 watch 的标签（关窗口时 unwatch） */
@@ -693,8 +695,10 @@ export const useAppStore = defineStore('app', {
           browser: { tabs: BrowserTab[]; available: boolean; reason?: string }
           team: { runs: TeamRun[] }
           engines?: EngineView[]
+          defaultEngineID?: string
         }
         this.engines = state.engines ?? []
+        this.defaultEngineID = state.defaultEngineID ?? ''
         this.terminals = state.terminals?.terminals ?? []
         this.terminalsAvailable = state.terminals?.available ?? false
         this.terminalsReason = state.terminals?.reason ?? ''
@@ -1272,6 +1276,15 @@ export const useAppStore = defineStore('app', {
         text,
         attachments: attachments.map((attachment) => attachment.path)
       })
+    },
+
+    /** 切换这段会话的引擎（REMOTE.md：runner.setEngine {conversationID, engineID?}）。
+     *  服务端确认后 summaries 事件会带回新值；先乐观更新本地，输入框的选择器立刻反映。 */
+    async setEngine(conversationID: string, engineID: string) {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'runner.setEngine', { conversationID, engineID })
+      const summary = this.summaries.find((item) => item.id === conversationID)
+      if (summary) summary.engineID = engineID
     },
 
     async resolveApproval(eventID: string, approved: boolean) {
