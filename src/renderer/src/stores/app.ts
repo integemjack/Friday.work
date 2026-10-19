@@ -205,6 +205,11 @@ export function saveLayout(store: {
   }
 }
 
+// 已订阅 activity 的机器（避免重复订阅）。
+// 放模块级：放进 state 会被布局持久化订阅连带序列化，放进 actions 又会被 Pinia 包装成函数（Set 的方法全没了，
+// 之前就是这么写的，导致 activity.subscribe 整段崩、遥测面板/会话恢复不工作）。
+const activitySubscribed = new Set<string>()
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     machines: [] as MachineStateInfo[],
@@ -368,9 +373,6 @@ export const useAppStore = defineStore('app', {
   },
 
   actions: {
-    /** 已订阅 activity 的机器（避免重复订阅） */
-    activitySubscribed: new Set<string>(),
-
     // MARK: 桌面窗口
 
     /** 开一个窗口（同类型已在就置顶；会话窗口按 conversationID 区分） */
@@ -571,8 +573,8 @@ export const useAppStore = defineStore('app', {
         }
         // 连上的机器订阅 activity（审批、动静总览的数据源）；刚连上的取一次实时卡片状态
         for (const machine of info.machines) {
-          if (machine.state === 'ready' && !this.activitySubscribed.has(machine.id)) {
-            this.activitySubscribed.add(machine.id)
+          if (machine.state === 'ready' && !activitySubscribed.has(machine.id)) {
+            activitySubscribed.add(machine.id)
             this.rpc(machine.id, 'activity.subscribe', {})
               .then((result) => {
                 const sessions = (result as { sessions: SessionActivity[] }).sessions ?? []
@@ -581,14 +583,14 @@ export const useAppStore = defineStore('app', {
                   this.approvals[session.id] = session.approvals ?? []
                 }
               })
-              .catch(() => this.activitySubscribed.delete(machine.id))
+              .catch(() => activitySubscribed.delete(machine.id))
             if (machine.id === this.currentMachine) {
               void this.refreshLiveState()
               void this.refreshSummaries().then(() => this.maybeRestoreConversations())
             }
           } else if (machine.state !== 'ready') {
             // 掉线：等重连后重新订阅
-            this.activitySubscribed.delete(machine.id)
+            activitySubscribed.delete(machine.id)
           }
         }
       })
