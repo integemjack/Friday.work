@@ -1,5 +1,5 @@
-# electron-builder 配置（方案 §10 M4「打包：electron-builder（NSIS + 便携 zip）」）
-# 只打 Windows；启动器读 out/main/index.js（electron-vite 的产物）。
+# electron-builder 配置：全平台（Windows / macOS / Linux）× 全架构（x64 / arm64）
+# 启动器读 out/main/index.js（electron-vite 的产物）；CI 按 --win/--mac/--linux + --x64/--arm64 分别打包。
 appId: com.integem.friday.work
 productName: Friday Work
 copyright: Friday Desktop Work
@@ -30,9 +30,17 @@ nsis:
   deleteAppDataOnUninstall: false
 
 win:
-  target:
-    - target: nsis
-      arch: [x64]
-    - target: zip
-      arch: [x64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  target: [nsis, zip]
+  artifactName: Friday-Work-${version}-win-${arch}.${ext}
+
+mac:
+  target: [dmg, zip]
+  category: public.app-category.developer-tools
+  identity: null # CI 上无签名证书，显式跳过
+  artifactName: Friday-Work-${version}-mac-${arch}.${ext}
+
+linux:
+  target: [AppImage, deb]
+  maintainer: integemjack <jack.wang@integem.com>
+  category: Utility
+  artifactName: Friday-Work-${version}-linux-${arch}.${ext}
