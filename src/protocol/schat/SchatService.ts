@@ -37,6 +37,8 @@ export interface SchatMessage {
   at: number
   /** 自己发的（乐观更新） */
   mine?: boolean
+  /** 发送失败（服务端拒绝，比如不是好友）：气泡标红并显示原因 */
+  failed?: string
   /** 自己发出去的幂等键：服务端回显带着它，用来把占位那条换成真消息 */
   clientMsgId?: string
 }
@@ -258,8 +260,13 @@ export class SchatService {
         fingerprint: this.session.fingerprint || undefined
       })
       const bots = friends
-        .filter((friend) => friend.isBot)
-        .map((friend) => ({ id: friend.id, name: friend.nickname || friend.name, botCalls: !!friend.botCalls }))
+        .filter((friend) => friend.isBot && !friend.botDisabled)
+        .map((friend) => ({
+          id: friend.id,
+          // 备注（relation.ext.remark）是给我的私有别名，优先于昵称
+          name: friend.relation?.ext?.remark?.trim() || friend.nickname || friend.name,
+          botCalls: !!friend.botCalls
+        }))
         .filter((bot, index, list) => list.findIndex((other) => other.id === bot.id) === index)
       this.patch({ bots })
     } catch (error) {
@@ -347,9 +354,10 @@ export class SchatService {
   async send(botID: number, text: string): Promise<void> {
     if (!this.client || this.client.state !== 'online') throw new Error('还没连上聊天服务器')
     const clientMsgId = randomUUID()
+    const placeholder = -Date.now()
     // 乐观更新：先画出自己的这句
     this.upsertMessage(botID, {
-      id: -Date.now(),
+      id: placeholder,
       senderId: this.state.userId,
       to: botID,
       content: text,
@@ -358,7 +366,22 @@ export class SchatService {
       mine: true,
       clientMsgId
     })
-    await this.client.request('message', { to: String(botID), clientMsgId, type: 'text', content: text })
+    try {
+      // 线上接收者必须带类型前缀："user:N" | "room:N"（chatserver ws.go convAddr）；
+      // 纯数字会被当成 bad recipient 拒掉。
+      await this.client.request('message', { to: `user:${botID}`, clientMsgId, type: 'text', content: text })
+    } catch (error) {
+      // 服务端拒了（比如 not_friends）：把这条标成失败，并把原因告诉调用方
+      const reason = error instanceof Error ? error.message : String(error)
+      const list = this.state.messages[botID] ?? []
+      const index = list.findIndex((item) => item.clientMsgId === clientMsgId)
+      if (index >= 0) {
+        const next = [...list]
+        next[index] = { ...next[index]!, failed: reason }
+        this.patch({ messages: { ...this.state.messages, [botID]: next } })
+      }
+      throw new Error(reason)
+    }
   }
 
   disconnect(): void {

@@ -203,17 +203,38 @@ export async function refreshSession(
   }
 }
 
-/** 好友列表（含机器人：isBot 为真的那些） */
+/** 好友列表（含机器人：isBot 为真的那些）。include=all 才带 relation（备注在 relation.ext.remark）。 */
 export async function fetchFriends(
   server: string,
   token: string,
   options: { fingerprint?: string } = {}
-): Promise<Array<{ id: number; name: string; nickname?: string; isBot?: boolean; botCalls?: boolean }>> {
-  const result = await getJson(`${server.replace(/\/+$/, '')}/friends`, { token, fingerprint: options.fingerprint })
+): Promise<
+  Array<{
+    id: number
+    name: string
+    nickname?: string
+    isBot?: boolean
+    botCalls?: boolean
+    botDisabled?: boolean
+    relation?: { ext?: { remark?: string }; status?: string }
+  }>
+> {
+  const result = await getJson(`${server.replace(/\/+$/, '')}/friends?include=all`, {
+    token,
+    fingerprint: options.fingerprint
+  })
   if (result.status < 200 || result.status >= 300) throw new Error(`读好友列表失败（HTTP ${result.status}）`)
   const parsed = JSON.parse(result.body) as unknown
   if (!Array.isArray(parsed)) return []
-  return parsed as Array<{ id: number; name: string; nickname?: string; isBot?: boolean; botCalls?: boolean }>
+  return parsed as Array<{
+    id: number
+    name: string
+    nickname?: string
+    isBot?: boolean
+    botCalls?: boolean
+    botDisabled?: boolean
+    relation?: { ext?: { remark?: string }; status?: string }
+  }>
 }
 
 /** 稳定设备 id：每个 chatserver + 本机一份（渲染进程不用管它怎么来的） */

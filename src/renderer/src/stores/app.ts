@@ -138,7 +138,20 @@ export const useAppStore = defineStore('app', {
       qrExpiresAt: 0,
       status: '',
       bots: [] as Array<{ id: number; name: string; botCalls: boolean }>,
-      messages: {} as Record<number, Array<{ id: number; senderId: number; to: number; content: string; streaming: boolean; at: number; mine?: boolean }>>,
+      messages: {} as Record<
+        number,
+        Array<{
+          id: number
+          senderId: number
+          to: number
+          content: string
+          streaming: boolean
+          at: number
+          mine?: boolean
+          failed?: string
+          clientMsgId?: string
+        }>
+      >,
       error: ''
     },
     /** 启动后是否已尝试自动连接存着的机器 */

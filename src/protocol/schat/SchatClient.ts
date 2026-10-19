@@ -29,6 +29,30 @@ export interface SchatClientOptions {
 
 const ACK_TIMEOUT_MS = 15_000
 
+/** 服务端用 t:"ack" + {success:false, error} 表示业务拒绝（三端约定：不重试，但要让用户看见） */
+export class SchatRejected extends Error {
+  constructor(
+    readonly code: string,
+    readonly ack: unknown
+  ) {
+    super(rejectText(code))
+  }
+}
+
+/** 拒绝码 → 人话（对齐 Secret-Chat 三端的既有文案口径） */
+function rejectText(code: string): string {
+  switch (code) {
+    case 'not_friends':
+      return '还没和这个机器人成为好友（或陌生人额度用完了）：先在手机上把它加为好友'
+    case 'blocked':
+      return '对方把你拉黑了'
+    case 'contentLimitExceeded':
+      return '内容太长了'
+    default:
+      return code ? `发送失败（${code}）` : '发送失败'
+  }
+}
+
 export class SchatClient {
   private socket: WebSocket | null = null
   private nextAck = 1
@@ -126,7 +150,14 @@ export class SchatClient {
             const detail = envelope.d as { code?: string; message?: string } | undefined
             call.reject(new Error(detail?.message ?? detail?.code ?? '服务端拒绝了请求'))
           } else {
-            call.resolve(envelope.d)
+            // 业务失败也走 t:"ack"：{success:false, error:"not_friends"|"blocked"|…}
+            // （见 chatserver handlers.go 陌生人窗口/拉黑分支）。不能当成功吞掉。
+            const ack = envelope.d as { success?: boolean; error?: string } | undefined
+            if (ack && ack.success === false) {
+              call.reject(new SchatRejected(ack.error ?? '', ack))
+            } else {
+              call.resolve(envelope.d)
+            }
           }
           return
         }

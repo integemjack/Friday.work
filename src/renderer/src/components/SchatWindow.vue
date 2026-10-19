@@ -135,6 +135,7 @@ onMounted(() => {
           :key="bot.id"
           class="bot"
           :class="{ active: activeBot === bot.id }"
+          :data-bot-id="bot.id"
           @click="activeBot = bot.id"
         >
           <span class="bot-name">{{ bot.name }}</span>
@@ -146,9 +147,10 @@ onMounted(() => {
       <div class="chat">
         <div ref="scroller" class="chat-scroll">
           <div v-for="message in messages" :key="message.id" class="msg" :class="{ mine: message.mine }">
-            <div class="bubble">
+            <div class="bubble" :class="{ failed: message.failed }">
               {{ message.content }}
               <span v-if="message.streaming" class="stream">…</span>
+              <span v-if="message.failed" class="fail-note">{{ message.failed }}</span>
             </div>
           </div>
           <div v-if="messages.length === 0" class="empty-tip">
@@ -399,6 +401,18 @@ input:focus {
 
 .msg.mine .bubble {
   background: var(--accent-weak);
+}
+
+.bubble.failed {
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+}
+
+.fail-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--fail);
+  font-size: 11px;
 }
 
 .stream {
