@@ -181,10 +181,16 @@ export function saveLayout(store: {
   cascade: number
 }): void {
   try {
-    const windows: SavedWindow[] = store.windows
-      .filter((item) => item.kind !== 'call') // 通话是一次性的，不恢复
-      .slice(0, LAYOUT_WINDOW_LIMIT)
-      .map((item) => ({
+    // 同类窗口只存一份（会话按 conversationID 区分）：不去重的话，历史存档里攒下的
+    // 重复窗口会挤占 LAYOUT_WINDOW_LIMIT，把会话窗口挤出存档、重启后丢失
+    const windows: SavedWindow[] = []
+    const seen = new Set<string>()
+    for (const item of store.windows) {
+      if (item.kind === 'call') continue // 通话是一次性的，不恢复
+      const key = item.kind === 'conversation' ? `conversation:${item.conversationID}` : item.kind
+      if (seen.has(key)) continue
+      seen.add(key)
+      windows.push({
         kind: item.kind,
         title: item.title,
         icon: item.icon,
@@ -198,7 +204,9 @@ export function saveLayout(store: {
         restore: item.restore,
         conversationID: item.conversationID,
         machineID: item.kind === 'conversation' ? store.currentMachine : ''
-      }))
+      })
+      if (windows.length >= LAYOUT_WINDOW_LIMIT) break
+    }
     localStorage.setItem(LAYOUT_KEY, JSON.stringify({ nextZ: store.nextZ, cascade: store.cascade, windows }))
   } catch {
     // 存不下就算了（隐私模式 / 超配额）
@@ -497,8 +505,13 @@ export const useAppStore = defineStore('app', {
       if (!Array.isArray(items) || items.length === 0) return false
       const desktopWidth = window.innerWidth
       const desktopHeight = window.innerHeight
+      // 去重（与 saveLayout 同一套规则）：旧存档里可能攒着同类重复窗口，原样恢复会越攒越多
+      const seen = new Set<string>()
       for (const item of items) {
         if (item.kind === 'call' || !WINDOW_SIZE[item.kind]) continue
+        const key = item.kind === 'conversation' ? `conversation:${item.conversationID}` : item.kind
+        if (seen.has(key)) continue
+        seen.add(key)
         if (item.kind === 'conversation') {
           // 会话要重新订阅（机器连上、列表到手才有），先排队
           if (!item.conversationID || this.pendingConversations.length >= 8) continue
@@ -820,10 +833,15 @@ export const useAppStore = defineStore('app', {
         if (geometry) {
           const item = this.windows.find((entry) => entry.id === windowID)
           if (item) {
-            item.x = geometry.x
-            item.y = geometry.y
-            item.w = geometry.w
-            item.h = geometry.h
+            // 与 restoreLayout 同一套边界钳制：存档可能来自更大的窗口/另一块显示器，
+            // 不钳制的话会话窗口恢复出来会掉出桌面（标题栏都可能够不着）
+            const limits = WINDOW_SIZE.conversation
+            const desktopWidth = window.innerWidth
+            const desktopHeight = window.innerHeight
+            item.w = Math.min(Math.max(geometry.w, limits.minW), Math.max(limits.minW, desktopWidth - 16))
+            item.h = Math.min(Math.max(geometry.h, limits.minH), Math.max(limits.minH, desktopHeight - 100))
+            item.x = Math.max(-item.w + 120, Math.min(geometry.x, Math.max(8, desktopWidth - 120)))
+            item.y = Math.max(0, Math.min(geometry.y, Math.max(8, desktopHeight - 90)))
             item.minimized = geometry.minimized
             if (geometry.maximized) {
               item.restore = geometry.restore
