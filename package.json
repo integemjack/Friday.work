@@ -1,0 +1,41 @@
+{
+  "name": "friday-desktop-work",
+  "version": "0.1.0",
+  "description": "Friday 远程工作流客户端：连接远程机器上的 friday-server，实时看它干什么、随时插话",
+  "main": "./out/main/index.js",
+  "private": true,
+  "author": "Friday Desktop Work",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "test": "node scripts/run-tests.cjs",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json --composite false && tsc --noEmit -p tsconfig.node.json --composite false"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "electron": "~44.9.0",
+    "electron-vite": "^4.0.0",
+    "markdown-it": "^14.1.0",
+    "pinia": "^3.0.0",
+    "ssh2": "^1.17.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0",
+    "vue-tsc": "^3.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "electron@44.9.0": true
+  }
+}
