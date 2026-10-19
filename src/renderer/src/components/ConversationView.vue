@@ -14,7 +14,18 @@ const stickToBottom = ref(true)
 
 const conversationID = computed(() => props.conversationId ?? '')
 const detail = computed(() => store.details[conversationID.value] ?? null)
-const messages = computed(() => detail.value?.messages ?? [])
+/**
+ * 只渲染最近一段（方案 §11「只渲染当前路径可视区」）：
+ * 6 个子 Agent 的长会话（协议 §5 的 113MB 案例）不能一次全挂到 DOM 上。
+ * 往上滑到顶再逐步加载更早的。
+ */
+const allMessages = computed(() => detail.value?.messages ?? [])
+const visibleCount = ref(60)
+const messages = computed(() => {
+  const all = allMessages.value
+  return all.length <= visibleCount.value ? all : all.slice(all.length - visibleCount.value)
+})
+const hiddenCount = computed(() => Math.max(0, allMessages.value.length - messages.value.length))
 const runtime = computed(() => detail.value?.runtime ?? null)
 const approvals = computed(() => store.approvals[conversationID.value] ?? [])
 
@@ -27,7 +38,27 @@ function onScroll() {
   const el = scrollEl.value
   if (!el) return
   stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  // 滑到顶：把更早的一批接进来（保持视觉位置不跳）
+  if (el.scrollTop < 60 && hiddenCount.value > 0) {
+    const before = el.scrollHeight
+    const top = el.scrollTop
+    visibleCount.value += 60
+    void nextTick(() => {
+      el.scrollTop = el.scrollHeight - before + top
+    })
+  }
 }
+
+/** 切会话：回到只渲染最近一段 */
+watch(
+  conversationID,
+  () => {
+    visibleCount.value = 60
+    stickToBottom.value = true
+    void scrollToBottom(true)
+  },
+  { immediate: true }
+)
 
 async function scrollToBottom(immediate = false) {
   await nextTick()
@@ -90,6 +121,7 @@ const statusLine = computed(() => {
 
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
       <div class="messages">
+        <div v-if="hiddenCount > 0" class="earlier">上面还有 {{ hiddenCount }} 条更早的消息（向上滑加载）</div>
         <div v-for="entry in messages" :key="entry.message.id" class="message-wrap">
           <!-- 分叉切换器（方案 §5.3：同父多个孩子时显示） -->
           <div v-if="branchOf(entry.message.id)" class="branch-row">
@@ -219,6 +251,13 @@ const statusLine = computed(() => {
   min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
+}
+
+.earlier {
+  text-align: center;
+  color: var(--text-3);
+  font-size: 11.5px;
+  padding: 4px 0 8px;
 }
 
 .message-wrap {
