@@ -6,6 +6,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { AssistantEntry } from '../../../protocol/rpc/protocol.js'
 import { useAppStore } from '../stores/app.js'
+import RealtimeVoice from './RealtimeVoice.vue'
 
 const store = useAppStore()
 
@@ -158,6 +159,9 @@ onBeforeUnmount(() => {
     <div v-if="!supported" class="notice">
       这台电脑的页面环境不支持录音（navigator.mediaDevices 不可用）
     </div>
+
+    <!-- v2.34 实时对话（voice.*）：听着说、边说边念、可以插话 -->
+    <RealtimeVoice v-if="supported" />
 
     <div class="voice-main">
       <button

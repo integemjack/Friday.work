@@ -20,6 +20,7 @@ run('npx', ['esbuild', 'src/protocol/rpc/protocol.ts', '--bundle', '--platform=n
 run('npx', ['esbuild', 'src/protocol/rpc/ConversationPath.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/path.cjs'])
 run('npx', ['esbuild', 'src/protocol/schat/Login.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/login.cjs'])
 run('npx', ['esbuild', 'src/protocol/schat/Connect.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/connect.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/voiceMedia.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/voicemedia.cjs'])
 run('node', ['--test', 'test/'])
 
 rmSync(tmp, { recursive: true, force: true })

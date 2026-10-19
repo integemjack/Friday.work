@@ -36,7 +36,7 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 | 浏览器 | 远端浏览器实时画面（`browser.frame`）、鼠标键盘转发、标签切换、下载进度、`handOver` 自动弹窗 |
 | 子 Agent | 后台子 Agent 的活动、步数、耗时、速度、排队消息；停 / 插话 |
 | 活动总览 | 这台机器上所有会话的实时动静（生成中 / 等确认 / 卡住 / 出错），点击跳转 |
-| 语音 | 按住说话 → 录音上传 → `assistant.say(source=voice)` → `assistant.entry` 回复 → 系统语音朗读（方案 §6.1 M3-A） |
+| 语音 | 两种：①按住说话（录音上传 → `assistant.say` → 流式回复 → 本机朗读）；②**实时语音＝给机器人打电话**（WebRTC，方案 D 档首选）：UDP+Opus 20ms 真实时、可插话、Friday 的音色，服务端 AssistantCalls 已带说完判断 |
 | 扫码一键连 | Secret-Chat 扫码登录（`/login-sessions`）、好友里的机器人列表（显示备注）、和 Friday bot 对话（`schat-ws/v1`，含 `bot_stream_delta` 流式拼装） |
 | 一键连上这台机器 | 机器人行上的 ⚡：聊天里 `/connect <一次性公钥>` → Friday 用封装好的凭据回话 → 本机解开、存配对、直接连上工作通道（不输地址/端口/口令）。凭据用 X25519 + HKDF-SHA256 + AES-256-GCM 封装，明文不进聊天记录 |
 | 受信级别 | `/connect` 配上的设备默认**不受信**（只能看会话/助手）；聊天里 `/trust <设备id> on` 后终端/浏览器/读文件才解锁 |
@@ -71,12 +71,13 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
   不受信时终端/浏览器/文件被拒并说出原因；`/trust <id> on` 后重连即解锁（`terminalsAvailable: true`）。
   同一版构建里语音通话仍然正常（ICE connected、收到对方声音）。
 
-**有一项受测试机环境限制**
-- 浏览器卡片的**画面帧**没在 192.168.20.239 上出来：远端是 snap 版 Chromium，`friday-server`（root 身份）在内部起无头浏览器时受 snap/AppArmor 与 `--no-sandbox` 影响。链路本身已验：`browser.open` / `navigate` / `input`（点击 + 逐字输入）/ `close` 全部有回执，`browser` 状态事件也在推，只是没有 `browser.frame`。换一台装了 deb 版 Chrome 的机器，或在远端给无头浏览器加 `--no-sandbox`，就能出帧。
+**实时语音用 D 档（机器人通话）**：方案 §6 原话「建议：D 档为主」。B 档 `voice.*` 的协议已实现（服务端 2.34.0 带 `voice` feature、8 个方法），但它的本地语音推理包要 **AVX2**，而 239 是 QEMU 虚拟机（CPU 只到 SSE4.2）跑不起来；D 档延迟更低（UDP 对 TCP）、回声消除更好、打断 / 来电都是现成的，所以实时语音以 D 档为准，`voice.*` 代码两边留看，等有 AVX2 的机器再启用。
+
+**浏览器画面帧受测试机限制**：239 是 snap 版 Chromium，`friday-server` 内部起无头浏览器受 snap/AppArmor 限制不出帧；链路已验（`browser.open`/`navigate`/`input`/`close` 全有回执）。换装 deb 版 Chrome 的机器即可出帧。
 
 **需要服务端或用户参与，尚未完成**
-- M1.5 的「一键连到工作通道」：**已经做通**（见上），前提是那台机器装的是带 `/connect` 的包装（本机编的 2.34.0，见 `scripts/README.md`）。
-- M3-B `voice.*` 协议（真正实时语音、Friday 的音色）：这一轮**没做**（先把 `/connect` + 受信级别做了）；需要抽 VoicePipeline，工作量比 `/connect` 大。
+- M1.5 的「一键连到工作通道」：**已经做通**（见上），前提是那台机器装的是带 `/connect` 的包装（本机编的 2.34.0，见 `scripts/BUILD-239.md`）。
+- `voice.*`（B 档）：协议已实现、留看待有 AVX2 的硬件；实时语音用 D 档通话（见上）。
 - 自动更新（方案里写的「M4 再议」）。
 
 ## 快捷键与细节

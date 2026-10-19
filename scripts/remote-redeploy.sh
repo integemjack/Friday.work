@@ -1,27 +1,34 @@
 #!/bin/sh
+# 严格部署：杀干净 → 等退出 → 拷贝 → 启动 → 校验 /proc/exe 与 features
 set -e
 VERSION=${1:-2.34.0}
 BIN=/root/.friday-server/versions/$VERSION/bin
 SRC=/root/friday-build/build/src/cli/friday-headless
 
-echo "=== 杀掉所有 friday 进程（按 pid，模式覆盖完整路径 / exec -a 两种名字） ==="
-for pid in $(ps -eo pid,args | grep -E "[f]riday-headless server --daemon|[f]riday-server --daemon|[f]riday-server --attach" | awk '{print $1}'); do
-  echo "kill $pid"
-  kill "$pid" 2>/dev/null || true
+echo "=== 1. 杀 ==="
+for pid in $(ps -eo pid,args | grep -E "[f]riday-headless|[f]riday-server --" | awk '{print $1}'); do
+  kill -9 "$pid" 2>/dev/null || true
 done
-sleep 3
-left=$(ps -eo pid,args | grep -E "[f]riday-headless|[f]riday-server" | grep -v grep | wc -l)
-echo "剩余 $left 个"
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  n=$(ps -eo args | grep -cE "[f]riday-headless|[f]riday-server --" || true)
+  [ "$n" = "0" ] && break
+  sleep 1
+done
+echo "还剩: $(ps -eo args | grep -cE '[f]riday-headless|[f]riday-server --' || true)"
 
-echo "=== 替换二进制 ==="
+echo "=== 2. 拷贝 ==="
+rm -f "$BIN/friday-headless"
 cp -f "$SRC" "$BIN/friday-headless"
 chmod +x "$BIN/friday-headless"
 md5sum "$SRC" "$BIN/friday-headless"
 
-echo "=== 起新的 ==="
+echo "=== 3. 启动 ==="
 cd /root && setsid nohup "$BIN/friday-server" --daemon > /root/friday-server.log 2>&1 < /dev/null &
-sleep 6
-echo "=== ps ==="
-ps -eo pid,args | grep "[f]riday-headless server --daemon" | head -2 || echo "(没有)"
-echo "=== status ==="
-"$BIN/friday-server" --status 2>&1 | head -3
+sleep 8
+
+echo "=== 4. 校验 ==="
+PID=$(ps -eo pid,args | grep "[f]riday-headless server --daemon" | awk '{print $1}' | head -1)
+echo "pid=$PID"
+ls -l "/proc/$PID/exe" 2>/dev/null
+echo "features:"
+"$BIN/friday-server" --status 2>&1 | grep -E '"voice"|"version"|startedAt'
