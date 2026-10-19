@@ -6,11 +6,13 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MessagePortMain } from 'electron'
 import { RpcError } from './rpc/RpcClient.js'
+import { PROTOCOL_VERSION } from './rpc/protocol.js'
 import type { MachineEntry, HostEnvelope, HostRequest, HostResponse, ParsedTarget } from '../shared/api.js'
 import { MachineConnection, newMachineID, type MachineConnectionHost } from './session/MachineManager.js'
 import { PairingStore, type CredentialBackend } from './session/PairingStore.js'
 import { parseTarget, targetToText, targetDisplayName } from './session/TargetParse.js'
 import { installPublicKeyWithPassword } from './session/PasswordSsh.js'
+import { ensureServer } from './deploy/RemoteDeploy.js'
 import { Uploads } from './media/Uploads.js'
 
 /** 剥掉 UTF-8 BOM（Windows 记事本/PowerShell 写的文件常带） */
@@ -163,6 +165,11 @@ export class ProtocolHost {
         return { ...(added as Record<string, unknown>), publicKeyPath: installed.publicKeyPath }
       }
 
+      case 'machines.ensureServer': {
+        const machine = this.requireMachine(request.id)
+        return this.ensureServerFor(machine)
+      }
+
       case 'machines.connect': {
         const machine = this.machines.get(request.id)
         if (!machine) throw new Error('没有这台机器')
@@ -225,6 +232,23 @@ export class ProtocolHost {
     const machine = this.machines.get(id)
     if (!machine) throw new Error('没有这台机器')
     return machine
+  }
+
+  /** 自动安装/升级远程 friday-server（只对 SSH / WSL 做；WebSocket 配对的机器不装） */
+  private async ensureServerFor(machine: MachineConnection): Promise<{ action: string; message: string }> {
+    const target = machine.target
+    if (target.kind !== 'ssh' && target.kind !== 'wsl') {
+      return { action: 'none', message: '只有 SSH / WSL 连的机器能自动装服务端' }
+    }
+    const deployTarget =
+      target.kind === 'ssh'
+        ? { kind: 'ssh' as const, host: target.host ?? '', port: target.port, identityFile: target.identityFile }
+        : { kind: 'wsl' as const, distro: target.distro }
+    const cacheDir = join(this.init.userDataPath, 'Remotes', 'ServerPackages')
+    return ensureServer(deployTarget, cacheDir, {
+      protocol: PROTOCOL_VERSION,
+      onStatus: (text) => this.port?.postMessage({ type: 'deployStatus', machineID: machine.id, text })
+    })
   }
 
   // MARK: 机器管理
@@ -307,7 +331,8 @@ export class ProtocolHost {
       onStateChange: () => this.broadcastMachines(),
       onEvent: (machine, method, params) => {
         this.port?.postMessage({ type: 'event', machineID: machine.id, method, params })
-      }
+      },
+      ensureServer: (machine) => this.ensureServerFor(machine)
     }
   }
 

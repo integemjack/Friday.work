@@ -114,7 +114,11 @@ export const useAppStore = defineStore('app', {
     nextZ: 10,
     /** 窗口级联计数（新窗口错开摆放） */
     cascade: 0,
-    /** 启动后是否已尝试自动连接上次的机器 */
+    /** 自动安装/升级远程 friday-server 的进度文字 */
+    deployStatus: '',
+    /** 正在安装/升级服务端 */
+    deploying: false,
+    /** 启动后是否已尝试自动连接存着的机器 */
     autoConnectDone: false,
     /** 当前机器全部会话的待确认调用（activity 订阅，REMOTE.md §6） */
     approvals: {} as Record<string, PendingApproval[]>,
@@ -341,6 +345,9 @@ export const useAppStore = defineStore('app', {
         if (event.type !== 'event' || event.machineID !== this.currentMachine) return
         this.applyEvent(event.method, event.params)
       })
+      host.onDeployStatus((info) => {
+        if (info.machineID === this.currentMachine) this.deployStatus = info.text
+      })
     },
 
     /** 协议方法（透传） */
@@ -453,6 +460,20 @@ export const useAppStore = defineStore('app', {
 
     async connectMachine(id: string) {
       await host.request({ type: 'machines.connect', id })
+    },
+
+    /** 自动安装/升级远程 friday-server（M4）；返回一句话结果 */
+    async ensureServer(id: string): Promise<string> {
+      this.deployStatus = '正在查看远程的 Friday 服务端…'
+      try {
+        const result = (await host.request({ type: 'machines.ensureServer', id })) as {
+          action?: string
+          message?: string
+        }
+        return result.message ?? '完成'
+      } finally {
+        this.deployStatus = ''
+      }
     },
 
     async disconnectMachine(id: string) {

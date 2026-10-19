@@ -18,6 +18,7 @@ class HostLink {
   private readonly pending = new Map<number, PendingCall>()
   private readonly machineListeners = new Set<MachineListener>()
   private readonly eventListeners = new Set<EventListener>()
+  private readonly deployListeners = new Set<(info: { machineID: string; text: string }) => void>()
 
   constructor() {
     window.addEventListener('message', (event) => {
@@ -45,13 +46,18 @@ class HostLink {
         }
         return
       }
-      if ('type' in data) {
-        if (data.type === 'machines') {
+      const incoming = data as unknown as { type?: string; machineID?: string; text?: string }
+      if (incoming.type) {
+        if (incoming.type === 'machines') {
           for (const listener of this.machineListeners) {
             listener(data as unknown as { machines: import('../../../shared/api.js').MachineStateInfo[]; current: string })
           }
-        } else if (data.type === 'event') {
-          for (const listener of this.eventListeners) listener(data)
+        } else if (incoming.type === 'event') {
+          for (const listener of this.eventListeners) listener(data as unknown as HostEvent)
+        } else if (incoming.type === 'deployStatus') {
+          for (const listener of this.deployListeners) {
+            listener(incoming as { machineID: string; text: string })
+          }
         }
       }
     }
@@ -81,6 +87,12 @@ class HostLink {
   onEvent(listener: EventListener): () => void {
     this.eventListeners.add(listener)
     return () => this.eventListeners.delete(listener)
+  }
+
+  /** 安装/升级服务端的进度 */
+  onDeployStatus(listener: (info: { machineID: string; text: string }) => void): () => void {
+    this.deployListeners.add(listener)
+    return () => this.deployListeners.delete(listener)
   }
 }
 

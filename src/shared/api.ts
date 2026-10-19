@@ -69,6 +69,8 @@ export type HostRequest =
   /** 密码添加（M4）：一次性装公钥后添加，密码不落盘 */
   | { type: 'machines.addWithPassword'; target: string; password: string; name?: string }
   | { type: 'machines.remove'; id: string }
+  /** 自动安装/升级远程的 friday-server（M4，REMOTE.md §9） */
+  | { type: 'machines.ensureServer'; id: string }
   | { type: 'machines.connect'; id: string }
   | { type: 'machines.disconnect'; id: string }
   /** 取一台机器最近的会话列表（hello 快照 + summaries 事件维护，REMOTE.md §5） */

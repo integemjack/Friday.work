@@ -8,6 +8,7 @@ import PairDialog from '../components/PairDialog.vue'
 const store = useAppStore()
 const addDialogOpen = ref(false)
 const pairDialogOpen = ref(false)
+const installResult = ref('')
 const showAdd = ref(false)
 
 const stateText: Record<string, string> = {
@@ -50,8 +51,22 @@ function openConversation(id: string): void {
   void store.openConversation(id)
 }
 
-async function toggleConnect(): Promise<void> {
+async function installServer(): Promise<void> {
   const machine = store.currentMachineInfo
+  if (!machine) return
+  store.deploying = true
+  try {
+    const message = await store.ensureServer(machine.id)
+    store.error = ''
+    installResult.value = message
+  } catch (error) {
+    installResult.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    store.deploying = false
+  }
+}
+
+async function toggleConnect(): Promise<void> {  const machine = store.currentMachineInfo
   if (!machine) return
   if (machine.state === 'ready') await store.disconnectMachine(machine.id)
   else await store.connectMachine(machine.id)
@@ -94,7 +109,11 @@ async function toggleConnect(): Promise<void> {
           {{ store.currentMachineInfo.state === 'ready' ? '断开' : '连接' }}
         </button>
         <button class="small-btn danger" @click="store.removeMachine(store.currentMachineInfo.id)">删除这台</button>
+        <button class="small-btn" :disabled="!store.currentMachineInfo || store.deploying" @click="installServer">
+          {{ store.deploying ? '安装中…' : '安装/升级服务端' }}
+        </button>
         <span v-if="store.currentMachineInfo.detail" class="detail">{{ store.currentMachineInfo.detail }}</span>
+        <span v-if="store.deployStatus || installResult" class="detail">{{ store.deployStatus || installResult }}</span>
       </div>
     </div>
 

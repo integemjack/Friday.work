@@ -32,6 +32,8 @@ export interface MachineConnectionHost {
   onStateChange(connection: MachineConnection): void
   /** 服务端事件转发（渲染进程） */
   onEvent(connection: MachineConnection, method: string, params: unknown): void
+  /** 自动安装/升级远程 friday-server（M4；host 实现里只管 SSH/WSL） */
+  ensureServer(connection: MachineConnection): Promise<{ action: string; message: string }>
 }
 
 export class MachineConnection {
@@ -43,6 +45,10 @@ export class MachineConnection {
   detail?: string
   serverInfo?: HelloResult['server']
   hasPendingApproval = false
+  /** 这次连接有没有等到 hello（没有就可能是远程没装服务端） */
+  private greeted = false
+  /** 自动装服务端只试一次（避免循环安装） */
+  private autoInstallTried = false
   /** 这台机器的会话列表（hello 快照 + summaries 事件维护，渲染进程切换时取） */
   summaries: ConversationSummary[] = []
   /** M2 实时卡片的状态（hello 快照 + terminals/browser/team 事件维护） */
@@ -105,6 +111,7 @@ export class MachineConnection {
     this.teardown()
     this.state = this.target.kind === 'ws' ? 'connecting' : 'probing'
     this.detail = undefined
+    this.greeted = false
     this.host.onStateChange(this)
 
     try {
@@ -112,10 +119,18 @@ export class MachineConnection {
         const transport = new SshTransport(
           {
             onMessage: (line) => this.rpc?.handleMessage(line),
-            onExit: ({ sshFailed, stderrTail }) => this.onTransportDown(sshFailed ? sshFailureReason(255, stderrTail) : undefined),
-            onError: () => { /* exit 会跟着来 */ }
+            onExit: ({ sshFailed, stderrTail }) =>
+              this.onTransportDown(
+                sshFailed ? sshFailureReason(255, stderrTail) : undefined,
+                { sshFailed, stderrTail }
+              ),
+            onError: () => {
+              /* exit 会跟着来 */
+            }
           },
-          () => { /* 原始输出（诊断用） */ }
+          () => {
+            /* 原始输出（诊断用） */
+          }
         )
         this.attach(transport)
         await transport.startSSH({ host: this.target.host ?? '', port: this.target.port, identityFile: this.target.identityFile })
@@ -125,10 +140,18 @@ export class MachineConnection {
         const transport = new SshTransport(
           {
             onMessage: (line) => this.rpc?.handleMessage(line),
-            onExit: ({ sshFailed, stderrTail }) => this.onTransportDown(sshFailed ? sshFailureReason(255, stderrTail) : undefined),
-            onError: () => { /* exit 会跟着来 */ }
+            onExit: ({ sshFailed, stderrTail }) =>
+              this.onTransportDown(
+                sshFailed ? sshFailureReason(255, stderrTail) : undefined,
+                { sshFailed, stderrTail }
+              ),
+            onError: () => {
+              /* exit 会跟着来 */
+            }
           },
-          () => { /* 原始输出 */ }
+          () => {
+            /* 原始输出 */
+          }
         )
         this.attach(transport)
         await transport.startWSL(this.target.distro ?? '')
@@ -240,6 +263,7 @@ export class MachineConnection {
         30_000
       )) as HelloResult
       this.serverInfo = result.server
+      this.greeted = true
       this.summaries = result.state?.summaries ?? []
       this.applyLiveSnapshot(result.state)
       this.state = 'ready'
@@ -287,18 +311,43 @@ export class MachineConnection {
     }
   }
 
-  private onTransportDown(reason?: string): void {
+  private onTransportDown(reason?: string, info?: { sshFailed: boolean; stderrTail: string }): void {
     const wasReady = this.state === 'ready'
+    const neverGreeted = !this.greeted
     this.teardown()
     if (!this.wanted) {
       this.state = 'disconnected'
       this.host.onStateChange(this)
       return
     }
+    // 远程『--attach 跑不起来、又没 hello』：多半是没装 friday-server，自动装（方案 §10 M4；只对 SSH / WSL）
+    if (info && !info.sshFailed && neverGreeted && !this.autoInstallTried && !wasReady) {
+      this.autoInstallTried = true
+      void this.autoInstall()
+      return
+    }
     this.state = 'failed'
     this.detail = reason ?? (wasReady ? '连接断了，马上重连' : '连不上')
     this.host.onStateChange(this)
     this.scheduleReconnect()
+  }
+
+  /** 没装服务端时自动装上，然后马上重连 */
+  private async autoInstall(): Promise<void> {
+    this.state = 'probing'
+    this.detail = '远程没有 Friday 服务端，正在自动安装…'
+    this.host.onStateChange(this)
+    try {
+      const result = await this.host.ensureServer(this)
+      this.detail = result.message
+    } catch (error) {
+      this.detail = `自动安装失败：${error instanceof Error ? error.message : String(error)}`
+    }
+    this.host.onStateChange(this)
+    if (this.wanted) {
+      this.state = 'disconnected'
+      await this.start()
+    }
   }
 
   private scheduleReconnect(): void {
