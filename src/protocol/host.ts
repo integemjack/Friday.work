@@ -12,6 +12,7 @@ import { MachineConnection, newMachineID, type MachineConnectionHost } from './s
 import { PairingStore, type CredentialBackend } from './session/PairingStore.js'
 import { parseTarget, targetToText, targetDisplayName } from './session/TargetParse.js'
 import { installPublicKeyWithPassword } from './session/PasswordSsh.js'
+import { SchatService } from './schat/SchatService.js'
 import { ensureServer } from './deploy/RemoteDeploy.js'
 import { Uploads } from './media/Uploads.js'
 
@@ -39,6 +40,8 @@ export class ProtocolHost {
   private readonly uploads: Uploads
   private readonly remotesFile: string
 
+  private readonly schat: SchatService
+
   constructor(
     backends: MainBackends,
     private readonly init: HostInit
@@ -46,6 +49,9 @@ export class ProtocolHost {
     this.pairings = new PairingStore(backends.credentials)
     this.uploads = new Uploads(backends)
     this.remotesFile = join(init.userDataPath, 'Remotes', 'remotes.json')
+    this.schat = new SchatService(backends.credentials, {
+      onChange: (state) => this.port?.postMessage({ type: 'schat', state })
+    })
   }
 
   private port: MessagePortMain | null = null
@@ -56,6 +62,8 @@ export class ProtocolHost {
     this.listen()
     // 端口可能先于 remotes.json 加载到达（那时广播的是空表），加载完再广播一次
     this.broadcastMachines()
+    // 已登录的 SChat 会话直连（不用再扫码）
+    void this.schat.load()
   }
 
   /** 窗口 reload 时换端口，机器连接保持 */
@@ -222,6 +230,20 @@ export class ProtocolHost {
         const machine = this.requireMachine(request.machineID)
         return this.uploads.sendFile((method, params) => machine.request(method, params), request.handle)
       }
+
+      case 'schat.state':
+        return this.schat.getState()
+
+      case 'schat.login':
+        return this.schat.startLogin(request.server, request.deviceName)
+
+      case 'schat.disconnect':
+        this.schat.disconnect()
+        return {}
+
+      case 'schat.send':
+        await this.schat.send(request.botID, request.text)
+        return {}
 
       default:
         throw new Error('不认识的请求')

@@ -10,6 +10,7 @@ const store = useAppStore()
 const entries: Array<{ kind: WindowKind; label: string; icon: string }> = [
   { kind: 'machines', label: '机器与会话', icon: '⛁' },
   { kind: 'activity', label: '活动总览', icon: '◎' },
+  { kind: 'schat', label: '扫码一键连', icon: '⚡' },
   { kind: 'voice', label: '语音', icon: '🎙' },
   { kind: 'terminals', label: '终端', icon: '⌨' },
   { kind: 'files', label: '文件', icon: '🗂' },

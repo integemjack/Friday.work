@@ -59,6 +59,7 @@ export type WindowKind =
   | 'machines'
   | 'voice'
   | 'settings'
+  | 'schat'
 
 export interface DesktopWindow {
   id: string
@@ -88,7 +89,8 @@ const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH
   activity: { w: 520, h: 480, minW: 320, minH: 240 },
   machines: { w: 420, h: 560, minW: 320, minH: 280 },
   voice: { w: 520, h: 560, minW: 360, minH: 320 },
-  settings: { w: 620, h: 560, minW: 420, minH: 320 }
+  settings: { w: 620, h: 560, minW: 420, minH: 320 },
+  schat: { w: 720, h: 560, minW: 420, minH: 360 }
 }
 
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
@@ -100,7 +102,8 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   activity: { title: '活动总览', icon: '◎' },
   machines: { title: '机器与会话', icon: '⛁' },
   voice: { title: '语音', icon: '🎙' },
-  settings: { title: '设置', icon: '⚙' }
+  settings: { title: '设置', icon: '⚙' },
+  schat: { title: '扫码一键连', icon: '⚡' }
 }
 
 export const useAppStore = defineStore('app', {
@@ -125,6 +128,19 @@ export const useAppStore = defineStore('app', {
     deployStatus: '',
     /** 正在安装/升级服务端 */
     deploying: false,
+    /** SChat 通道（M1.5 扫码一键连） */
+    schat: {
+      phase: 'idle' as 'idle' | 'logging-in' | 'online' | 'error',
+      server: 'https://47.100.98.3:2012',
+      userId: 0,
+      deviceName: '',
+      qrPayload: '',
+      qrExpiresAt: 0,
+      status: '',
+      bots: [] as Array<{ id: number; name: string; botCalls: boolean }>,
+      messages: {} as Record<number, Array<{ id: number; senderId: number; to: number; content: string; streaming: boolean; at: number; mine?: boolean }>>,
+      error: ''
+    },
     /** 启动后是否已尝试自动连接存着的机器 */
     autoConnectDone: false,
     /** 当前机器全部会话的待确认调用（activity 订阅，REMOTE.md §6） */
@@ -354,6 +370,9 @@ export const useAppStore = defineStore('app', {
       })
       host.onDeployStatus((info) => {
         if (info.machineID === this.currentMachine) this.deployStatus = info.text
+      })
+      host.onSchat((state) => {
+        this.schat = state as typeof this.schat
       })
     },
 
@@ -865,6 +884,29 @@ export const useAppStore = defineStore('app', {
       } catch {
         // 拉不到就先不动（下一条补丁/快照会再对齐）
       }
+    },
+
+    // MARK: SChat 扫码一键连（M1.5）
+
+    async schatRefresh() {
+      const state = (await host.request({ type: 'schat.state' })) as typeof this.schat
+      this.schat = state
+      return state
+    },
+
+    async schatLogin(server?: string, deviceName?: string) {
+      const state = (await host.request({ type: 'schat.login', server, deviceName })) as typeof this.schat
+      this.schat = state
+      return state
+    },
+
+    async schatDisconnect() {
+      await host.request({ type: 'schat.disconnect' })
+      await this.schatRefresh()
+    },
+
+    async schatSend(botID: number, text: string) {
+      await host.request({ type: 'schat.send', botID, text })
     },
 
     // MARK: 操作

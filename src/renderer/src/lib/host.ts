@@ -19,6 +19,7 @@ class HostLink {
   private readonly machineListeners = new Set<MachineListener>()
   private readonly eventListeners = new Set<EventListener>()
   private readonly deployListeners = new Set<(info: { machineID: string; text: string }) => void>()
+  private readonly schatListeners = new Set<(state: unknown) => void>()
 
   constructor() {
     window.addEventListener('message', (event) => {
@@ -58,6 +59,8 @@ class HostLink {
           for (const listener of this.deployListeners) {
             listener(incoming as { machineID: string; text: string })
           }
+        } else if (incoming.type === 'schat') {
+          for (const listener of this.schatListeners) listener((incoming as { state: unknown }).state)
         }
       }
     }
@@ -93,6 +96,12 @@ class HostLink {
   onDeployStatus(listener: (info: { machineID: string; text: string }) => void): () => void {
     this.deployListeners.add(listener)
     return () => this.deployListeners.delete(listener)
+  }
+
+  /** SChat 通道状态（扫码登录 / 机器人对话） */
+  onSchat(listener: (state: unknown) => void): () => void {
+    this.schatListeners.add(listener)
+    return () => this.schatListeners.delete(listener)
   }
 }
 

@@ -86,6 +86,12 @@ export type HostRequest =
   | { type: 'conversations.getMessage'; machineID: string; conversationID: string; messageID: string }
   /** 上传主进程背书的一个文件（file.upload 分块） */
   | { type: 'upload.sendFile'; machineID: string; handle: string }
+  /** SChat 通道（M1.5）：读当前状态 */
+  | { type: 'schat.state' }
+  /** 开始扫码登录（不给 server 用默认生产地址） */
+  | { type: 'schat.login'; server?: string; deviceName?: string }
+  | { type: 'schat.disconnect' }
+  | { type: 'schat.send'; botID: number; text: string }
 
 // MARK: 协议 → 渲染
 
