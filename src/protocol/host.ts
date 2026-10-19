@@ -55,6 +55,8 @@ export class ProtocolHost {
   }
 
   private port: MessagePortMain | null = null
+  /** 已经挂过监听的那个端口对象（listen 幂等：同一个端口只挂一次，否则每个请求会被处理两遍） */
+  private listeningPort: MessagePortMain | null = null
 
   async start(): Promise<void> {
     await this.pairings.load()
@@ -68,13 +70,15 @@ export class ProtocolHost {
 
   /** 窗口 reload 时换端口，机器连接保持 */
   setPort(newPort: MessagePortMain): void {
+    if (this.port !== newPort) this.listeningPort = null
     this.port = newPort
     this.listen()
     this.broadcastMachines()
   }
 
   private listen(): void {
-    if (!this.port) return
+    if (!this.port || this.listeningPort === this.port) return
+    this.listeningPort = this.port
     this.port.on('message', (event) => {
       void this.handleMessage(event.data as HostEnvelope)
     })

@@ -28,7 +28,7 @@ export interface SchatBot {
 }
 
 export interface SchatMessage {
-  /** 服务端消息 id（流式期间同一条不变） */
+  /** 服务端消息 id（流式期间同一条不变；自己刚发的还没有 = 负数占位） */
   id: number
   senderId: number
   to: number
@@ -37,6 +37,8 @@ export interface SchatMessage {
   at: number
   /** 自己发的（乐观更新） */
   mine?: boolean
+  /** 自己发出去的幂等键：服务端回显带着它，用来把占位那条换成真消息 */
+  clientMsgId?: string
 }
 
 export type SchatPhase = 'idle' | 'logging-in' | 'online' | 'error'
@@ -174,7 +176,8 @@ export class SchatService {
   }
 
   private async onApproved(server: string, deviceName: string, deviceId: string, result: QrSessionResult): Promise<void> {
-    this.patch({ status: '登录成功，正在连接…' })
+    // 登录成功：把码收起来（否则窗口里还挂着一个已用掉的二维码）
+    this.patch({ status: '登录成功，正在连接…', qrPayload: '', qrExpiresAt: 0 })
     const fingerprint = this.session?.server === server ? this.session.fingerprint : ''
     const stored: StoredSession = {
       server,
@@ -257,6 +260,7 @@ export class SchatService {
       const bots = friends
         .filter((friend) => friend.isBot)
         .map((friend) => ({ id: friend.id, name: friend.nickname || friend.name, botCalls: !!friend.botCalls }))
+        .filter((bot, index, list) => list.findIndex((other) => other.id === bot.id) === index)
       this.patch({ bots })
     } catch (error) {
       this.patch({ status: `读机器人列表失败：${error instanceof Error ? error.message : String(error)}` })
@@ -272,6 +276,7 @@ export class SchatService {
         content?: string
         createdAt?: number
         streaming?: boolean
+        clientMsgId?: string
       } | undefined
       if (!message || typeof message.id !== 'number') return
       const peer = message.senderId === this.state.userId ? message.receiverId : message.senderId
@@ -283,7 +288,8 @@ export class SchatService {
         content: message.content ?? '',
         streaming: !!message.streaming,
         at: message.createdAt ?? Date.now(),
-        mine: message.senderId === this.state.userId
+        mine: message.senderId === this.state.userId,
+        ...(message.clientMsgId ? { clientMsgId: message.clientMsgId } : {})
       })
       return
     }
@@ -320,7 +326,17 @@ export class SchatService {
 
   private upsertMessage(peer: number, message: SchatMessage): void {
     const list = [...(this.state.messages[peer] ?? [])]
-    const index = list.findIndex((item) => item.id === message.id)
+    // 先按 id 找；找不到再按 clientMsgId 找（自己发的那条在服务端回显前是负数占位）
+    let index = list.findIndex((item) => item.id === message.id)
+    if (index < 0 && message.clientMsgId) {
+      index = list.findIndex((item) => item.clientMsgId === message.clientMsgId && item.id < 0)
+    }
+    if (index < 0 && message.mine && message.id > 0) {
+      // 老路径：没有 clientMsgId 的回显，按内容 + 时间就近归并
+      index = list.findIndex(
+        (item) => item.mine && item.id < 0 && item.content === message.content && item.to === message.to
+      )
+    }
     if (index >= 0) list[index] = { ...list[index]!, ...message }
     else list.push(message)
     list.sort((a, b) => a.at - b.at)
@@ -339,7 +355,8 @@ export class SchatService {
       content: text,
       streaming: false,
       at: Date.now(),
-      mine: true
+      mine: true,
+      clientMsgId
     })
     await this.client.request('message', { to: String(botID), clientMsgId, type: 'text', content: text })
   }
