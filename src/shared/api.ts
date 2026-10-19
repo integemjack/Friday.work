@@ -92,6 +92,17 @@ export type HostRequest =
   | { type: 'schat.login'; server?: string; deviceName?: string }
   | { type: 'schat.disconnect' }
   | { type: 'schat.send'; botID: number; text: string }
+  /** 一键连上这台机器（方案 §4.0 ③）：聊天里 /connect，拿回封装好的配对凭据 */
+  | { type: 'schat.connect'; botID: number }
+  /** 把 /connect 拿到的凭据存下来、加成一台机器并连上 */
+  | {
+      type: 'machines.addWork'
+      name?: string
+      token: string
+      fingerprint?: string
+      deviceID?: string
+      urls: string[]
+    }
   /** 1:1 通话（M3-D）：拨打 / 信令 / 接通 / 静音 / 挂断 / ICE */
   | { type: 'schat.call.dial'; botID: number; callType?: 'audio' | 'video' }
   | { type: 'schat.call.signal'; signalType: string; payload: string }

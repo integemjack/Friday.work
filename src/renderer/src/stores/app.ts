@@ -152,6 +152,8 @@ export const useAppStore = defineStore('app', {
     cascade: 0,
     /** 自动安装/升级远程 friday-server 的进度文字 */
     deployStatus: '',
+    /** 正在用 /connect 连一台机器 */
+    connectingWork: false,
     /** 正在安装/升级服务端 */
     deploying: false,
     /** SChat 通道（M1.5 扫码一键连） */
@@ -981,6 +983,33 @@ export const useAppStore = defineStore('app', {
 
     async schatSend(botID: number, text: string) {
       await host.request({ type: 'schat.send', botID, text })
+    },
+
+    /** 一键连上这台机器（方案 §4.0 ③）：聊天里 /connect → 解密凭据 → 存配对 → 加机器 → 连上 */
+    async connectWork(botID: number): Promise<string> {
+      this.connectingWork = true
+      try {
+        const payload = (await host.request({ type: 'schat.connect', botID })) as {
+          deviceID: string
+          name?: string
+          token: string
+          urls: string[]
+          fingerprint?: string
+        }
+        const added = (await host.request({
+          type: 'machines.addWork',
+          // 服务端已经叫「扫码连入的 X」了，不重复加前缀
+          name: payload.name && !payload.name.startsWith('扫码连入的') ? `扫码连入的 ${payload.name}` : payload.name,
+          token: payload.token,
+          fingerprint: payload.fingerprint,
+          deviceID: payload.deviceID,
+          urls: payload.urls
+        })) as { id?: string }
+        if (added.id) await this.connectMachine(added.id)
+        return payload.urls[0] ?? ''
+      } finally {
+        this.connectingWork = false
+      }
     },
 
     // MARK: 通话（M3-D）

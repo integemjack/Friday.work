@@ -5,6 +5,8 @@ export interface Pairing {
   token: string
   fingerprint?: string
   deviceID?: string
+  /** `/connect` 回来的一组候选地址（并行/依次试，第一个握手成功的就用） */
+  urls?: string[]
 }
 
 /** 主进程提供的凭据后端（parentPort 上的请求/回执） */

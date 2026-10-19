@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { createQrSession, fetchFriends, pollQrSession, refreshSession, type QrSessionResult } from './Login.js'
 import { SchatClient, type SchatEnvelope } from './SchatClient.js'
+import { extractSealed, generateEphemeral, openSealed, type ConnectPayload } from './Connect.js'
 import { CallService, emptyState, type CallSignal, type CallState } from './CallService.js'
 import { iceServersFor, type RTCIceServerLike } from './ice.js'
 import type { CredentialBackend } from '../session/PairingStore.js'
@@ -340,6 +341,42 @@ export class SchatService {
     })
   }
 
+  /** 等 `/connect` 回执的挂起请求（带一次性私钥，回执到了就地解密） */
+  private connectWaiter: {
+    botID: number
+    ephemeral: ReturnType<typeof generateEphemeral>
+    resolve: (payload: ConnectPayload) => void
+    reject: (error: Error) => void
+  } | null = null
+
+  /**
+   * 一键连上这台机器（方案 §4.0 ③）：
+   *   生成一次性 X25519 密钥对 → 聊天里发 `/connect <公钥>` → 等 Friday 回封装好的凭据 → 本机解开。
+   */
+  async connectWork(botID: number): Promise<ConnectPayload> {
+    if (this.state.phase !== 'online' || !this.client) throw new Error('还没连上聊天服务器')
+    if (this.connectWaiter) throw new Error('上一次 /connect 还没回话')
+    const ephemeral = generateEphemeral()
+    const publicKey = ephemeral.publicKeyRaw.toString('base64url')
+    const promise = new Promise<ConnectPayload>((resolve, reject) => {
+      this.connectWaiter = { botID, ephemeral, resolve, reject }
+      setTimeout(() => {
+        if (this.connectWaiter?.botID === botID) {
+          this.connectWaiter = null
+          reject(new Error('这台机器 60 秒内没回 /connect：它上面的助手开着吗？WebSocket 入口开了吗？'))
+        }
+      }, 60_000)
+    })
+    try {
+      await this.send(botID, `/connect ${publicKey}`)
+    } catch (error) {
+      this.connectWaiter = null
+      throw error
+    }
+    // 私钥只活在这一个等待里；解开就随 waiter 一起丢掉
+    return promise
+  }
+
   private onEnvelope(envelope: SchatEnvelope): void {
     // 通话信令优先交给通话状态机（p2p_request / response / signaling / glare）
     if (
@@ -374,6 +411,19 @@ export class SchatService {
         mine: message.senderId === this.state.userId,
         ...(message.clientMsgId ? { clientMsgId: message.clientMsgId } : {})
       })
+      // `/connect` 的回执：机器人在聊天里回一行标记 + 封装载荷
+      const waiter = this.connectWaiter
+      if (waiter && peer === waiter.botID && message.senderId !== this.state.userId) {
+        const sealed = extractSealed(message.content ?? '')
+        if (sealed) {
+          this.connectWaiter = null
+          try {
+            waiter.resolve(openSealed(waiter.ephemeral, sealed))
+          } catch (error) {
+            waiter.reject(error instanceof Error ? error : new Error(String(error)))
+          }
+        }
+      }
       return
     }
     // bot 流式：delta 追加、done 用终版覆盖

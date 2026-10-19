@@ -18,7 +18,19 @@ const bots = computed(() => state.value.bots)
 const messages = computed(() => state.value.messages[activeBot.value] ?? [])
 const canSend = computed(() => state.value.phase === 'online' && activeBot.value > 0 && draft.value.trim().length > 0)
 
-/** 标题栏右侧的状态文字 */
+/** 一键连上这台机器（方案 §4.0 ③）：直接开一个工作连接，不输任何地址/口令 */
+async function connectWork(botID: number): Promise<void> {
+  workError.value = ''
+  try {
+    const url = await store.connectWork(botID)
+    workResult.value = url ? `已连上 ${url}（设备默认不受信：想用终端/浏览器/文件，在聊天里发 /trust <设备id> on）` : '已连上'
+  } catch (err) {
+    workError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+const workResult = ref('')
+const workError = ref('')
 const statusText = computed(() => {
   switch (state.value.phase) {
     case 'idle':
@@ -94,6 +106,9 @@ onMounted(() => {
     </div>
 
     <div v-if="state.error" class="error">{{ state.error }}</div>
+    <div v-if="store.connectingWork" class="work-ok">正在通过聊天让那台机器配对…（几秒）</div>
+    <div v-if="workResult" class="work-ok">{{ workResult }}</div>
+    <div v-if="workError" class="error">{{ workError }}</div>
 
     <!-- 未登录：填服务器、生成二维码 -->
     <div v-if="state.phase === 'idle' || (state.phase === 'error' && !state.qrPayload)" class="setup">
@@ -140,6 +155,7 @@ onMounted(() => {
         >
           <span class="bot-name">{{ bot.name }}</span>
           <span v-if="bot.botCalls" class="bot-call" title="语音通话" @click.stop="store.callDial(bot.id, 'audio')">📞</span>
+          <span class="bot-work" title="一键连上这台机器（不用输地址/口令）" @click.stop="connectWork(bot.id)">⚡</span>
           <span v-if="bot.botCalls" class="bot-tag">通话</span>
         </button>
         <div v-if="bots.length === 0" class="empty-tip">好友里还没有机器人。先在手机上把这个 Friday 机器人加成好友。</div>
@@ -356,6 +372,23 @@ input:focus {
 }
 
 .bot-call:hover {
+  opacity: 1;
+}
+
+.bot-work {
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.work-ok {
+  padding: 8px 14px;
+  color: var(--ok);
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.bot-work:hover {
   opacity: 1;
 }
 

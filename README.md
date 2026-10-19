@@ -38,6 +38,8 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 | 活动总览 | 这台机器上所有会话的实时动静（生成中 / 等确认 / 卡住 / 出错），点击跳转 |
 | 语音 | 按住说话 → 录音上传 → `assistant.say(source=voice)` → `assistant.entry` 回复 → 系统语音朗读（方案 §6.1 M3-A） |
 | 扫码一键连 | Secret-Chat 扫码登录（`/login-sessions`）、好友里的机器人列表（显示备注）、和 Friday bot 对话（`schat-ws/v1`，含 `bot_stream_delta` 流式拼装） |
+| 一键连上这台机器 | 机器人行上的 ⚡：聊天里 `/connect <一次性公钥>` → Friday 用封装好的凭据回话 → 本机解开、存配对、直接连上工作通道（不输地址/端口/口令）。凭据用 X25519 + HKDF-SHA256 + AES-256-GCM 封装，明文不进聊天记录 |
+| 受信级别 | `/connect` 配上的设备默认**不受信**（只能看会话/助手）；聊天里 `/trust <设备id> on` 后终端/浏览器/读文件才解锁 |
 | 通话 | 给机器人打语音电话（WebRTC）：`p2p_request`/`p2p_response`/`p2p_signaling` 信令 + `GET /calls/ice-servers` 的 TURN；Opus 48 kHz 单声道；没有麦克风时自动退回只收（能听不能说） |
 | 设置 | 远端引擎、Agent 设置、服务状态（只读） |
 
@@ -64,13 +66,17 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 - M1.5 客户端侧：扫码登录（生产 chatserver 真实建码 + 轮询 + 批准）、schat-ws 连接、机器人列表（按备注显示）、和 bot 对话与流式拼装（凭据经 safeStorage 加密）
 - 真机验证：扫码登录后给备注「Linux 239」的机器人发消息，助手回复正常显示（含流式增量）
 - M3-D 语音通话：真机拨给「Linux 239」，对端接受 → WebRTC ICE/连接均 connected → 收到对方音轨、计时正常、挂断干净（这台机器没有麦克风，自动退回只收模式）；助手主动来电也能弹窗接听，接通后同样 connected
+- **M1.5 的 `/connect`（服务端已改）**：Friday 侧加了封装配对凭据 + 受信级别（`/connect`、`/devices`、`/trust`、`server.trust`），
+  本机编好 2.34.0 装到 239 实测：点 ⚡ → 聊天往返 → 解密 → 连上 `wss://192.168.20.239:7443`；
+  不受信时终端/浏览器/文件被拒并说出原因；`/trust <id> on` 后重连即解锁（`terminalsAvailable: true`）。
+  同一版构建里语音通话仍然正常（ICE connected、收到对方声音）。
 
 **有一项受测试机环境限制**
 - 浏览器卡片的**画面帧**没在 192.168.20.239 上出来：远端是 snap 版 Chromium，`friday-server`（root 身份）在内部起无头浏览器时受 snap/AppArmor 与 `--no-sandbox` 影响。链路本身已验：`browser.open` / `navigate` / `input`（点击 + 逐字输入）/ `close` 全部有回执，`browser` 状态事件也在推，只是没有 `browser.frame`。换一台装了 deb 版 Chrome 的机器，或在远端给无头浏览器加 `--no-sandbox`，就能出帧。
 
 **需要服务端或用户参与，尚未完成**
-- M1.5 的「一键连到工作通道」：扫码登录本身能跑，但登录后要用 `/connect` 领配对凭据才能连上工作通道，这条命令在 friday-server 里还不存在（方案 §7.4 缺口 #3）；受信级别也是缺口 #2。手机扫一下确认登录这一步需要用户本人。
-- M3-B `voice.*` 协议（真正实时语音、Friday 的音色）：需要改 Friday 本体（按 Friday 仓库流程）。
+- M1.5 的「一键连到工作通道」：**已经做通**（见上），前提是那台机器装的是带 `/connect` 的包装（本机编的 2.34.0，见 `scripts/README.md`）。
+- M3-B `voice.*` 协议（真正实时语音、Friday 的音色）：这一轮**没做**（先把 `/connect` + 受信级别做了）；需要抽 VoicePipeline，工作量比 `/connect` 大。
 - 自动更新（方案里写的「M4 再议」）。
 
 ## 快捷键与细节

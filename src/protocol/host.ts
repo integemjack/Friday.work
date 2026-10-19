@@ -250,6 +250,26 @@ export class ProtocolHost {
         await this.schat.send(request.botID, request.text)
         return {}
 
+      case 'schat.connect': {
+        // 聊天里 /connect → 拿回封装好的凭据（明文不进聊天记录）
+        const payload = await this.schat.connectWork(request.botID)
+        return payload
+      }
+
+      case 'machines.addWork': {
+        // 凭据经主进程 safeStorage 落盘；机器条目的 target 用第一个候选地址，其余存在 pairing.urls 里
+        const urls = request.urls.filter((url) => url.startsWith('wss://') || url.startsWith('ws://'))
+        if (urls.length === 0) throw new Error('/connect 回来的地址里没有可用的 wss://')
+        const primary = urls[0]!
+        await this.pairings.save(primary, {
+          token: request.token,
+          fingerprint: request.fingerprint,
+          deviceID: request.deviceID,
+          urls
+        })
+        return this.addMachine(primary, request.name ?? '扫码连入的机器')
+      }
+
       case 'schat.call.dial':
         return this.schat.dial(request.botID, request.callType ?? 'audio')
 

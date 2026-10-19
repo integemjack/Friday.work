@@ -191,7 +191,13 @@ export class MachineConnection {
           }
         })
         this.attach(transport)
-        transport.start(url, pairing.fingerprint)
+        // /connect 会回多个候选地址（局域网 / Tailscale / 公网）：依次试，第一个握手成功的就用（方案 §4.0「可达性」）
+        const candidates = pairing.urls && pairing.urls.length ? pairing.urls : [url]
+        const first = candidates[0] ?? url
+        transport.start(first, pairing.fingerprint)
+        if (candidates.length > 1) {
+          this.tryOtherUrls(candidates.slice(1), pairing.fingerprint)
+        }
       }
     } catch (error) {
       this.connecting = false
@@ -200,6 +206,34 @@ export class MachineConnection {
       this.host.onStateChange(this)
       if (this.wanted) this.scheduleReconnect()
     }
+  }
+
+  /**
+   * `/connect` 回来的候选地址：先试第一个，30 秒内没 ready 就接着试下一个（局域网不通就试 Tailscale / 公网）。
+   * 只在本连接还没 ready 时换；已经连上了就不动。
+   */
+  private tryOtherUrls(urls: string[], fingerprint?: string): void {
+    let index = 0
+    const tick = (): void => {
+      if (this.state === 'ready' || !this.wanted) return
+      if (index >= urls.length) return
+      const url = urls[index++] ?? ''
+      if (!url) return tick()
+      const transport = new WsTransport({
+        onMessage: (text) => this.rpc?.handleMessage(text),
+        onOpen: () => void this.sendHello(),
+        onClose: () => {
+          /* 交给下一个候选 */
+        },
+        onError: () => {
+          /* 交给下一个候选 */
+        }
+      })
+      this.attach(transport)
+      transport.start(url, fingerprint)
+      setTimeout(tick, 8000)
+    }
+    setTimeout(tick, 8000)
   }
 
   private attach(transport: SshTransport | WsTransport): void {
