@@ -37,6 +37,7 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 | 子 Agent | 后台子 Agent 的活动、步数、耗时、速度、排队消息；停 / 插话 |
 | 活动总览 | 这台机器上所有会话的实时动静（生成中 / 等确认 / 卡住 / 出错），点击跳转 |
 | 语音 | 按住说话 → 录音上传 → `assistant.say(source=voice)` → `assistant.entry` 回复 → 系统语音朗读（方案 §6.1 M3-A） |
+| 扫码一键连 | Secret-Chat 扫码登录（`/login-sessions`）、好友里的机器人列表、和 Friday bot 对话（`schat-ws/v1`，含 `bot_stream_delta` 流式拼装） |
 | 设置 | 远端引擎、Agent 设置、服务状态（只读） |
 
 底部任务栏：左侧是各类窗口入口（带数量角标），中间是已开窗口（单击切换/最小化、双击关闭），右侧是当前机器与连接状态、待确认数量。
@@ -59,11 +60,12 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 - 桌面窗口范式、任务栏、多会话窗口并存
 - M3-A 语音（录音消息 + 本地朗读，识别与理解在远端）
 - M4：多机器后台常连、密码添加 SSH、二维码配对、自动安装/升级远程 friday-server、设置页、打包（NSIS + zip）
+- M1.5 客户端侧：扫码登录（生产 chatserver 真实建码 + 轮询）、schat-ws 连接、机器人列表、和 bot 对话与流式拼装（凭据经 safeStorage 加密）
 
-**需要服务端或用户参与，尚未实现**
-- M1.5「扫码一键连」：要在 chatserver 与 friday-server 侧补受信配对级别、`/connect` 安全发放（方案 §7.4 缺口 #2/#3），并需要用户用手机扫码登录 SChat 账号。
+**需要服务端或用户参与，尚未完成**
+- M1.5 的「一键连到工作通道」：扫码登录本身能跑，但登录后要用 `/connect` 领配对凭据才能连上工作通道，这条命令在 friday-server 里还不存在（方案 §7.4 缺口 #3）；受信级别也是缺口 #2。手机扫一下确认登录这一步需要用户本人。
 - M3-B `voice.*` 协议（真正实时语音、Friday 的音色）：需要改 Friday 本体（按 Friday 仓库流程）。
-- M3-D WebRTC（SChat 机器人通话）：需要 SChat 账号扫码登录。
+- M3-D WebRTC（SChat 机器人通话）：需要 SChat 账号（扫码登录）与 Friday 侧主叫端契约。
 - 自动更新（方案里写的「M4 再议」）。
 
 ## 快捷键与细节
