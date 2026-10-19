@@ -3,9 +3,11 @@
 import { onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import AddMachineDialog from '../components/AddMachineDialog.vue'
+import PairDialog from '../components/PairDialog.vue'
 
 const store = useAppStore()
 const addDialogOpen = ref(false)
+const pairDialogOpen = ref(false)
 const showAdd = ref(false)
 
 const stateText: Record<string, string> = {
@@ -81,6 +83,12 @@ async function toggleConnect(): Promise<void> {
         还没有机器。点「＋ 添加」连上跑着 Friday 的那台。
       </div>
 
+      <div class="pair-row">
+        <button class="small-btn" :disabled="!store.connected" @click="pairDialogOpen = true">
+          配对新设备（二维码）
+        </button>
+      </div>
+
       <div v-if="store.currentMachineInfo" class="machine-actions">
         <button class="small-btn" @click="toggleConnect">
           {{ store.currentMachineInfo.state === 'ready' ? '断开' : '连接' }}
@@ -124,6 +132,7 @@ async function toggleConnect(): Promise<void> {
     </div>
 
     <AddMachineDialog v-if="addDialogOpen" @close="addDialogOpen = false" />
+    <PairDialog v-if="pairDialogOpen" @close="pairDialogOpen = false" />
   </div>
 </template>
 
@@ -228,6 +237,10 @@ async function toggleConnect(): Promise<void> {
   gap: 6px;
   padding: 6px 2px 2px;
   flex-wrap: wrap;
+}
+
+.pair-row {
+  padding: 6px 2px 2px;
 }
 
 .detail {
