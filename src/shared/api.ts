@@ -97,6 +97,8 @@ export type HostRequest =
   | { type: 'schat.call.signal'; signalType: string; payload: string }
   | { type: 'schat.call.active' }
   | { type: 'schat.call.mute'; muted: boolean }
+  | { type: 'schat.call.accept' }
+  | { type: 'schat.call.reject' }
   | { type: 'schat.call.hangup' }
   | { type: 'schat.call.ice' }
 

@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SchatEnvelope } from './SchatClient.js'
 
-export type CallPhase = 'idle' | 'outgoing' | 'connecting' | 'active' | 'ended'
+export type CallPhase = 'idle' | 'incoming' | 'outgoing' | 'connecting' | 'active' | 'ended'
 
 export interface CallState {
   phase: CallPhase
@@ -21,8 +21,14 @@ export interface CallState {
   peerName: string
   requestId: string
   callType: 'audio' | 'video'
+  /** 是别人打进来的（来电） */
+  incoming: boolean
   /** 开始拨打 / 接通 / 结束的时刻（ms） */
   startedAt: number
+  /** 来电时：振铃开始 */
+  ringingAt: number
+  /** 来电时：我接听的时刻 */
+  acceptedAt: number
   connectedAt: number
   endedAt: number
   endedReason: string
@@ -77,6 +83,7 @@ export class CallService {
     this.setState({
       ...emptyState(),
       phase: 'outgoing',
+      incoming: false,
       peerID,
       peerName,
       requestId,
@@ -108,6 +115,38 @@ export class CallService {
       type,
       payload,
       timestamp: Date.now()
+    })
+  }
+
+  /**
+   * 接听来电（被叫）。回应 p2p_response{accepted:true}，之后等主叫的 offer。
+   * 契约：被叫的 answer 只留 Opus/H.264、沿用对方 offer 的 payload type（Chromium 自己处理）。
+   */
+  accept(): void {
+    if (this.state.phase !== 'incoming') return
+    const now = Date.now()
+    this.setState({ ...this.state, phase: 'connecting', acceptedAt: now })
+    this.respond(true)
+  }
+
+  /** 拒接来电 */
+  reject(reason = 'decline'): void {
+    if (this.state.phase !== 'incoming') return
+    this.respond(false, reason)
+    this.end('已拒接', reason)
+  }
+
+  private respond(accepted: boolean, reason = ''): void {
+    const state = this.state
+    if (!state.peerID || !state.requestId) return
+    const { accountId } = this.host.sessionInfo()
+    this.host.send('p2p_response', {
+      targetUserId: state.peerID,
+      fromUserId: accountId,
+      requestId: state.requestId,
+      accepted,
+      timestamp: Date.now(),
+      ...(reason ? { reason } : {})
     })
   }
 
@@ -187,7 +226,35 @@ export class CallService {
         return
       }
       case 'p2p_request': {
-        // 机器人主动打来（M3-D 只做主动拨；来电 UI 见方案 §6 后续）
+        // 机器人主动打来（契约：机器人通话连接上发 p2p_request）
+        const from = Number(d.fromUserId ?? d.toUserId ?? 0)
+        const requestId = String(d.requestId ?? '')
+        if (!from || !requestId) return
+        // 正在通话/振铃中：回 busy（服务端闸也会拦，这里不抱侥幸）
+        if (this.state.phase !== 'idle' && this.state.phase !== 'ended') {
+          this.host.send('p2p_response', {
+            targetUserId: from,
+            fromUserId: this.host.sessionInfo().accountId,
+            requestId,
+            accepted: false,
+            reason: 'busy',
+            timestamp: Date.now()
+          })
+          return
+        }
+        const callType = d.callType === 'video' ? 'video' : 'audio'
+        const now = Date.now()
+        this.setState({
+          ...emptyState(),
+          phase: 'incoming',
+          incoming: true,
+          peerID: from,
+          peerName: typeof d.callerName === 'string' && d.callerName ? d.callerName : `机器人 ${from}`,
+          requestId,
+          callType,
+          startedAt: now,
+          ringingAt: now
+        })
         return
       }
     }
@@ -228,6 +295,9 @@ export function emptyState(): CallState {
     endedAt: 0,
     endedReason: '',
     endedCode: '',
+    incoming: false,
+    ringingAt: 0,
+    acceptedAt: 0,
     muted: false,
     durationSec: 0
   }

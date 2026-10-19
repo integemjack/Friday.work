@@ -89,7 +89,11 @@ function stopMeter(): void {
 /** 麦克风不可用（没设备 / 被拒）：退回只收音频，通话照样能听 */
 const receiveOnly = ref(false)
 
-async function buildPeer(): Promise<void> {
+/**
+ * 建 PC。incoming=true 表示我是被叫：等对端的 offer，收到后 answer。
+ * 主叫：建好发 offer。
+ */
+async function buildPeer(asCallee = false): Promise<void> {
   const iceServers = (await store.callIce()) as RTCIceServer[]
   pc = new RTCPeerConnection({ iceServers, bundlePolicy: 'max-bundle' })
 
@@ -154,11 +158,26 @@ async function buildPeer(): Promise<void> {
   }
 
   const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false })
+  if (asCallee) {
+    // 被叫：先不发 offer，等主叫的 offer 来了再 answer（见 handleSignal）
+    builtFor = builtFor || 'callee'
+    return
+  }
   await pc.setLocalDescription(offer)
   await store.callSignal('offer', offer.sdp ?? '')
 }
 
 async function handleSignal(signal: CallSignal): Promise<void> {
+  if (signal.type === 'offer') {
+    // 被叫：收到 offer 才建 PC（本地音轨 / recvonly 都在 buildPeer 里）
+    if (!pc) await buildPeer(true)
+    if (!pc) return
+    await pc.setRemoteDescription({ type: 'offer', sdp: signal.payload })
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    await store.callSignal('answer', answer.sdp ?? '')
+    return
+  }
   if (!pc) return
   if (signal.type === 'answer') {
     await pc.setRemoteDescription({ type: 'answer', sdp: signal.payload })
@@ -223,6 +242,17 @@ async function hangup(): Promise<void> {
   teardownMedia()
 }
 
+/** 接听来电 */
+async function accept(): Promise<void> {
+  await store.callAccept()
+}
+
+/** 拒接来电 */
+async function reject(): Promise<void> {
+  await store.callReject()
+  teardownMedia()
+}
+
 async function toggleMute(): Promise<void> {
   const next = !muted.value
   await store.callMute(next)
@@ -254,10 +284,13 @@ const unwatch = setInterval(async () => {
   const phaseNow = state.phase ?? 'idle'
   if (phaseNow === lastPhase) return
   lastPhase = phaseNow
+  if (phaseNow === 'connecting' && !state.requestId) return
   if (phaseNow === 'connecting' && state.requestId && !pc && state.requestId !== builtFor) {
+    // 来电接听后是 connecting：建 PC 但**不发 offer**（等主叫的 offer）
+    const asCallee = Boolean((store.schat.call as { incoming?: boolean }).incoming)
     builtFor = state.requestId
     try {
-      await buildPeer()
+      await buildPeer(asCallee)
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
     }
@@ -269,6 +302,8 @@ onBeforeUnmount(() => clearInterval(unwatch))
 
 function phaseText(): string {
   switch (phase.value) {
+    case 'incoming':
+      return '来电…'
     case 'outgoing':
       return '正在呼叫…'
     case 'connecting':
@@ -303,14 +338,26 @@ function phaseText(): string {
     </div>
 
     <div class="controls">
-      <button class="round" :class="{ off: muted }" :disabled="phase === 'ended' || phase === 'idle'" @click="toggleMute">
-        {{ muted ? '🔇' : '🎙' }}
-        <span>{{ muted ? '已静音' : '静音' }}</span>
-      </button>
-      <button class="round hangup" :disabled="phase === 'ended' || phase === 'idle'" @click="hangup">
-        📞
-        <span>挂断</span>
-      </button>
+      <template v-if="phase === 'incoming'">
+        <button class="round reject" @click="reject">
+          ✕
+          <span>拒接</span>
+        </button>
+        <button class="round accept" @click="accept">
+          📞
+          <span>接听</span>
+        </button>
+      </template>
+      <template v-else>
+        <button class="round" :class="{ off: muted }" :disabled="phase === 'ended' || phase === 'idle'" @click="toggleMute">
+          {{ muted ? '🔇' : '🎙' }}
+          <span>{{ muted ? '已静音' : '静音' }}</span>
+        </button>
+        <button class="round hangup" :disabled="phase === 'ended' || phase === 'idle'" @click="hangup">
+          📞
+          <span>挂断</span>
+        </button>
+      </template>
     </div>
   </div>
 </template>
@@ -421,5 +468,17 @@ function phaseText(): string {
   color: #fff;
   background: #dc2626;
   border-color: #dc2626;
+}
+
+.round.accept {
+  color: #fff;
+  background: #16a34a;
+  border-color: #16a34a;
+}
+
+.round.reject {
+  color: #fff;
+  background: #71717a;
+  border-color: #71717a;
 }
 </style>

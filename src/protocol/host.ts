@@ -265,6 +265,14 @@ export class ProtocolHost {
         this.schat.callMute(request.muted)
         return {}
 
+      case 'schat.call.accept':
+        this.schat.callAccept()
+        return {}
+
+      case 'schat.call.reject':
+        this.schat.callReject()
+        return {}
+
       case 'schat.call.hangup':
         this.schat.callHangup()
         return {}

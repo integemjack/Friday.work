@@ -318,6 +318,16 @@ export class SchatService {
     this.calls.setMuted(muted)
   }
 
+  /** 接听来电 */
+  callAccept(): void {
+    this.calls.accept()
+  }
+
+  /** 拒接来电 */
+  callReject(): void {
+    this.calls.reject()
+  }
+
   callHangup(): void {
     this.calls.hangup()
   }

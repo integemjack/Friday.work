@@ -39,12 +39,16 @@ export interface EngineView {
 
 /** 1:1 通话状态（协议进程 CallService 的结构；渲染层只读） */
 export interface CallView {
-  phase: 'idle' | 'outgoing' | 'connecting' | 'active' | 'ended'
+  phase: 'idle' | 'incoming' | 'outgoing' | 'connecting' | 'active' | 'ended'
   peerID: number
   peerName: string
   requestId: string
   callType: 'audio' | 'video'
+  /** 来电 */
+  incoming: boolean
   startedAt: number
+  ringingAt: number
+  acceptedAt: number
   connectedAt: number
   endedAt: number
   endedReason: string
@@ -164,7 +168,10 @@ export const useAppStore = defineStore('app', {
         peerName: '',
         requestId: '',
         callType: 'audio',
+        incoming: false,
         startedAt: 0,
+        ringingAt: 0,
+        acceptedAt: 0,
         connectedAt: 0,
         endedAt: 0,
         endedReason: '',
@@ -423,7 +430,16 @@ export const useAppStore = defineStore('app', {
         if (info.machineID === this.currentMachine) this.deployStatus = info.text
       })
       host.onSchat((state) => {
+        const previous = this.schat.call.phase
         this.schat = state as typeof this.schat
+        // 来电：自动把通话窗口弹出来（用户看得见才不会漏接）
+        if (this.schat.call.phase === 'incoming' && previous !== 'incoming') {
+          this.openWindow('call')
+          window.fridayBridge?.notify({
+            title: '来电',
+            body: `${this.schat.call.peerName} 打来电话`
+          })
+        }
       })
       host.onCallSignal((signal) => {
         this.callSignalCount += 1
@@ -981,6 +997,14 @@ export const useAppStore = defineStore('app', {
 
     async callMute(muted: boolean) {
       await host.request({ type: 'schat.call.mute', muted })
+    },
+
+    async callAccept() {
+      await host.request({ type: 'schat.call.accept' })
+    },
+
+    async callReject() {
+      await host.request({ type: 'schat.call.reject' })
     },
 
     async callHangup() {
