@@ -20,6 +20,7 @@ class HostLink {
   private readonly eventListeners = new Set<EventListener>()
   private readonly deployListeners = new Set<(info: { machineID: string; text: string }) => void>()
   private readonly schatListeners = new Set<(state: unknown) => void>()
+  private readonly callSignalListeners = new Set<(signal: unknown) => void>()
 
   constructor() {
     window.addEventListener('message', (event) => {
@@ -61,6 +62,8 @@ class HostLink {
           }
         } else if (incoming.type === 'schat') {
           for (const listener of this.schatListeners) listener((incoming as { state: unknown }).state)
+        } else if (incoming.type === 'schatCall') {
+          for (const listener of this.callSignalListeners) listener((incoming as { signal: unknown }).signal)
         }
       }
     }
@@ -102,6 +105,12 @@ class HostLink {
   onSchat(listener: (state: unknown) => void): () => void {
     this.schatListeners.add(listener)
     return () => this.schatListeners.delete(listener)
+  }
+
+  /** 通话信令（渲染进程喂 RTCPeerConnection） */
+  onCallSignal(listener: (signal: unknown) => void): () => void {
+    this.callSignalListeners.add(listener)
+    return () => this.callSignalListeners.delete(listener)
   }
 }
 

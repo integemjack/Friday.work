@@ -50,7 +50,8 @@ export class ProtocolHost {
     this.uploads = new Uploads(backends)
     this.remotesFile = join(init.userDataPath, 'Remotes', 'remotes.json')
     this.schat = new SchatService(backends.credentials, {
-      onChange: (state) => this.port?.postMessage({ type: 'schat', state })
+      onChange: (state) => this.port?.postMessage({ type: 'schat', state }),
+      onCallSignal: (signal) => this.port?.postMessage({ type: 'schatCall', signal })
     })
   }
 
@@ -248,6 +249,28 @@ export class ProtocolHost {
       case 'schat.send':
         await this.schat.send(request.botID, request.text)
         return {}
+
+      case 'schat.call.dial':
+        return this.schat.dial(request.botID, request.callType ?? 'audio')
+
+      case 'schat.call.signal':
+        this.schat.callSignal(request.signalType, request.payload)
+        return {}
+
+      case 'schat.call.active':
+        this.schat.callActive()
+        return {}
+
+      case 'schat.call.mute':
+        this.schat.callMute(request.muted)
+        return {}
+
+      case 'schat.call.hangup':
+        this.schat.callHangup()
+        return {}
+
+      case 'schat.call.ice':
+        return { iceServers: await this.schat.iceServers() }
 
       default:
         throw new Error('不认识的请求')

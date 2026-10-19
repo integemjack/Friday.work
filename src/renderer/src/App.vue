@@ -15,6 +15,7 @@ import ActivityOverview from './components/ActivityOverview.vue'
 import VoiceWindow from './components/VoiceWindow.vue'
 import SettingsWindow from './components/SettingsWindow.vue'
 import SchatWindow from './components/SchatWindow.vue'
+import CallWindow from './components/CallWindow.vue'
 import MachinesWindow from './desktop/MachinesWindow.vue'
 import TaskBar from './desktop/TaskBar.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
@@ -37,7 +38,8 @@ const componentFor: Record<WindowKind, unknown> = {
   machines: MachinesWindow,
   voice: VoiceWindow,
   settings: SettingsWindow,
-  schat: SchatWindow
+  schat: SchatWindow,
+  call: CallWindow
 }
 
 const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = {
@@ -50,7 +52,8 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   machines: { minWidth: 320, minHeight: 280 },
   voice: { minWidth: 360, minHeight: 320 },
   settings: { minWidth: 420, minHeight: 320 },
-  schat: { minWidth: 420, minHeight: 360 }
+  schat: { minWidth: 420, minHeight: 360 },
+  call: { minWidth: 300, minHeight: 380 }
 }
 </script>
 

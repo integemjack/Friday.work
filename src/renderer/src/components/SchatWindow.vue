@@ -139,6 +139,7 @@ onMounted(() => {
           @click="activeBot = bot.id"
         >
           <span class="bot-name">{{ bot.name }}</span>
+          <span v-if="bot.botCalls" class="bot-call" title="语音通话" @click.stop="store.callDial(bot.id, 'audio')">📞</span>
           <span v-if="bot.botCalls" class="bot-tag">通话</span>
         </button>
         <div v-if="bots.length === 0" class="empty-tip">好友里还没有机器人。先在手机上把这个 Friday 机器人加成好友。</div>
@@ -346,6 +347,16 @@ input:focus {
 
 .bot.active {
   background: var(--accent-weak);
+}
+
+.bot-call {
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.bot-call:hover {
+  opacity: 1;
 }
 
 .bot-name {

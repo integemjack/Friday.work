@@ -38,6 +38,7 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 | 活动总览 | 这台机器上所有会话的实时动静（生成中 / 等确认 / 卡住 / 出错），点击跳转 |
 | 语音 | 按住说话 → 录音上传 → `assistant.say(source=voice)` → `assistant.entry` 回复 → 系统语音朗读（方案 §6.1 M3-A） |
 | 扫码一键连 | Secret-Chat 扫码登录（`/login-sessions`）、好友里的机器人列表（显示备注）、和 Friday bot 对话（`schat-ws/v1`，含 `bot_stream_delta` 流式拼装） |
+| 通话 | 给机器人打语音电话（WebRTC）：`p2p_request`/`p2p_response`/`p2p_signaling` 信令 + `GET /calls/ice-servers` 的 TURN；Opus 48 kHz 单声道；没有麦克风时自动退回只收（能听不能说） |
 | 设置 | 远端引擎、Agent 设置、服务状态（只读） |
 
 底部任务栏：左侧是各类窗口入口（带数量角标），中间是已开窗口（单击切换/最小化、双击关闭），右侧是当前机器与连接状态、待确认数量。
@@ -62,11 +63,12 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 - M4：多机器后台常连、密码添加 SSH、二维码配对、自动安装/升级远程 friday-server、设置页、打包（NSIS + zip）
 - M1.5 客户端侧：扫码登录（生产 chatserver 真实建码 + 轮询 + 批准）、schat-ws 连接、机器人列表（按备注显示）、和 bot 对话与流式拼装（凭据经 safeStorage 加密）
 - 真机验证：扫码登录后给备注「Linux 239」的机器人发消息，助手回复正常显示（含流式增量）
+- M3-D 语音通话：真机拨给「Linux 239」，对端接受 → WebRTC ICE/连接均 connected → 收到对方音轨、计时正常、挂断干净（这台机器没有麦克风，自动退回只收模式）
 
 **需要服务端或用户参与，尚未完成**
 - M1.5 的「一键连到工作通道」：扫码登录本身能跑，但登录后要用 `/connect` 领配对凭据才能连上工作通道，这条命令在 friday-server 里还不存在（方案 §7.4 缺口 #3）；受信级别也是缺口 #2。手机扫一下确认登录这一步需要用户本人。
 - M3-B `voice.*` 协议（真正实时语音、Friday 的音色）：需要改 Friday 本体（按 Friday 仓库流程）。
-- M3-D WebRTC（SChat 机器人通话）：需要 SChat 账号（扫码登录）与 Friday 侧主叫端契约。
+- 机器人主动来电的 UI（契约支持，现在只做了主叫；来电需要在协议进程收 `p2p_request` 后弹窗、`p2p_response{accepted}` + answer）
 - 自动更新（方案里写的「M4 再议」）。
 
 ## 快捷键与细节

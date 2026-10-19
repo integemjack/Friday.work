@@ -92,6 +92,13 @@ export type HostRequest =
   | { type: 'schat.login'; server?: string; deviceName?: string }
   | { type: 'schat.disconnect' }
   | { type: 'schat.send'; botID: number; text: string }
+  /** 1:1 通话（M3-D）：拨打 / 信令 / 接通 / 静音 / 挂断 / ICE */
+  | { type: 'schat.call.dial'; botID: number; callType?: 'audio' | 'video' }
+  | { type: 'schat.call.signal'; signalType: string; payload: string }
+  | { type: 'schat.call.active' }
+  | { type: 'schat.call.mute'; muted: boolean }
+  | { type: 'schat.call.hangup' }
+  | { type: 'schat.call.ice' }
 
 // MARK: 协议 → 渲染
 

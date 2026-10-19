@@ -6,6 +6,8 @@
 import { randomUUID } from 'node:crypto'
 import { createQrSession, fetchFriends, pollQrSession, refreshSession, type QrSessionResult } from './Login.js'
 import { SchatClient, type SchatEnvelope } from './SchatClient.js'
+import { CallService, emptyState, type CallSignal, type CallState } from './CallService.js'
+import { iceServersFor, type RTCIceServerLike } from './ice.js'
 import type { CredentialBackend } from '../session/PairingStore.js'
 
 const KEY = 'schat'
@@ -57,11 +59,15 @@ export interface SchatState {
   bots: SchatBot[]
   /** 和一个 bot 的对话（按 bot id） */
   messages: Record<number, SchatMessage[]>
+  /** 1:1 通话状态（通话窗口用） */
+  call: CallState
   error: string
 }
 
 export interface SchatHooks {
   onChange(state: SchatState): void
+  /** 收到一帧通话信令（渲染进程拿去喂 RTCPeerConnection） */
+  onCallSignal(signal: CallSignal): void
 }
 
 /** 生产 chatserver（方案 §7.4：https://47.100.98.3:2012） */
@@ -78,17 +84,31 @@ export class SchatService {
     status: '',
     bots: [],
     messages: {},
+    call: emptyState(),
     error: ''
   }
   private client: SchatClient | null = null
   private session: StoredSession | null = null
+  private readonly calls: CallService
   private qr: { cancel(): void } | null = null
   private loading = false
 
   constructor(
     private readonly backend: CredentialBackend,
     private readonly hooks: SchatHooks
-  ) {}
+  ) {
+    this.calls = new CallService({
+      onState: (call) => this.patch({ call }),
+      onSignal: (signal) => this.hooks.onCallSignal(signal),
+      sessionInfo: () => ({
+        server: this.session?.server ?? DEFAULT_SCHAT_SERVER,
+        token: this.session?.token ?? '',
+        accountId: this.state.userId,
+        fingerprint: this.session?.fingerprint || undefined
+      }),
+      send: (event, data) => this.client?.emit(event, data)
+    })
+  }
 
   getState(): SchatState {
     return this.state
@@ -234,6 +254,8 @@ export class SchatService {
             this.patch({ phase: 'error', status: detail ?? '凭据已失效', error: '凭据已失效，请重新扫码登录' })
           } else if (state === 'offline') {
             this.patch({ phase: 'idle', status: detail ?? '' })
+            // 掉线：还在通话的话一并结束
+            this.calls.onDisconnected()
           }
         }
       })
@@ -274,7 +296,51 @@ export class SchatService {
     }
   }
 
+  /** 给它打电话（主叫） */
+  dial(peerID: number, callType: 'audio' | 'video' = 'audio'): CallState {
+    if (this.state.phase !== 'online') throw new Error('还没连上聊天服务器')
+    const bot = this.state.bots.find((item) => item.id === peerID)
+    const call = this.calls.dial(peerID, bot?.name ?? `机器人 ${peerID}`, callType)
+    return call
+  }
+
+  /** 信令（渲染进程建好 PC 后发给对端） */
+  callSignal(type: string, payload: string): void {
+    this.calls.signal(type, payload)
+  }
+
+  /** 本端已接通（收到 answer 后） */
+  callActive(): void {
+    this.calls.markActive()
+  }
+
+  callMute(muted: boolean): void {
+    this.calls.setMuted(muted)
+  }
+
+  callHangup(): void {
+    this.calls.hangup()
+  }
+
+  /** 拉这通电话用的 ICE 服务器（内置 STUN + 服务端 TURN） */
+  async iceServers(): Promise<RTCIceServerLike[]> {
+    if (!this.session) return []
+    return iceServersFor(this.session.server, this.session.token, this.state.userId, {
+      fingerprint: this.session.fingerprint || undefined
+    })
+  }
+
   private onEnvelope(envelope: SchatEnvelope): void {
+    // 通话信令优先交给通话状态机（p2p_request / response / signaling / glare）
+    if (
+      envelope.e === 'p2p_response' ||
+      envelope.e === 'p2p_signaling' ||
+      envelope.e === 'p2p_request' ||
+      envelope.e === 'p2p_glare'
+    ) {
+      this.calls.onEnvelope(envelope)
+      return
+    }
     if (envelope.e === 'message') {
       const message = envelope.d as {
         id?: number

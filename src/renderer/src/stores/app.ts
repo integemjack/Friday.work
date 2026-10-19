@@ -37,6 +37,22 @@ export interface EngineView {
   disabled?: boolean
 }
 
+/** 1:1 通话状态（协议进程 CallService 的结构；渲染层只读） */
+export interface CallView {
+  phase: 'idle' | 'outgoing' | 'connecting' | 'active' | 'ended'
+  peerID: number
+  peerName: string
+  requestId: string
+  callType: 'audio' | 'video'
+  startedAt: number
+  connectedAt: number
+  endedAt: number
+  endedReason: string
+  endedCode: string
+  muted: boolean
+  durationSec: number
+}
+
 export interface ConversationDetail {
   conversationID: string
   /** 消息按当前选中的分支展开的显示顺序 */
@@ -60,6 +76,7 @@ export type WindowKind =
   | 'voice'
   | 'settings'
   | 'schat'
+  | 'call'
 
 export interface DesktopWindow {
   id: string
@@ -90,7 +107,8 @@ const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH
   machines: { w: 420, h: 560, minW: 320, minH: 280 },
   voice: { w: 520, h: 560, minW: 360, minH: 320 },
   settings: { w: 620, h: 560, minW: 420, minH: 320 },
-  schat: { w: 720, h: 560, minW: 420, minH: 360 }
+  schat: { w: 720, h: 560, minW: 420, minH: 360 },
+  call: { w: 360, h: 480, minW: 300, minH: 380 }
 }
 
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
@@ -103,7 +121,8 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   machines: { title: '机器与会话', icon: '⛁' },
   voice: { title: '语音', icon: '🎙' },
   settings: { title: '设置', icon: '⚙' },
-  schat: { title: '扫码一键连', icon: '⚡' }
+  schat: { title: '扫码一键连', icon: '⚡' },
+  call: { title: '通话', icon: '📞' }
 }
 
 export const useAppStore = defineStore('app', {
@@ -138,6 +157,21 @@ export const useAppStore = defineStore('app', {
       qrExpiresAt: 0,
       status: '',
       bots: [] as Array<{ id: number; name: string; botCalls: boolean }>,
+      /** 1:1 通话状态（协议进程维护） */
+      call: {
+        phase: 'idle',
+        peerID: 0,
+        peerName: '',
+        requestId: '',
+        callType: 'audio',
+        startedAt: 0,
+        connectedAt: 0,
+        endedAt: 0,
+        endedReason: '',
+        endedCode: '',
+        muted: false,
+        durationSec: 0
+      } as CallView,
       messages: {} as Record<
         number,
         Array<{
@@ -156,6 +190,10 @@ export const useAppStore = defineStore('app', {
     },
     /** 启动后是否已尝试自动连接存着的机器 */
     autoConnectDone: false,
+    /** 信令队列（state）：通话窗口从里面取（带序号，取过就不重复） */
+    callSignals: [] as Array<{ seq: number; signal: unknown }>,
+    callSignalSeq: 0,
+    callSignalCount: 0,
     /** 当前机器全部会话的待确认调用（activity 订阅，REMOTE.md §6） */
     approvals: {} as Record<string, PendingApproval[]>,
     /** 这台机器全部会话的实时动静（活动总览的数据源，REMOTE.md §6「会话的实时动静」） */
@@ -386,6 +424,10 @@ export const useAppStore = defineStore('app', {
       })
       host.onSchat((state) => {
         this.schat = state as typeof this.schat
+      })
+      host.onCallSignal((signal) => {
+        this.callSignalCount += 1
+        this.callSignals.push({ seq: this.callSignalCount, signal })
       })
     },
 
@@ -920,6 +962,41 @@ export const useAppStore = defineStore('app', {
 
     async schatSend(botID: number, text: string) {
       await host.request({ type: 'schat.send', botID, text })
+    },
+
+    // MARK: 通话（M3-D）
+
+    async callDial(botID: number, callType: 'audio' | 'video' = 'audio') {
+      this.openWindow('call')
+      return host.request({ type: 'schat.call.dial', botID, callType })
+    },
+
+    callSignal(signalType: string, payload: string) {
+      return host.request({ type: 'schat.call.signal', signalType, payload })
+    },
+
+    async callActive() {
+      await host.request({ type: 'schat.call.active' })
+    },
+
+    async callMute(muted: boolean) {
+      await host.request({ type: 'schat.call.mute', muted })
+    },
+
+    async callHangup() {
+      await host.request({ type: 'schat.call.hangup' })
+    },
+
+    async callIce(): Promise<unknown[]> {
+      const result = (await host.request({ type: 'schat.call.ice' })) as { iceServers?: unknown[] }
+      return result.iceServers ?? []
+    },
+
+    /** 取走还没消费的信令 */
+    drainCallSignals(): unknown[] {
+      const pending = this.callSignals.filter((item) => item.seq > this.callSignalSeq)
+      if (pending.length) this.callSignalSeq = pending[pending.length - 1]!.seq
+      return pending.map((item) => item.signal)
     },
 
     // MARK: 操作
