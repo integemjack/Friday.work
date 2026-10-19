@@ -236,12 +236,8 @@ export const useAppStore = defineStore('app', {
     nextZ: 10,
     /** 窗口级联计数（新窗口错开摆放） */
     cascade: 0,
-    /** 自动安装/升级远程 friday-server 的进度文字 */
-    deployStatus: '',
-    /** 正在用 /connect 连一台机器 */
+    /** 正在连一台机器（work 通道） */
     connectingWork: false,
-    /** 正在安装/升级服务端 */
-    deploying: false,
     /** SChat 通道（M1.5 扫码一键连） */
     schat: {
       phase: 'idle' as 'idle' | 'logging-in' | 'online' | 'error',
@@ -620,9 +616,6 @@ export const useAppStore = defineStore('app', {
         if (event.type !== 'event' || event.machineID !== this.currentMachine) return
         this.applyEvent(event.method, event.params)
       })
-      host.onDeployStatus((info) => {
-        if (info.machineID === this.currentMachine) this.deployStatus = info.text
-      })
       host.onSchat((state) => {
         const previous = this.schat.call.phase
         this.schat = state as typeof this.schat
@@ -657,15 +650,6 @@ export const useAppStore = defineStore('app', {
     },
 
     // MARK: 机器
-
-    async addMachine(target: string, name?: string, identityFile?: string) {
-      await host.request({ type: 'machines.add', target, name, identityFile })
-    },
-
-    /** 密码添加（M4）：主进程/协议进程一次性装公钥，密码不落盘 */
-    async addMachineWithPassword(target: string, password: string, name?: string) {
-      await host.request({ type: 'machines.addWithPassword', target, password, name })
-    },
 
     async removeMachine(id: string) {
       await host.request({ type: 'machines.remove', id })
@@ -764,20 +748,6 @@ export const useAppStore = defineStore('app', {
 
     async connectMachine(id: string) {
       await host.request({ type: 'machines.connect', id })
-    },
-
-    /** 自动安装/升级远程 friday-server（M4）；返回一句话结果 */
-    async ensureServer(id: string): Promise<string> {
-      this.deployStatus = '正在查看远程的 Friday 服务端…'
-      try {
-        const result = (await host.request({ type: 'machines.ensureServer', id })) as {
-          action?: string
-          message?: string
-        }
-        return result.message ?? '完成'
-      } finally {
-        this.deployStatus = ''
-      }
     },
 
     async disconnectMachine(id: string) {
@@ -1208,28 +1178,20 @@ export const useAppStore = defineStore('app', {
       await host.request({ type: 'schat.send', botID, text })
     },
 
-    /** 一键连上这台机器（方案 §4.0 ③）：聊天里 /connect → 解密凭据 → 存配对 → 加机器 → 连上 */
-    async connectWork(botID: number): Promise<string> {
+    /** 一键连上这台机器（0.3）：从机器人列表直接建机器（WebRTC 工作通道）→ 连上 */
+    async connectWork(botID: number, name?: string): Promise<string> {
       this.connectingWork = true
       try {
-        const payload = (await host.request({ type: 'schat.connect', botID })) as {
-          deviceID: string
-          name?: string
-          token: string
-          urls: string[]
-          fingerprint?: string
-        }
+        const bot = (this.schat as { bots?: { id: number; name?: string }[] }).bots?.find(
+          (item) => item.id === botID
+        )
         const added = (await host.request({
           type: 'machines.addWork',
-          // 服务端已经叫「扫码连入的 X」了，不重复加前缀
-          name: payload.name && !payload.name.startsWith('扫码连入的') ? `扫码连入的 ${payload.name}` : payload.name,
-          token: payload.token,
-          fingerprint: payload.fingerprint,
-          deviceID: payload.deviceID,
-          urls: payload.urls
+          botID,
+          name: name ?? bot?.name
         })) as { id?: string }
         if (added.id) await this.connectMachine(added.id)
-        return payload.urls[0] ?? ''
+        return added.id ?? String(botID)
       } finally {
         this.connectingWork = false
       }

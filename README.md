@@ -2,6 +2,8 @@
 
 连接远程机器上的 Friday（`friday-server`）的桌面客户端：整个应用是一张桌面，**会话、终端、文件、浏览器、子 Agent、活动总览、语音、设置都是可以拖动、缩放、层叠的窗口**。技术栈 Electron 44 + Vue 3 + TypeScript；协议对照 `Friday/qt/docs/REMOTE.md`（唯一真相来源）实现。
 
+**0.3 起唯一的连接方式**：SChat 扫码 → 机器人列表 → **WebRTC 工作通道**（DataChannel 上跑 JSON-RPC，语音 / 视频走普通 WebRTC 通话，文字聊天走 schat-ws）。SSH / WSL / wss 直连均已移除。
+
 ## 跑起来
 
 ```powershell
@@ -14,22 +16,22 @@ npm run pack       # 免安装目录 dist/win-unpacked
 npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 ```
 
-## 连一台机器
+## 连一台机器（0.3：只有一种方式）
 
-「机器与会话」窗口 → **＋ 添加**，三种方式：
+1. **设置 → SChat 扫码登录**（Secret-Chat 账号，凭据经主进程 `safeStorage` 加密落盘）。
+2. **机器与会话 → ＋ 添加**：列出好友里的机器人，点一个就连。
 
-- `root@192.168.1.10`、`user@host:端口`：走系统 `ssh`（密钥 / ssh-agent / `~/.ssh/config` / 跳板机都照常生效），远端运行 `~/.friday-server/bin/friday-server --attach`。
-- 填了**密码**：只登录这一次，把本机公钥（`~/.ssh/id_ed25519.pub`）装进远端 `authorized_keys`，之后不再用密码，密码不落盘。
-- `wsl:发行版`：本机的 WSL。
-- 粘贴 `friday://pair?u=wss://…&t=…&f=…` 配对链接：走 WebSocket（wss），令牌与证书 SHA-256 指纹由主进程 `safeStorage`（Windows DPAPI）加密保存，比对指纹通过前不发送 `hello`。
+连的方式是 **WebRTC 工作通道**（REMOTE.md §2）：经 chatserver 的 p2p 信令呼机器人（`callType "work"`），建立 DataChannel，
+工作协议（JSON-RPC）一条帧一条消息照旧跑；身份是信令层验过的 SChat 主人，不用配对令牌。语音 / 视频通话（`audio` / `video`）
+和文字聊天（schat-ws）与它并行。SSH、WSL、wss 直连、`/connect` 封装、配对二维码、自动装服务端都已移除。
 
-在任意已连上的机器上可以 **配对新设备（二维码）**（`server.pair`）：生成一次性链接，手机/另一台电脑扫码或粘贴即可连上。
+服务端要求 ≥ 2.38（`callType "work"` 被叫支持）。
 
 ## 窗口
 
 | 窗口 | 内容 |
 |---|---|
-| 机器与会话 | 机器列表（连接/断开/删除/装服务端）、会话列表、配对入口 |
+| 机器与会话 | 机器列表（连接/断开/删除，从 SChat 机器人添加）、会话列表 |
 | 会话（每段一个窗口） | 消息树（含分叉 `‹ 2/3 ›` 切换）、流式增量、工具卡片（含子 Agent 运行记录递归）、审批横幅、附件、停止生成 |
 | 终端 | 远端伪终端的字节流镜像（xterm.js），`htop`/`vim` 等全屏程序可直接用；Agent 用 `run_in_terminal` 开的终端会自动弹窗 |
 | 文件 | 目录树、只读预览、本次会话改动与撤销（`fs.changes` / `fs.diff` / `fs.revert`）、「让 Friday 改」预填消息 |
@@ -38,10 +40,8 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 | 活动总览 | 这台机器上所有会话的实时动静（生成中 / 等确认 / 卡住 / 出错），点击跳转 |
 | 语音 | 两种：①按住说话（录音上传 → `assistant.say` → 流式回复 → 本机朗读）；②**实时语音＝给机器人打电话**（WebRTC，方案 D 档首选）：UDP+Opus 20ms 真实时、可插话、Friday 的音色，服务端 AssistantCalls 已带说完判断 |
 | 扫码一键连 | Secret-Chat 扫码登录（`/login-sessions`）、好友里的机器人列表（显示备注）、和 Friday bot 对话（`schat-ws/v1`，含 `bot_stream_delta` 流式拼装） |
-| 一键连上这台机器 | 机器人行上的 ⚡：聊天里 `/connect <一次性公钥>` → Friday 用封装好的凭据回话 → 本机解开、存配对、直接连上工作通道（不输地址/端口/口令）。凭据用 X25519 + HKDF-SHA256 + AES-256-GCM 封装，明文不进聊天记录 |
-| 受信级别 | `/connect` 配上的设备默认**不受信**（只能看会话/助手）；聊天里 `/trust <设备id> on` 后终端/浏览器/读文件才解锁 |
-| 通话 | 给机器人打语音电话（WebRTC）：`p2p_request`/`p2p_response`/`p2p_signaling` 信令 + `GET /calls/ice-servers` 的 TURN；Opus 48 kHz 单声道；没有麦克风时自动退回只收（能听不能说） |
-| 设置 | 远端引擎、Agent 设置、服务状态（只读） |
+| 通话 | 给机器人打语音/视频电话（WebRTC）：`p2p_request`/`p2p_response`/`p2p_signaling` 信令 + `GET /calls/ice-servers` 的 TURN；Opus 48 kHz 单声道；没有麦克风时自动退回只收（能听不能说） |
+| 设置 | 远端引擎、Agent 设置、服务状态（只读）、SChat 扫码登录 |
 
 底部任务栏：左侧是各类窗口入口（带数量角标），中间是已开窗口（单击切换/最小化、双击关闭），右侧是当前机器与连接状态、待确认数量。
 

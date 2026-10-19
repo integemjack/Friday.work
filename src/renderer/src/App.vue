@@ -6,6 +6,8 @@ import { onBeforeUnmount, onMounted } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
 import { applyTheme, loadTheme } from './lib/theme.js'
+import { host } from './lib/host.js'
+import { WorkChannelHub, type WorkSignalIn } from './lib/workChannel.js'
 import TitleBar from './components/TitleBar.vue'
 import ConversationView from './components/ConversationView.vue'
 import TerminalCard from './components/TerminalCard.vue'
@@ -23,6 +25,24 @@ import TaskBar from './desktop/TaskBar.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 
 const store = useAppStore()
+
+// work 通道（0.3）：WebRTC 工作连接的渲染进程一头。
+// 信令（work.signal）驱动建 PC / 喂 SDP；数据（work.out → 分片发、收到拼回后 work.in 回协议进程）。
+// ICE 与语音通话同一套。
+const workHub = new WorkChannelHub({
+  onOpen: (machineID, requestId) => host.postWork({ type: 'work.open', machineID, requestId }),
+  onData: (machineID, text) => host.postWork({ type: 'work.in', machineID, text }),
+  onClosed: (machineID, requestId, reason) => host.postWork({ type: 'work.closed', machineID, requestId, reason }),
+  onSignalOut: (machineID, signalType, payload) => host.postWork({ type: 'work.signalOut', machineID, signalType, payload }),
+  iceServers: async () => (await store.callIce()) as RTCIceServer[]
+})
+const offWork = host.onWork((message) => {
+  if (message.type === 'work.signal') {
+    workHub.onSignal(message.machineID, message.signal as WorkSignalIn)
+  } else if (message.type === 'work.out') {
+    workHub.send(message.machineID, String(message.text ?? ''))
+  }
+})
 
 // 布局持久化：窗口开/关/拖/缩后防抖存一份（saveLayout 里已有内容签名比对，重复状态不落盘）
 let saveTimer = 0
@@ -42,6 +62,8 @@ function scheduleLayoutSave(): void {
 
 onBeforeUnmount(() => {
   window.clearTimeout(saveTimer)
+  offWork()
+  workHub.disposeAll()
 })
 
 onMounted(() => {

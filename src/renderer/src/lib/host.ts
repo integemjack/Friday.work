@@ -18,9 +18,9 @@ class HostLink {
   private readonly pending = new Map<number, PendingCall>()
   private readonly machineListeners = new Set<MachineListener>()
   private readonly eventListeners = new Set<EventListener>()
-  private readonly deployListeners = new Set<(info: { machineID: string; text: string }) => void>()
   private readonly schatListeners = new Set<(state: unknown) => void>()
   private readonly callSignalListeners = new Set<(signal: unknown) => void>()
+  private readonly workListeners = new Set<(message: { type: string; machineID: string } & Record<string, unknown>) => void>()
 
   constructor() {
     window.addEventListener('message', (event) => {
@@ -56,14 +56,20 @@ class HostLink {
           }
         } else if (incoming.type === 'event') {
           for (const listener of this.eventListeners) listener(data as unknown as HostEvent)
-        } else if (incoming.type === 'deployStatus') {
-          for (const listener of this.deployListeners) {
-            listener(incoming as { machineID: string; text: string })
-          }
         } else if (incoming.type === 'schat') {
           for (const listener of this.schatListeners) listener((incoming as { state: unknown }).state)
         } else if (incoming.type === 'schatCall') {
           for (const listener of this.callSignalListeners) listener((incoming as { signal: unknown }).signal)
+        } else if (
+          incoming.type === 'work.signal' ||
+          incoming.type === 'work.out' ||
+          incoming.type === 'work.open' ||
+          incoming.type === 'work.closed'
+        ) {
+          // work 通道（0.3）：协议进程来的信令 / 待发数据（WorkChannelHub 接）
+          for (const listener of this.workListeners) {
+            listener(incoming as { type: string; machineID: string } & Record<string, unknown>)
+          }
         }
       }
     }
@@ -95,12 +101,6 @@ class HostLink {
     return () => this.eventListeners.delete(listener)
   }
 
-  /** 安装/升级服务端的进度 */
-  onDeployStatus(listener: (info: { machineID: string; text: string }) => void): () => void {
-    this.deployListeners.add(listener)
-    return () => this.deployListeners.delete(listener)
-  }
-
   /** SChat 通道状态（扫码登录 / 机器人对话） */
   onSchat(listener: (state: unknown) => void): () => void {
     this.schatListeners.add(listener)
@@ -111,6 +111,17 @@ class HostLink {
   onCallSignal(listener: (signal: unknown) => void): () => void {
     this.callSignalListeners.add(listener)
     return () => this.callSignalListeners.delete(listener)
+  }
+
+  /** work 通道（0.3）：协议进程来的消息（信令 / 待发数据） */
+  onWork(listener: (message: { type: string; machineID: string } & Record<string, unknown>) => void): () => void {
+    this.workListeners.add(listener)
+    return () => this.workListeners.delete(listener)
+  }
+
+  /** work 通道（0.3）：往协议进程发（不带 reqID，不是请求） */
+  postWork(message: Record<string, unknown>): void {
+    this.port?.postMessage(message)
   }
 }
 

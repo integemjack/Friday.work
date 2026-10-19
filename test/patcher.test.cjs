@@ -5,7 +5,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 
 const { applyBlocks, applyMessagePatch } = require('../.tmp/patcher.cjs')
-const { normalizeFingerprint } = require('../.tmp/wsfp.cjs')
+const { normalizeFingerprint } = require('../.tmp/schathttp.cjs')
 
 function block(id, kind) {
   return { id, kind }

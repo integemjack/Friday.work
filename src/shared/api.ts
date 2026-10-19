@@ -5,18 +5,16 @@ import type { ServerInfo } from '../protocol/rpc/protocol.js'
 
 export type MachineRuntimeState =
   | 'disconnected'
-  | 'probing'
   | 'connecting'
   | 'ready'
   | 'failed'
-  | 'unpaired'
   | 'versionMismatch'
 
 export interface MachineStateInfo {
   id: string
   name: string
-  targetKind: 'ssh' | 'wsl' | 'ws'
-  /** 与 Qt remotes.json 的 target 一致：ssh:user@host[:port] / wsl:发行版 / wss://… */
+  targetKind: 'ssh' | 'wsl' | 'ws' | 'work'
+  /** 与 Qt remotes.json 的 target 一致：ssh:user@host[:port] / wsl:发行版 / wss://… / work:<botUserID> */
   targetText: string
   state: MachineRuntimeState
   detail?: string
@@ -25,7 +23,7 @@ export interface MachineStateInfo {
   hasPendingApproval: boolean
 }
 
-/** remotes.json 里的一条（REMOTE.md §11） */
+/** remotes.json 里的一条（REMOTE.md §11）。0.3 起只有 work（SChat 扫码连入的机器人） */
 export interface MachineEntry {
   id: string
   target: string
@@ -35,11 +33,13 @@ export interface MachineEntry {
 }
 
 export interface ParsedTarget {
-  kind: 'ssh' | 'wsl' | 'ws'
+  kind: 'ssh' | 'wsl' | 'ws' | 'work'
   host?: string
   port?: number
   distro?: string
   url?: string
+  /** SChat 机器人（work 通道）：对端用户 id */
+  botUserID?: number
   /** 配对链接带来的 */
   token?: string
   fingerprint?: string
@@ -65,12 +65,7 @@ export interface PickedFile {
 
 export type HostRequest =
   | { type: 'machines.list' }
-  | { type: 'machines.add'; target: string; name?: string; identityFile?: string }
-  /** 密码添加（M4）：一次性装公钥后添加，密码不落盘 */
-  | { type: 'machines.addWithPassword'; target: string; password: string; name?: string }
   | { type: 'machines.remove'; id: string }
-  /** 自动安装/升级远程的 friday-server（M4，REMOTE.md §9） */
-  | { type: 'machines.ensureServer'; id: string }
   | { type: 'machines.connect'; id: string }
   | { type: 'machines.disconnect'; id: string }
   /** 取一台机器最近的会话列表（hello 快照 + summaries 事件维护，REMOTE.md §5） */
@@ -92,17 +87,8 @@ export type HostRequest =
   | { type: 'schat.login'; server?: string; deviceName?: string }
   | { type: 'schat.disconnect' }
   | { type: 'schat.send'; botID: number; text: string }
-  /** 一键连上这台机器（方案 §4.0 ③）：聊天里 /connect，拿回封装好的配对凭据 */
-  | { type: 'schat.connect'; botID: number }
-  /** 把 /connect 拿到的凭据存下来、加成一台机器并连上 */
-  | {
-      type: 'machines.addWork'
-      name?: string
-      token: string
-      fingerprint?: string
-      deviceID?: string
-      urls: string[]
-    }
+  /** 从机器人列表直接建机器（0.3：WebRTC 工作通道） */
+  | { type: 'machines.addWork'; botID: number; name?: string }
   /** 1:1 通话（M3-D）：拨打 / 信令 / 接通 / 静音 / 挂断 / ICE */
   | { type: 'schat.call.dial'; botID: number; callType?: 'audio' | 'video' }
   | { type: 'schat.call.signal'; signalType: string; payload: string }

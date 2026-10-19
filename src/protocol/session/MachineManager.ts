@@ -17,23 +17,22 @@ import {
   type TeamState,
   type TerminalsState
 } from '../rpc/protocol.js'
-import { SshTransport } from '../transport/SshTransport.js'
-import { WsTransport } from '../transport/WsTransport.js'
 import type { MachineRuntimeState, ParsedTarget } from '../../shared/api.js'
-import type { PairingStore } from './PairingStore.js'
-import { sshFailureReason } from '../transport/probe.js'
+import { WorkSignaling, type WorkSignalingHost, type WorkSignalEvent } from '../work/WorkSignaling.js'
+import { WorkTransport, type WorkPortMessage } from '../work/WorkTransport.js'
 
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000]
 
 export interface MachineConnectionHost {
   appVersion: string
-  pairings: PairingStore
   /** 状态变了（重绘机器列表） */
   onStateChange(connection: MachineConnection): void
   /** 服务端事件转发（渲染进程） */
   onEvent(connection: MachineConnection, method: string, params: unknown): void
-  /** 自动安装/升级远程 friday-server（M4；host 实现里只管 SSH/WSL） */
-  ensureServer(connection: MachineConnection): Promise<{ action: string; message: string }>
+  /** work 通道：信令主机（SChat 没在线给 null，机器报「先扫码登录」） */
+  workSignalingHost(): WorkSignalingHost | null
+  /** work 通道：给渲染进程发消息（MessagePort 数据面） */
+  workPortSend(message: WorkPortMessage): void
 }
 
 export class MachineConnection {
@@ -45,10 +44,6 @@ export class MachineConnection {
   detail?: string
   serverInfo?: HelloResult['server']
   hasPendingApproval = false
-  /** 这次连接有没有等到 hello（没有就可能是远程没装服务端） */
-  private greeted = false
-  /** 自动装服务端只试一次（避免循环安装） */
-  private autoInstallTried = false
   /** 这台机器的会话列表（hello 快照 + summaries 事件维护，渲染进程切换时取） */
   summaries: ConversationSummary[] = []
   /** M2 实时卡片的状态（hello 快照 + terminals/browser/team 事件维护） */
@@ -70,7 +65,8 @@ export class MachineConnection {
     }
   }
 
-  private transport: SshTransport | WsTransport | null = null
+  private transport: WorkTransport | null = null
+  private workSignaling: WorkSignaling | null = null
   private rpc: RpcClient | null = null
   private wanted = false
   private reconnectTimer: NodeJS.Timeout | null = null
@@ -109,96 +105,29 @@ export class MachineConnection {
     this.connecting = true
     this.clearReconnect()
     this.teardown()
-    this.state = this.target.kind === 'ws' ? 'connecting' : 'probing'
+    this.state = 'connecting'
     this.detail = undefined
-    this.greeted = false
     this.host.onStateChange(this)
 
     try {
-      if (this.target.kind === 'ssh') {
-        const transport = new SshTransport(
-          {
-            onMessage: (line) => this.rpc?.handleMessage(line),
-            onExit: ({ sshFailed, stderrTail }) =>
-              this.onTransportDown(
-                sshFailed ? sshFailureReason(255, stderrTail) : undefined,
-                { sshFailed, stderrTail }
-              ),
-            onError: () => {
-              /* exit 会跟着来 */
-            }
-          },
-          () => {
-            /* 原始输出（诊断用） */
-          }
-        )
-        this.attach(transport)
-        await transport.startSSH({ host: this.target.host ?? '', port: this.target.port, identityFile: this.target.identityFile })
-        // --attach 起来后客户端先发 hello（REMOTE.md §3）
-        await this.sendHello()
-      } else if (this.target.kind === 'wsl') {
-        const transport = new SshTransport(
-          {
-            onMessage: (line) => this.rpc?.handleMessage(line),
-            onExit: ({ sshFailed, stderrTail }) =>
-              this.onTransportDown(
-                sshFailed ? sshFailureReason(255, stderrTail) : undefined,
-                { sshFailed, stderrTail }
-              ),
-            onError: () => {
-              /* exit 会跟着来 */
-            }
-          },
-          () => {
-            /* 原始输出 */
-          }
-        )
-        this.attach(transport)
-        await transport.startWSL(this.target.distro ?? '')
-        await this.sendHello()
-      } else {
-        const url = this.target.url ?? ''
-        const pairing = this.target.token
-          ? { token: this.target.token, fingerprint: this.target.fingerprint }
-          : this.host.pairings.get(url)
-        if (!pairing) {
-          this.state = 'unpaired'
-          this.detail = '没有这台机器的配对信息：粘贴一次配对链接（friday://pair?…）'
-          this.connecting = false
-          this.host.onStateChange(this)
-          return
-        }
-        // 记下配对（扫码 / 手贴链接带来的令牌只出现这一次）
-        if (this.target.token) {
-          await this.host.pairings.save(url, {
-            token: pairing.token,
-            fingerprint: pairing.fingerprint,
-            deviceID: this.target.suggestedName
-          })
-        }
-        const transport = new WsTransport({
-          onMessage: (text) => this.rpc?.handleMessage(text),
-          onOpen: () => void this.sendHello(),
-          onClose: () => this.onTransportDown(),
-          onError: (error) => {
-            if (this.state !== 'ready') {
-              this.state = 'failed'
-              this.detail = error.message
-              this.connecting = false
-              this.host.onStateChange(this)
-              this.scheduleReconnect()
-            }
-          }
-        })
-        this.attach(transport)
-        // /connect 会回多个候选地址（局域网 / Tailscale / 公网）：依次试，第一个握手成功的就用（方案 §4.0「可达性」）
-        const candidates = pairing.urls && pairing.urls.length ? pairing.urls : [url]
-        const first = candidates[0] ?? url
-        transport.start(first, pairing.fingerprint)
-        if (candidates.length > 1) {
-          this.tryOtherUrls(candidates.slice(1), pairing.fingerprint)
-        }
+      // 0.3：唯一的连接方式——WebRTC 工作通道（SChat 扫码后的机器人，REMOTE.md §2）
+      const signalingHost = this.host.workSignalingHost()
+      if (!signalingHost) {
+        this.connecting = false
+        this.state = 'failed'
+        this.detail = 'SChat 没在线：先在设置里扫码登录'
+        this.host.onStateChange(this)
+        if (this.wanted) this.scheduleReconnect()
+        return
       }
+      const transport = new WorkTransport(this.id, (message) => this.host.workPortSend(message))
+      transport.onMessage((text) => this.rpc?.handleMessage(text))
+      transport.onClose((reason) => this.onTransportDown(reason))
+      this.attach(transport)
+      this.workSignaling = new WorkSignaling(signalingHost, (event) => this.onWorkEvent(event))
+      this.detail = '正在呼叫机器人（WebRTC）…'
+      this.host.onStateChange(this)
+      this.workSignaling.dial(this.target.botUserID ?? 0)
     } catch (error) {
       this.connecting = false
       this.state = 'failed'
@@ -208,35 +137,7 @@ export class MachineConnection {
     }
   }
 
-  /**
-   * `/connect` 回来的候选地址：先试第一个，30 秒内没 ready 就接着试下一个（局域网不通就试 Tailscale / 公网）。
-   * 只在本连接还没 ready 时换；已经连上了就不动。
-   */
-  private tryOtherUrls(urls: string[], fingerprint?: string): void {
-    let index = 0
-    const tick = (): void => {
-      if (this.state === 'ready' || !this.wanted) return
-      if (index >= urls.length) return
-      const url = urls[index++] ?? ''
-      if (!url) return tick()
-      const transport = new WsTransport({
-        onMessage: (text) => this.rpc?.handleMessage(text),
-        onOpen: () => void this.sendHello(),
-        onClose: () => {
-          /* 交给下一个候选 */
-        },
-        onError: () => {
-          /* 交给下一个候选 */
-        }
-      })
-      this.attach(transport)
-      transport.start(url, fingerprint)
-      setTimeout(tick, 8000)
-    }
-    setTimeout(tick, 8000)
-  }
-
-  private attach(transport: SshTransport | WsTransport): void {
+  private attach(transport: WorkTransport): void {
     this.transport = transport
     this.rpc = new RpcClient(
       (text) => transport.send(text),
@@ -275,12 +176,70 @@ export class MachineConnection {
     })
   }
 
+  // MARK: work 通道（渲染进程 ⇆ 协议进程）
+
+  private onWorkEvent(event: WorkSignalEvent): void {
+    if (event.kind === 'ended') {
+      // 信令断了（被拒 / 超时 / 对端挂断）：走传输断开的路（退避重拨用新 requestId）
+      this.onTransportDown(event.reason)
+      return
+    }
+    this.host.workPortSend({ type: 'work.signal', machineID: this.id, signal: event })
+  }
+
+  /** 渲染进程：DataChannel 打开了（接着 hello） */
+  handleWorkOpen(): void {
+    const transport = this.transport instanceof WorkTransport ? this.transport : null
+    if (!transport) return
+    transport.handleOpen()
+    void this.sendHello()
+  }
+
+  /** 渲染进程：DataChannel 收到一条完整 JSON */
+  handleWorkIn(text: string): void {
+    if (this.transport instanceof WorkTransport) this.transport.handleMessage(text)
+  }
+
+  /** 渲染进程：通道断了 */
+  handleWorkClosed(reason: string): void {
+    if (this.transport instanceof WorkTransport) this.transport.handleClosed(reason)
+  }
+
+  /** 渲染进程要发信令（offer / ice_candidate） */
+  handleWorkSignalOut(signalType: string, payload: string): void {
+    this.workSignaling?.send(signalType, payload)
+  }
+
+  /** SChat 侧路由进来的 p2p_*（callType work 这台机器的） */
+  handleWorkEnvelope(event: string, data: Record<string, unknown>): void {
+    const requestId = typeof data.requestId === 'string' ? data.requestId : String(data.requestId ?? '')
+    if (event === 'p2p_response') {
+      this.workSignaling?.onResponse(requestId, !!data.accepted, typeof data.reason === 'string' ? data.reason : '')
+      return
+    }
+    if (event === 'p2p_signaling') {
+      this.workSignaling?.onSignal(
+        requestId,
+        typeof data.type === 'string' ? data.type : '',
+        typeof data.payload === 'string' ? data.payload : ''
+      )
+      return
+    }
+    if (event === 'offline') this.invalidateWork('SChat 连接断了')
+  }
+
+  /** SChat 掉线：work 机器立刻断开重拨（信令层没了，通道活不成） */
+  invalidateWork(reason: string): void {
+    if (this.target.kind !== 'work') return
+    if (this.transport instanceof WorkTransport) this.transport.handleClosed(reason)
+  }
+
   private async sendHello(): Promise<void> {
     if (!this.rpc) return
     this.state = 'connecting'
     this.host.onStateChange(this)
-    const token = this.target.kind === 'ws' ? this.host.pairings.get(this.target.url ?? '')?.token : undefined
     try {
+      // work 通道：身份是 SChat 主人（信令层验过），不带配对令牌（REMOTE.md §2）
       const result = (await this.rpc.request(
         'hello',
         {
@@ -291,13 +250,11 @@ export class MachineConnection {
             platform: 'windows',
             kind: 'desktop'
           },
-          features: ['messagePatch'],
-          ...(token ? { token } : {})
+          features: ['messagePatch']
         },
         30_000
       )) as HelloResult
       this.serverInfo = result.server
-      this.greeted = true
       this.summaries = result.state?.summaries ?? []
       this.applyLiveSnapshot(result.state)
       this.state = 'ready'
@@ -316,10 +273,6 @@ export class MachineConnection {
       if (error instanceof RpcError && error.code === RpcErrors.ProtocolVersion) {
         this.state = 'versionMismatch'
         this.detail = error.message
-        this.wanted = false
-      } else if (error instanceof RpcError && error.code === RpcErrors.Unpaired) {
-        this.state = 'unpaired'
-        this.detail = '配对已失效（令牌被吊销或不认识）：删除这台机器重新配对'
         this.wanted = false
       } else {
         this.state = 'failed'
@@ -345,43 +298,18 @@ export class MachineConnection {
     }
   }
 
-  private onTransportDown(reason?: string, info?: { sshFailed: boolean; stderrTail: string }): void {
+  private onTransportDown(reason?: string): void {
     const wasReady = this.state === 'ready'
-    const neverGreeted = !this.greeted
     this.teardown()
     if (!this.wanted) {
       this.state = 'disconnected'
       this.host.onStateChange(this)
       return
     }
-    // 远程『--attach 跑不起来、又没 hello』：多半是没装 friday-server，自动装（方案 §10 M4；只对 SSH / WSL）
-    if (info && !info.sshFailed && neverGreeted && !this.autoInstallTried && !wasReady) {
-      this.autoInstallTried = true
-      void this.autoInstall()
-      return
-    }
     this.state = 'failed'
     this.detail = reason ?? (wasReady ? '连接断了，马上重连' : '连不上')
     this.host.onStateChange(this)
     this.scheduleReconnect()
-  }
-
-  /** 没装服务端时自动装上，然后马上重连 */
-  private async autoInstall(): Promise<void> {
-    this.state = 'probing'
-    this.detail = '远程没有 Friday 服务端，正在自动安装…'
-    this.host.onStateChange(this)
-    try {
-      const result = await this.host.ensureServer(this)
-      this.detail = result.message
-    } catch (error) {
-      this.detail = `自动安装失败：${error instanceof Error ? error.message : String(error)}`
-    }
-    this.host.onStateChange(this)
-    if (this.wanted) {
-      this.state = 'disconnected'
-      await this.start()
-    }
   }
 
   private scheduleReconnect(): void {
@@ -405,6 +333,11 @@ export class MachineConnection {
 
   private teardown(): void {
     this.rpc?.failAll(new Error('连接已断开'))
+    if (this.workSignaling) {
+      this.workSignaling.hangup()
+      this.workSignaling.dispose()
+      this.workSignaling = null
+    }
     this.transport?.close()
     this.transport = null
     this.rpc = null

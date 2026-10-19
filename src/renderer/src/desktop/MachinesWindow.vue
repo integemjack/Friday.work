@@ -1,33 +1,27 @@
 <script setup lang="ts">
 // 「机器与会话」窗口：上半是机器（点一下切当前机器、可连/断/删），下半是会话列表。
+// 0.3：机器 = SChat 扫码连入的机器人（WebRTC 工作通道），唯一连接方式。
 import { onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import AddMachineDialog from '../components/AddMachineDialog.vue'
-import PairDialog from '../components/PairDialog.vue'
 
 const store = useAppStore()
 const addDialogOpen = ref(false)
-const pairDialogOpen = ref(false)
-const installResult = ref('')
 const showAdd = ref(false)
 
 const stateText: Record<string, string> = {
   disconnected: '未连接',
-  probing: '探测远端',
   connecting: '连接中',
   ready: '已连接',
   failed: '失败',
-  unpaired: '未配对',
   versionMismatch: '版本不匹配'
 }
 
 const stateDot: Record<string, string> = {
   disconnected: 'off',
-  probing: 'run',
   connecting: 'run',
   ready: 'ok',
   failed: 'fail',
-  unpaired: 'warn',
   versionMismatch: 'fail'
 }
 
@@ -51,22 +45,8 @@ function openConversation(id: string): void {
   void store.openConversation(id)
 }
 
-async function installServer(): Promise<void> {
+async function toggleConnect(): Promise<void> {
   const machine = store.currentMachineInfo
-  if (!machine) return
-  store.deploying = true
-  try {
-    const message = await store.ensureServer(machine.id)
-    store.error = ''
-    installResult.value = message
-  } catch (error) {
-    installResult.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    store.deploying = false
-  }
-}
-
-async function toggleConnect(): Promise<void> {  const machine = store.currentMachineInfo
   if (!machine) return
   if (machine.state === 'ready') await store.disconnectMachine(machine.id)
   else await store.connectMachine(machine.id)
@@ -95,13 +75,7 @@ async function toggleConnect(): Promise<void> {  const machine = store.currentMa
       </button>
 
       <div v-if="!store.machines.length" class="empty">
-        还没有机器。点「＋ 添加」连上跑着 Friday 的那台。
-      </div>
-
-      <div class="pair-row">
-        <button class="small-btn" :disabled="!store.connected" @click="pairDialogOpen = true">
-          配对新设备（二维码）
-        </button>
+        还没有机器。点「＋ 添加」从 SChat 机器人列表连上跑着 Friday 的那台。
       </div>
 
       <div v-if="store.currentMachineInfo" class="machine-actions">
@@ -109,11 +83,7 @@ async function toggleConnect(): Promise<void> {  const machine = store.currentMa
           {{ store.currentMachineInfo.state === 'ready' ? '断开' : '连接' }}
         </button>
         <button class="small-btn danger" @click="store.removeMachine(store.currentMachineInfo.id)">删除这台</button>
-        <button class="small-btn" :disabled="!store.currentMachineInfo || store.deploying" @click="installServer">
-          {{ store.deploying ? '安装中…' : '安装/升级服务端' }}
-        </button>
         <span v-if="store.currentMachineInfo.detail" class="detail">{{ store.currentMachineInfo.detail }}</span>
-        <span v-if="store.deployStatus || installResult" class="detail">{{ store.deployStatus || installResult }}</span>
       </div>
     </div>
 
@@ -151,7 +121,6 @@ async function toggleConnect(): Promise<void> {  const machine = store.currentMa
     </div>
 
     <AddMachineDialog v-if="addDialogOpen" @close="addDialogOpen = false" />
-    <PairDialog v-if="pairDialogOpen" @close="pairDialogOpen = false" />
   </div>
 </template>
 

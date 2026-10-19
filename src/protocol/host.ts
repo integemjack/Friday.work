@@ -6,14 +6,12 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MessagePortMain } from 'electron'
 import { RpcError } from './rpc/RpcClient.js'
-import { PROTOCOL_VERSION } from './rpc/protocol.js'
 import type { MachineEntry, HostEnvelope, HostRequest, HostResponse, ParsedTarget } from '../shared/api.js'
 import { MachineConnection, newMachineID, type MachineConnectionHost } from './session/MachineManager.js'
-import { PairingStore, type CredentialBackend } from './session/PairingStore.js'
+import type { CredentialBackend } from './session/PairingStore.js'
 import { parseTarget, targetToText, targetDisplayName } from './session/TargetParse.js'
-import { installPublicKeyWithPassword } from './session/PasswordSsh.js'
+import type { WorkPortMessage } from './work/WorkTransport.js'
 import { SchatService } from './schat/SchatService.js'
-import { ensureServer } from './deploy/RemoteDeploy.js'
 import { Uploads } from './media/Uploads.js'
 
 /** 剥掉 UTF-8 BOM（Windows 记事本/PowerShell 写的文件常带） */
@@ -36,7 +34,6 @@ export class ProtocolHost {
   private readonly machines = new Map<string, MachineConnection>()
   private entries: MachineEntry[] = []
   private current = ''
-  private readonly pairings: PairingStore
   private readonly uploads: Uploads
   private readonly remotesFile: string
 
@@ -46,7 +43,6 @@ export class ProtocolHost {
     backends: MainBackends,
     private readonly init: HostInit
   ) {
-    this.pairings = new PairingStore(backends.credentials)
     this.uploads = new Uploads(backends)
     this.remotesFile = join(init.userDataPath, 'Remotes', 'remotes.json')
     this.schat = new SchatService(backends.credentials, {
@@ -60,7 +56,6 @@ export class ProtocolHost {
   private listeningPort: MessagePortMain | null = null
 
   async start(): Promise<void> {
-    await this.pairings.load()
     await this.loadRemotes()
     this.listen()
     // 端口可能先于 remotes.json 加载到达（那时广播的是空表），加载完再广播一次
@@ -81,9 +76,35 @@ export class ProtocolHost {
     if (!this.port || this.listeningPort === this.port) return
     this.listeningPort = this.port
     this.port.on('message', (event) => {
+      const data = event.data as { type?: string } & Record<string, unknown>
+      // work 通道（0.3）：渲染进程 WorkChannel 的数据/信令/状态（不带 reqID，不是请求）
+      if (data && typeof data === 'object' && typeof data.type === 'string' && data.type.startsWith('work.')) {
+        this.handleWorkPortMessage(data as WorkPortMessage)
+        return
+      }
       void this.handleMessage(event.data as HostEnvelope)
     })
     this.port.start()
+  }
+
+  /** 渲染进程 WorkChannel 来的消息：DataChannel 状态 / 数据 / 信令 */
+  private handleWorkPortMessage(message: WorkPortMessage): void {
+    const machine = this.machines.get(message.machineID)
+    if (!machine) return
+    switch (message.type) {
+      case 'work.open':
+        machine.handleWorkOpen()
+        break
+      case 'work.in':
+        machine.handleWorkIn(message.text)
+        break
+      case 'work.closed':
+        machine.handleWorkClosed(message.reason)
+        break
+      case 'work.signalOut':
+        machine.handleWorkSignalOut(message.signalType, message.payload)
+        break
+    }
   }
 
   // MARK: remotes.json（REMOTE.md §11 的格式）
@@ -111,6 +132,7 @@ export class ProtocolHost {
         this.machineHost()
       )
       this.machines.set(entry.id, machine)
+      this.attachWorkRoute(machine, target)
     }
   }
 
@@ -150,11 +172,9 @@ export class ProtocolHost {
       case 'machines.list':
         return this.machinesInfo()
 
-      case 'machines.add':
-        return this.addMachine(request.target, request.name, request.identityFile)
-
       case 'machines.remove': {
         const machine = this.machines.get(request.id)
+        this.detachWorkRoute(machine)
         machine?.disconnect()
         this.machines.delete(request.id)
         this.entries = this.entries.filter((entry) => entry.id !== request.id)
@@ -162,25 +182,6 @@ export class ProtocolHost {
         await this.saveRemotes()
         this.broadcastMachines()
         return {}
-      }
-
-      case 'machines.addWithPassword': {
-        // 一次性装公钥（M4）：密码只用这一次，不落盘
-        const target = parseTarget(request.target)
-        if (!target || target.kind !== 'ssh') throw new Error('密码添加只用于 SSH 目标（user@host[:端口]）')
-        const host = target.host ?? ''
-        const installed = await installPublicKeyWithPassword({
-          host,
-          port: target.port,
-          password: request.password
-        })
-        const added = await this.addMachine(request.target, request.name)
-        return { ...(added as Record<string, unknown>), publicKeyPath: installed.publicKeyPath }
-      }
-
-      case 'machines.ensureServer': {
-        const machine = this.requireMachine(request.id)
-        return this.ensureServerFor(machine)
       }
 
       case 'machines.connect': {
@@ -250,24 +251,11 @@ export class ProtocolHost {
         await this.schat.send(request.botID, request.text)
         return {}
 
-      case 'schat.connect': {
-        // 聊天里 /connect → 拿回封装好的凭据（明文不进聊天记录）
-        const payload = await this.schat.connectWork(request.botID)
-        return payload
-      }
-
       case 'machines.addWork': {
-        // 凭据经主进程 safeStorage 落盘；机器条目的 target 用第一个候选地址，其余存在 pairing.urls 里
-        const urls = request.urls.filter((url) => url.startsWith('wss://') || url.startsWith('ws://'))
-        if (urls.length === 0) throw new Error('/connect 回来的地址里没有可用的 wss://')
-        const primary = urls[0]!
-        await this.pairings.save(primary, {
-          token: request.token,
-          fingerprint: request.fingerprint,
-          deviceID: request.deviceID,
-          urls
-        })
-        return this.addMachine(primary, request.name ?? '扫码连入的机器')
+        // 0.3：扫码后从机器人列表直接建机器（WebRTC 工作通道，不再走 /connect + wss）
+        const botID = Number(request.botID)
+        if (!Number.isInteger(botID) || botID <= 0) throw new Error('机器人 id 不对')
+        return this.addMachine(`work:${botID}`, request.name)
       }
 
       case 'schat.call.dial':
@@ -311,23 +299,6 @@ export class ProtocolHost {
     return machine
   }
 
-  /** 自动安装/升级远程 friday-server（只对 SSH / WSL 做；WebSocket 配对的机器不装） */
-  private async ensureServerFor(machine: MachineConnection): Promise<{ action: string; message: string }> {
-    const target = machine.target
-    if (target.kind !== 'ssh' && target.kind !== 'wsl') {
-      return { action: 'none', message: '只有 SSH / WSL 连的机器能自动装服务端' }
-    }
-    const deployTarget =
-      target.kind === 'ssh'
-        ? { kind: 'ssh' as const, host: target.host ?? '', port: target.port, identityFile: target.identityFile }
-        : { kind: 'wsl' as const, distro: target.distro }
-    const cacheDir = join(this.init.userDataPath, 'Remotes', 'ServerPackages')
-    return ensureServer(deployTarget, cacheDir, {
-      protocol: PROTOCOL_VERSION,
-      onStatus: (text) => this.port?.postMessage({ type: 'deployStatus', machineID: machine.id, text })
-    })
-  }
-
   // MARK: 机器管理
 
   private machinesInfo() {
@@ -337,55 +308,32 @@ export class ProtocolHost {
     }
   }
 
-  private async addMachine(targetText: string, name?: string, identityFile?: string): Promise<unknown> {
+  private async addMachine(targetText: string, name?: string): Promise<unknown> {
     const target = parseTarget(targetText)
-    if (!target) {
-      throw new Error('写成 user@host、user@host:端口、wsl:发行版，或粘贴配对链接（friday://pair…）')
-    }
-    const keyFile = identityFile?.trim()
-    if (keyFile) {
-      if (target.kind !== 'ssh') throw new Error('只有 SSH 连接能指定私钥文件')
-      target.identityFile = keyFile
-    }
+    if (!target) throw new Error('不认识的机器标识（work:<机器人ID>）')
+    if (target.kind !== 'work') throw new Error('0.3 起只支持 SChat 扫码连入的机器人（work 通道）')
 
-    // 配对链接：记下令牌（经主进程 safeStorage 加密落盘，值只出现这一次）
-    if (target.token && target.url) {
-      await this.pairings.save(target.url, {
-        token: target.token,
-        fingerprint: target.fingerprint
-      })
-    }
-
-    // 同一个目标已在列表里：复用那台
+    // 同一个机器人已在列表里：复用那台
     const text = targetToText(target)
     const existingEntry = this.entries.find((entry) => entry.target === text)
     const id = existingEntry?.id ?? newMachineID()
     if (!existingEntry) {
-      const displayName = name?.trim() || target.suggestedName?.trim()
+      const displayName = name?.trim()
       const entry: MachineEntry = {
         id,
         target: text,
         ...(displayName ? { name: displayName } : {}),
-        ...(keyFile ? { identityFile: keyFile } : {}),
         addedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
       }
       this.entries.push(entry)
-    } else if (keyFile && existingEntry.identityFile !== keyFile) {
-      // 换了密钥文件：记下新的，连接重建
-      existingEntry.identityFile = keyFile
     }
     await this.saveRemotes()
 
-    const existing = this.machines.get(id)
-    if (existing && existing.target.identityFile !== target.identityFile) {
-      // 已经连着、换了密钥：重新建连接
-      existing.disconnect()
-      this.machines.delete(id)
-    }
     let machine = this.machines.get(id)
     if (!machine) {
       machine = new MachineConnection(id, this.displayNameFor(target, name), target, this.machineHost())
       this.machines.set(id, machine)
+      this.attachWorkRoute(machine, target)
     } else {
       machine.name = this.displayNameFor(target, name)
     }
@@ -404,13 +352,26 @@ export class ProtocolHost {
   private machineHost(): MachineConnectionHost {
     return {
       appVersion: this.init.appVersion,
-      pairings: this.pairings,
       onStateChange: () => this.broadcastMachines(),
-      onEvent: (machine, method, params) => {
+      onEvent: (machine: MachineConnection, method, params) => {
         this.port?.postMessage({ type: 'event', machineID: machine.id, method, params })
       },
-      ensureServer: (machine) => this.ensureServerFor(machine)
+      workSignalingHost: () => this.schat.workHost(),
+      workPortSend: (message) => this.port?.postMessage(message)
     }
+  }
+
+  /** work 机器：把信令路由接到 SChat（同一台机器重复注册无害） */
+  private attachWorkRoute(machine: MachineConnection, target: ParsedTarget): void {
+    if (target.kind !== 'work' || !target.botUserID) return
+    this.schat.registerWorkRoute(target.botUserID, {
+      onWorkEnvelope: (event, data) => machine.handleWorkEnvelope(event, data)
+    })
+  }
+
+  private detachWorkRoute(machine: MachineConnection | undefined): void {
+    if (!machine || machine.target.kind !== 'work' || !machine.target.botUserID) return
+    this.schat.unregisterWorkRoute(machine.target.botUserID)
   }
 
   private broadcastMachines(): void {

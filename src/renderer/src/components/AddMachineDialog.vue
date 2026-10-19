@@ -1,152 +1,102 @@
 <script setup lang="ts">
-// 添加机器：粘贴 user@host、user@host:端口、wsl:发行版，或配对链接（friday://pair?…）
-import { ref } from 'vue'
+// 添加机器（0.3）：唯一的方式是 SChat 扫码后的机器人（WebRTC 工作通道）。
+// 没登录：提示去设置扫码；登录了：列出机器人，点一个就连。
+import { onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 
 const emit = defineEmits<{ close: [] }>()
-
 const store = useAppStore()
-const target = ref('')
-const name = ref('')
-const identityFile = ref('')
-const password = ref('')
-const busy = ref(false)
+const busy = ref('')
 const error = ref('')
 
-async function submit() {
-  if (!target.value.trim() || busy.value) return
-  busy.value = true
+onMounted(() => {
+  if (store.schat.phase !== 'online') void store.schatRefresh()
+})
+
+async function add(botID: number, name: string) {
+  busy.value = String(botID)
   error.value = ''
   try {
-    if (password.value) {
-      // 密码添加（M4）：一次性装公钥，之后走密钥；密码不落盘
-      await store.addMachineWithPassword(target.value.trim(), password.value, name.value.trim() || undefined)
-    } else {
-      await store.addMachine(target.value.trim(), name.value.trim() || undefined, identityFile.value.trim() || undefined)
-    }
+    await store.connectWork(botID, name)
     emit('close')
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    busy.value = ''
   }
 }
 </script>
 
 <template>
-  <teleport to="body">
-    <div class="mask" @click="emit('close')">
-      <div class="dialog" @click.stop>
-        <div class="dialog-title">添加机器</div>
-        <div class="dialog-body">
-          <label>
-            地址
-            <input
-              v-model="target"
-              autofocus
-              placeholder="user@host、user@host:端口、wsl:发行版，或 friday://pair?… 配对链接"
-              @keydown.enter="submit"
-            />
-          </label>
-          <label>
-            名字（可选）
-            <input v-model="name" placeholder="比如「家里的服务器」" />
-          </label>
-          <label>
-            私钥文件（可选，SSH 用）
-            <input v-model="identityFile" placeholder="C:\Users\你\.ssh\id_ed25519" />
-          </label>
-          <label>
-            密码（可选：还不知道密钥时填，只会用这一次把公钥装上去）
-            <input v-model="password" type="password" placeholder="不填就用密钥 / ssh-agent" @keydown.enter="submit" />
-          </label>
-          <p class="hint">
-            SSH 默认只支持密钥 / ssh-agent；填了密码会一次性登录把本机公钥装进远端 authorized_keys，之后不再用密码。
-            配对链接在远程机器上运行 <code>friday-server --pair</code> 生成。
-          </p>
-          <p v-if="error" class="error">{{ error }}</p>
-        </div>
-        <div class="dialog-foot">
-          <button class="btn" @click="emit('close')">取消</button>
-          <button class="btn primary" :disabled="busy || !target.trim()" @click="submit">
-            {{ busy ? '正在连…' : '添加并连接' }}
+  <div class="dialog-backdrop" @click.self="emit('close')">
+    <div class="dialog">
+      <h3>添加机器</h3>
+      <p class="hint">从 SChat 机器人列表里选一台：扫码连上后走 WebRTC 工作通道，语音 / 视频 / 数据都从这条通道走。</p>
+
+      <template v-if="store.schat.phase === 'online'">
+        <div v-if="!store.schat.bots.length" class="empty">好友里还没有机器人（备注带「机器人」的才算）。</div>
+        <div class="bots">
+          <button
+            v-for="bot in store.schat.bots"
+            :key="bot.id"
+            class="bot"
+            :disabled="!!busy"
+            @click="add(bot.id, bot.name)"
+          >
+            <span class="name">{{ bot.name }}</span>
+            <span class="sub">{{ busy === String(bot.id) ? '连接中…' : 'WebRTC 连接' }}</span>
           </button>
         </div>
+      </template>
+      <div v-else class="empty">SChat 没登录：先到 设置 → SChat 扫码登录，再回来添加。</div>
+
+      <div v-if="error" class="error">{{ error }}</div>
+      <div class="row">
+        <button class="primary" @click="emit('close')">关闭</button>
       </div>
     </div>
-  </teleport>
+  </div>
 </template>
 
 <style scoped>
-.mask {
+.dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: rgb(0 0 0 / 0.4);
+  display: grid;
+  place-items: center;
   z-index: 90;
 }
-
 .dialog {
-  width: 460px;
-  max-width: calc(100vw - 40px);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  width: min(420px, 90vw);
+  background: var(--bg, #1e1f24);
+  color: var(--fg, #e6e6ea);
+  border: 1px solid var(--line, #33343c);
+  border-radius: 10px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
 }
-
-.dialog-title {
-  font-weight: 600;
-  padding: 14px 18px 0;
-}
-
-.dialog-body {
-  padding: 10px 18px;
+h3 { margin: 0; font-size: 15px; }
+.hint { margin: 0; font-size: 12px; opacity: 0.7; }
+.empty { font-size: 13px; opacity: 0.75; padding: 12px 0; }
+.bots { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.bot {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-input {
-  border: 1px solid var(--border);
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 12px;
+  background: var(--card, #26272e);
+  color: inherit;
+  border: 1px solid var(--line, #33343c);
   border-radius: 8px;
-  padding: 8px 10px;
-  background: var(--panel-2);
-  color: var(--text);
-  outline: none;
+  cursor: pointer;
+  text-align: left;
 }
-
-input:focus {
-  border-color: var(--accent);
-}
-
-.hint {
-  font-size: 12px;
-  color: var(--text-3);
-  margin: 0;
-  line-height: 1.6;
-}
-
-.error {
-  color: var(--fail);
-  font-size: 12.5px;
-  margin: 0;
-}
-
-.dialog-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 0 18px 16px;
-}
+.bot:disabled { opacity: 0.5; cursor: default; }
+.name { font-size: 13px; }
+.sub { font-size: 11px; opacity: 0.6; }
+.error { color: #ff8a80; font-size: 12px; }
+.row { display: flex; justify-content: flex-end; }
 </style>

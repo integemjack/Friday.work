@@ -1,10 +1,10 @@
-// 附件上传（REMOTE.md §6 file.upload）：读主进程背书的文件句柄，按 1 MB 分块传。
+// 附件上传（REMOTE.md §6 file.upload）：读主进程背书的文件句柄，分块传（0.3：块 128 KB，适配 WebRTC DataChannel）。
 
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { open, stat } from 'node:fs/promises'
 
-const CHUNK = 1024 * 1024 // 每块不超过 1 MB
+const CHUNK = 128 * 1024 // 每块不超过 128 KB（0.3：走 WebRTC DataChannel，超过 ~256 KB 会被切；分片本身在这里变小）
 
 export interface HandleBackend {
   resolveHandle(handle: string): Promise<string | null>

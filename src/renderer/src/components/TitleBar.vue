@@ -8,9 +8,8 @@ const store = useAppStore()
 const stateDot = computed(() => {
   switch (store.currentMachineInfo?.state) {
     case 'ready': return 'ok'
-    case 'connecting': case 'probing': return 'run'
+    case 'connecting': return 'run'
     case 'failed': case 'versionMismatch': return 'fail'
-    case 'unpaired': return 'warn'
     default: return 'off'
   }
 })
@@ -19,9 +18,7 @@ const stateText = computed(() => {
   switch (store.currentMachineInfo?.state) {
     case 'ready': return '已连接'
     case 'connecting': return '连接中'
-    case 'probing': return '探测远端'
     case 'failed': return '连接失败'
-    case 'unpaired': return '未配对'
     case 'versionMismatch': return '版本不匹配'
     default: return '未连接'
   }

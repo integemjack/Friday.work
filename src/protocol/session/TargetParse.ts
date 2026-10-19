@@ -1,6 +1,4 @@
-// 目标解析：与 Qt MachineSwitcher::parseInput / RemoteTarget::parse 对齐。
-// 支持：friday://pair?u=<wss地址>&t=<令牌>&f=<指纹>&n=<名字>、wsl:发行版、
-// user@host[:端口]（自动补 ssh:）、ssh:user@host[:端口]、wss://… / ws://…
+// 目标解析（0.3：只剩 work:<botUserID>——SChat 扫码连入的机器人；旧格式留给存量解析，界面已不再提供）。
 
 import type { ParsedTarget } from '../../shared/api.js'
 
@@ -14,6 +12,13 @@ export function parseTarget(text: string): ParsedTarget | null {
   if (/^wsl:/i.test(input)) {
     const distro = input.slice(4).trim()
     return { kind: 'wsl', distro }
+  }
+
+  // work:<botUserID>（0.3：SChat 扫码连入的机器人，唯一的连接方式）
+  if (/^work:/i.test(input)) {
+    const id = Number.parseInt(input.slice(5).trim(), 10)
+    if (Number.isInteger(id) && id > 0) return { kind: 'work', botUserID: id }
+    return null
   }
 
   if (/^wss:\/\//i.test(input) || /^ws:\/\//i.test(input)) {
@@ -63,15 +68,17 @@ export function pairingFromLink(link: string): ParsedTarget | null {
   }
 }
 
-/** remotes.json 里的 target 字符串（与 Qt RemoteTarget::toString 一致） */
+/** remotes.json 里的 target 字符串 */
 export function targetToText(target: ParsedTarget): string {
+  if (target.kind === 'work') return `work:${target.botUserID ?? 0}`
   if (target.kind === 'ws') return target.url ?? ''
   if (target.kind === 'wsl') return `wsl:${target.distro ?? ''}`
   return `ssh:${target.host ?? ''}${target.port ? `:${target.port}` : ''}`
 }
 
-/** 界面上显示的名字（Qt RemoteTarget::displayName 的做法） */
+/** 界面上显示的名字 */
 export function targetDisplayName(target: ParsedTarget): string {
+  if (target.kind === 'work') return `机器人 ${target.botUserID ?? 0}`
   if (target.kind === 'ws') {
     try {
       const url = new URL(target.url ?? '')
