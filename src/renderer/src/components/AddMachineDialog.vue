@@ -9,6 +9,7 @@ const store = useAppStore()
 const target = ref('')
 const name = ref('')
 const identityFile = ref('')
+const password = ref('')
 const busy = ref(false)
 const error = ref('')
 
@@ -17,7 +18,12 @@ async function submit() {
   busy.value = true
   error.value = ''
   try {
-    await store.addMachine(target.value.trim(), name.value.trim() || undefined, identityFile.value.trim() || undefined)
+    if (password.value) {
+      // 密码添加（M4）：一次性装公钥，之后走密钥；密码不落盘
+      await store.addMachineWithPassword(target.value.trim(), password.value, name.value.trim() || undefined)
+    } else {
+      await store.addMachine(target.value.trim(), name.value.trim() || undefined, identityFile.value.trim() || undefined)
+    }
     emit('close')
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -50,9 +56,13 @@ async function submit() {
             私钥文件（可选，SSH 用）
             <input v-model="identityFile" placeholder="C:\Users\你\.ssh\id_ed25519" />
           </label>
+          <label>
+            密码（可选：还不知道密钥时填，只会用这一次把公钥装上去）
+            <input v-model="password" type="password" placeholder="不填就用密钥 / ssh-agent" @keydown.enter="submit" />
+          </label>
           <p class="hint">
-            SSH 只支持密钥 / ssh-agent（不交互）；配对链接在远程机器上运行
-            <code>friday-server --pair</code> 生成。
+            SSH 默认只支持密钥 / ssh-agent；填了密码会一次性登录把本机公钥装进远端 authorized_keys，之后不再用密码。
+            配对链接在远程机器上运行 <code>friday-server --pair</code> 生成。
           </p>
           <p v-if="error" class="error">{{ error }}</p>
         </div>

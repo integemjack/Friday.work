@@ -302,12 +302,16 @@ export const useAppStore = defineStore('app', {
         if (!this.currentMachine && info.machines.length > 0) {
           this.currentMachine = info.current || info.machines[0]!.id
         }
-        // 启动后自动连上次用的那台（断网/服务重启后也能自己接回来）
+        // 启动后把所有存着的机器都连上（多机器后台常连，方案 §10 M4）
         if (!this.autoConnectDone && info.machines.length > 0) {
           this.autoConnectDone = true
-          const target = info.machines.find((machine) => machine.id === this.currentMachine) ?? info.machines[0]!
-          if (target.state === 'disconnected' || target.state === 'failed') {
-            void this.connectMachine(target.id)
+          const ordered = [...info.machines].sort((a, b) =>
+            a.id === this.currentMachine ? -1 : b.id === this.currentMachine ? 1 : 0
+          )
+          for (const machine of ordered) {
+            if (machine.state === 'disconnected' || machine.state === 'failed') {
+              void this.connectMachine(machine.id)
+            }
           }
         }
         // 连上的机器订阅 activity（审批、动静总览的数据源）；刚连上的取一次实时卡片状态
@@ -348,6 +352,11 @@ export const useAppStore = defineStore('app', {
 
     async addMachine(target: string, name?: string, identityFile?: string) {
       await host.request({ type: 'machines.add', target, name, identityFile })
+    },
+
+    /** 密码添加（M4）：主进程/协议进程一次性装公钥，密码不落盘 */
+    async addMachineWithPassword(target: string, password: string, name?: string) {
+      await host.request({ type: 'machines.addWithPassword', target, password, name })
     },
 
     async removeMachine(id: string) {

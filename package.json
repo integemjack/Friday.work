@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.0.0",
+    "@types/ssh2": "^1.15.6",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-vue": "^6.0.0",
     "electron": "~44.9.0",
@@ -36,6 +37,7 @@
   "allowScripts": {
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true,
-    "electron@44.9.0": true
+    "electron@44.9.0": true,
+    "ssh2@1.17.0": true
   }
 }

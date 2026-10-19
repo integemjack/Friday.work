@@ -66,6 +66,8 @@ export interface PickedFile {
 export type HostRequest =
   | { type: 'machines.list' }
   | { type: 'machines.add'; target: string; name?: string; identityFile?: string }
+  /** 密码添加（M4）：一次性装公钥后添加，密码不落盘 */
+  | { type: 'machines.addWithPassword'; target: string; password: string; name?: string }
   | { type: 'machines.remove'; id: string }
   | { type: 'machines.connect'; id: string }
   | { type: 'machines.disconnect'; id: string }

@@ -10,6 +10,7 @@ import type { MachineEntry, HostEnvelope, HostRequest, HostResponse, ParsedTarge
 import { MachineConnection, newMachineID, type MachineConnectionHost } from './session/MachineManager.js'
 import { PairingStore, type CredentialBackend } from './session/PairingStore.js'
 import { parseTarget, targetToText, targetDisplayName } from './session/TargetParse.js'
+import { installPublicKeyWithPassword } from './session/PasswordSsh.js'
 import { Uploads } from './media/Uploads.js'
 
 /** 剥掉 UTF-8 BOM（Windows 记事本/PowerShell 写的文件常带） */
@@ -146,6 +147,20 @@ export class ProtocolHost {
         await this.saveRemotes()
         this.broadcastMachines()
         return {}
+      }
+
+      case 'machines.addWithPassword': {
+        // 一次性装公钥（M4）：密码只用这一次，不落盘
+        const target = parseTarget(request.target)
+        if (!target || target.kind !== 'ssh') throw new Error('密码添加只用于 SSH 目标（user@host[:端口]）')
+        const host = target.host ?? ''
+        const installed = await installPublicKeyWithPassword({
+          host,
+          port: target.port,
+          password: request.password
+        })
+        const added = await this.addMachine(request.target, request.name)
+        return { ...(added as Record<string, unknown>), publicKeyPath: installed.publicKeyPath }
       }
 
       case 'machines.connect': {
