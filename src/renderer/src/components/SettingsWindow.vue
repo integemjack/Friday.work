@@ -2,10 +2,18 @@
 // 设置窗口（M4）：看这台远程机器的引擎、Agent 设置、服务状态（只读展示；方案 §10 M4「设置页（远程的 engines/settings 只读版）」）。
 import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import { loadTheme, setTheme, type UITheme } from '../lib/theme.js'
 
 const store = useAppStore()
 const loading = ref(false)
 const error = ref('')
+
+// 界面主题（本机偏好，见 lib/theme.ts）：跟系统 / 贾维斯
+const theme = ref<UITheme>(loadTheme())
+function pickTheme(next: UITheme): void {
+  theme.value = next
+  setTheme(next)
+}
 
 interface EngineView {
   id: string
@@ -147,6 +155,24 @@ onMounted(load)
       </div>
     </section>
 
+    <section>
+      <h3>界面</h3>
+      <div class="theme-row">
+        <button class="small-btn" :class="{ strong: theme === 'system' }" @click="pickTheme('system')">
+          跟随系统
+        </button>
+        <button
+          class="small-btn"
+          :class="{ strong: theme === 'jarvis' }"
+          title="深空青色发光界面，照钢铁侠 J.A.R.V.I.S. 的全息 HUD 风"
+          @click="pickTheme('jarvis')"
+        >
+          贾维斯
+        </button>
+      </div>
+      <div class="note">贾维斯是本机界面偏好（深空黑 + 电光青全息风），与远程机器无关。</div>
+    </section>
+
     <div v-if="error" class="error">{{ error }}</div>
     <div v-if="!store.connected" class="empty">先连上一台机器。</div>
 
@@ -255,6 +281,19 @@ onMounted(load)
   display: flex;
   gap: 8px;
   padding-top: 6px;
+}
+
+/* 界面主题切换（跟系统 / 贾维斯） */
+.theme-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* 贾维斯界面下选中的主题按钮用青色描边，和整体发光风一致 */
+[data-theme='jarvis'] .small-btn.strong {
+  color: var(--accent);
+  border-color: rgba(34, 211, 238, 0.55);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.15);
 }
 
 section {

@@ -222,6 +222,33 @@ onBeforeUnmount(onUp)
   color: #fff;
 }
 
+/* 贾维斯界面：窗口像悬浮的全息面板——青色描边 + 外发光，标题变青色拉开字距 */
+[data-theme='jarvis'] .win {
+  border-color: rgba(34, 211, 238, 0.32);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.1),
+    0 0 22px rgba(34, 211, 238, 0.09),
+    0 14px 36px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme='jarvis'] .win.dragging {
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.2),
+    0 0 34px rgba(34, 211, 238, 0.16),
+    0 20px 48px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme='jarvis'] .win-title {
+  border-bottom-color: rgba(34, 211, 238, 0.28);
+}
+
+[data-theme='jarvis'] .win-text {
+  color: var(--accent);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+}
+
 .win-body {
   flex: 1;
   min-height: 0;

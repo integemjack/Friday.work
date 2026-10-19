@@ -5,6 +5,7 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
+import { applyTheme, loadTheme } from './lib/theme.js'
 import TitleBar from './components/TitleBar.vue'
 import ConversationView from './components/ConversationView.vue'
 import TerminalCard from './components/TerminalCard.vue'
@@ -44,6 +45,8 @@ onBeforeUnmount(() => {
 })
 
 onMounted(() => {
+  // 恢复界面主题（本机偏好；选了贾维斯则 <html> 带 data-theme，样式见 style.css [data-theme='jarvis']）
+  applyTheme(loadTheme())
   // 先恢复上次的窗口布局（会话窗口等机器连上后再补开），再接协议事件；恢复不到才开「机器与会话」
   store.restoreLayout()
   store.bindHost()
@@ -182,6 +185,24 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 
 .desktop-actions {
   margin-top: 12px;
+}
+
+/* 贾维斯界面：桌面底纹从点阵换成青色全息网格 + 中央辉光，欢迎语带发光 */
+[data-theme='jarvis'] .desktop {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse 60% 50% at 50% 42%, rgba(34, 211, 238, 0.1), transparent 70%),
+    linear-gradient(rgba(34, 211, 238, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px;
+  background-position: center;
+}
+
+[data-theme='jarvis'] .desktop-title {
+  color: var(--accent);
+  letter-spacing: 4px;
+  text-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
+  text-transform: uppercase;
 }
 
 .error-toast {

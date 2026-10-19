@@ -52,6 +52,68 @@
   }
 }
 
+/* MARK: 贾维斯界面（设置页「界面 › 贾维斯」开关；<html data-theme="jarvis"> 时生效）
+   深空黑底 + 电光青发光，照钢铁侠 J.A.R.V.I.S. 的全息 HUD 风。
+   specificity 是 0,2,0，压过上面浅/深两套 :root（0,1,0），不管系统偏好固定走这套。 */
+:root[data-theme='jarvis'] {
+  --bg: #060b14;
+  --panel: rgba(9, 21, 38, 0.92);
+  --panel-2: rgba(13, 30, 52, 0.94);
+  --border: rgba(34, 211, 238, 0.22);
+  --text: #d7f2ff;
+  --text-2: #82b9d6;
+  --text-3: #4d7d99;
+  --accent: #22d3ee;
+  --accent-weak: rgba(34, 211, 238, 0.12);
+  --ok: #2dd4a7;
+  --run: #38bdf8;
+  --warn: #fbbf24;
+  --fail: #fb5f7d;
+  --code-bg: #0a1a2e;
+  --radius: 10px;
+
+  --line: var(--border);
+  --fg: var(--text);
+  --muted: var(--text-2);
+  --hover: rgba(34, 211, 238, 0.08);
+  --selected: rgba(34, 211, 238, 0.14);
+  --chip: rgba(34, 211, 238, 0.12);
+}
+
+/* 深空底：中心一圈青色辉光 + 暗角，窗口浮在上面像全息投影 */
+html[data-theme='jarvis'] body {
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 40%, rgba(34, 211, 238, 0.07), transparent 70%),
+    radial-gradient(ellipse 120% 90% at 50% 110%, rgba(8, 47, 73, 0.5), transparent 65%),
+    var(--bg);
+}
+
+html[data-theme='jarvis'] ::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.25);
+  background-clip: content-box;
+}
+
+html[data-theme='jarvis'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 211, 238, 0.4);
+  background-clip: content-box;
+}
+
+html[data-theme='jarvis'] ::selection {
+  background: rgba(34, 211, 238, 0.3);
+}
+
+/* 贾维斯下按钮/徽章的边框带一点青色呼吸感 */
+html[data-theme='jarvis'] .btn.primary {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.9), rgba(14, 165, 191, 0.9));
+  border-color: rgba(34, 211, 238, 0.9);
+  color: #04121a;
+  text-shadow: none;
+}
+
+html[data-theme='jarvis'] .badge.ok { color: var(--ok); border-color: rgba(45, 212, 167, 0.55); }
+html[data-theme='jarvis'] .badge.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.55); }
+html[data-theme='jarvis'] .badge.fail { color: var(--fail); border-color: rgba(251, 95, 125, 0.55); }
+
 * {
   box-sizing: border-box;
 }
