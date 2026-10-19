@@ -1,0 +1,194 @@
+/* Friday Work —— 简洁大气：纯色底、1px 分隔、圆角卡片；深浅色跟随系统 */
+
+:root {
+  --bg: #f6f6f7;
+  --panel: #ffffff;
+  --panel-2: #fafafa;
+  --border: #e4e4e7;
+  --text: #18181b;
+  --text-2: #71717a;
+  --text-3: #a1a1aa;
+  --accent: #4f46e5;
+  --accent-weak: #eef2ff;
+  --ok: #16a34a;
+  --run: #2563eb;
+  --warn: #ea580c;
+  --fail: #dc2626;
+  --code-bg: #f4f4f5;
+  --radius: 10px;
+
+  /* 语义别名（M2 卡片组件用）：都指向上面同一套色板，改颜色只改上面 */
+  --line: var(--border);
+  --fg: var(--text);
+  --muted: var(--text-2);
+  --hover: rgba(120, 120, 130, 0.1);
+  --selected: var(--accent-weak);
+  --chip: rgba(120, 120, 130, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1f22;
+    --panel: #26272b;
+    --panel-2: #2b2c31;
+    --border: #3a3b3f;
+    --text: #e4e4e7;
+    --text-2: #a1a1aa;
+    --text-3: #71717a;
+    --accent: #818cf8;
+    --accent-weak: #312e5f;
+    --ok: #4ade80;
+    --run: #60a5fa;
+    --warn: #fb923c;
+    --fail: #f87171;
+    --code-bg: #1b1c1f;
+
+    --line: var(--border);
+    --fg: var(--text);
+    --muted: var(--text-2);
+    --hover: rgba(160, 160, 170, 0.12);
+    --selected: var(--accent-weak);
+    --chip: rgba(160, 160, 170, 0.16);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* MARK: 通用小件 */
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dot.ok { background: var(--ok); }
+.dot.run { background: var(--run); }
+.dot.warn { background: var(--warn); }
+.dot.fail { background: var(--fail); }
+.dot.off { background: var(--text-3); }
+
+.btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.btn:hover {
+  background: var(--panel-2);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn.danger {
+  color: var(--fail);
+  border-color: var(--fail);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.badge.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badge.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.badge.fail {
+  color: var(--fail);
+  border-color: var(--fail);
+}
+
+code {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+pre {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
