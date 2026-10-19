@@ -1,0 +1,38 @@
+# electron-builder 配置（方案 §10 M4「打包：electron-builder（NSIS + 便携 zip）」）
+# 只打 Windows；启动器读 out/main/index.js（electron-vite 的产物）。
+appId: com.integem.friday.work
+productName: Friday Work
+copyright: Friday Desktop Work
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}/**'
+  - '!**/node_modules/**/*.d.ts'
+
+# 原生模块保留在 asar 外面（ssh2 可选依赖 cpu-features 是 .node）
+asar: true
+asarUnpack:
+  - '**/*.node'
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Friday Work
+  deleteAppDataOnUninstall: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
