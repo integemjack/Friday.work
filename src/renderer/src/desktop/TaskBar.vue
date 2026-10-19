@@ -10,10 +10,12 @@ const store = useAppStore()
 const entries: Array<{ kind: WindowKind; label: string; icon: string }> = [
   { kind: 'machines', label: '机器与会话', icon: '⛁' },
   { kind: 'activity', label: '活动总览', icon: '◎' },
+  { kind: 'voice', label: '语音', icon: '🎙' },
   { kind: 'terminals', label: '终端', icon: '⌨' },
   { kind: 'files', label: '文件', icon: '🗂' },
   { kind: 'browser', label: '浏览器', icon: '🌐' },
-  { kind: 'agents', label: '子 Agent', icon: '◈' }
+  { kind: 'agents', label: '子 Agent', icon: '◈' },
+  { kind: 'settings', label: '设置', icon: '⚙' }
 ]
 
 /** 已开的非会话窗口（会话窗口在工作台列表里） */

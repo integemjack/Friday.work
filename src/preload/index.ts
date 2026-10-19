@@ -1,6 +1,6 @@
 // preload：只开一个最小的类型化 API 面（方案 §7.2/§7.3）。
 // 数据面：主进程发来的 MessagePort 原样转进页面（高频事件不经过主进程）。
-// 控制面：文件选择、拖放路径换出。渲染进程始终接触不到 Node、令牌与凭据。
+// 控制面：文件选择、拖放路径换出、语音片段落盘、系统通知。渲染进程始终接触不到 Node、令牌与凭据。
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { PickedFile } from '../shared/api.js'
@@ -22,6 +22,19 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   registerDrop: (file: File): Promise<PickedFile | null> => {
     const path = webUtils.getPathForFile(file)
     return ipcRenderer.invoke('upload:register-drop', path)
+  },
+  /** 一段录音（M3-A）：字节交给主进程落成临时文件、领句柄 */
+  saveVoiceClip: (bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null> =>
+    ipcRenderer.invoke('voice:save-clip', { bytes, mimeType }),
+  /** 系统通知（attention / 任务跑完） */
+  notify: (payload: { title: string; body?: string; conversationID?: string }): void => {
+    ipcRenderer.send('notify:show', payload)
+  },
+  /** 点系统通知回到对应会话 */
+  onOpenConversation: (listener: (conversationID: string) => void): (() => void) => {
+    const handler = (_event: unknown, conversationID: string): void => listener(conversationID)
+    ipcRenderer.on('friday-open-conversation', handler)
+    return () => ipcRenderer.removeListener('friday-open-conversation', handler)
   }
 })
 

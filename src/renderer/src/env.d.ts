@@ -9,6 +9,12 @@ declare global {
     fridayBridge: {
       pickAttachments(): Promise<PickedFile[]>
       registerDrop(file: File): Promise<PickedFile | null>
+      /** 一段录音交给主进程落盘（M3-A） */
+      saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
+      /** 系统通知 */
+      notify(payload: { title: string; body?: string; conversationID?: string }): void
+      /** 点通知回会话 */
+      onOpenConversation(listener: (conversationID: string) => void): () => void
     }
   }
 }

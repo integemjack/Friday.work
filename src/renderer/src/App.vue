@@ -12,6 +12,8 @@ import FilesCard from './components/FilesCard.vue'
 import BrowserCard from './components/BrowserCard.vue'
 import AgentsCard from './components/AgentsCard.vue'
 import ActivityOverview from './components/ActivityOverview.vue'
+import VoiceWindow from './components/VoiceWindow.vue'
+import SettingsWindow from './components/SettingsWindow.vue'
 import MachinesWindow from './desktop/MachinesWindow.vue'
 import TaskBar from './desktop/TaskBar.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
@@ -31,7 +33,9 @@ const componentFor: Record<WindowKind, unknown> = {
   browser: BrowserCard,
   agents: AgentsCard,
   activity: ActivityOverview,
-  machines: MachinesWindow
+  machines: MachinesWindow,
+  voice: VoiceWindow,
+  settings: SettingsWindow
 }
 
 const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = {
@@ -41,7 +45,9 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   browser: { minWidth: 420, minHeight: 320 },
   agents: { minWidth: 360, minHeight: 240 },
   activity: { minWidth: 320, minHeight: 240 },
-  machines: { minWidth: 320, minHeight: 280 }
+  machines: { minWidth: 320, minHeight: 280 },
+  voice: { minWidth: 360, minHeight: 320 },
+  settings: { minWidth: 420, minHeight: 320 }
 }
 </script>
 

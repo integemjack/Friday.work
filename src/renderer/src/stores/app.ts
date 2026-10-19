@@ -6,6 +6,7 @@ import { host, rpc } from '../lib/host.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import type {
   ActivityEventParams,
+  AssistantEntry,
   BlocksPatch,
   BrowserFrameParams,
   BrowserTab,
@@ -25,6 +26,16 @@ export interface MessageWithVersion {
   version: number
 }
 
+export interface EngineView {
+  id: string
+  title: string
+  model: string
+  kind?: string
+  supportsTools?: boolean
+  subAgentAllowed?: boolean
+  disabled?: boolean
+}
+
 export interface ConversationDetail {
   conversationID: string
   /** 消息按显示顺序 */
@@ -41,6 +52,8 @@ export type WindowKind =
   | 'agents'
   | 'activity'
   | 'machines'
+  | 'voice'
+  | 'settings'
 
 export interface DesktopWindow {
   id: string
@@ -68,7 +81,9 @@ const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH
   browser: { w: 820, h: 620, minW: 420, minH: 320 },
   agents: { w: 580, h: 460, minW: 360, minH: 240 },
   activity: { w: 520, h: 480, minW: 320, minH: 240 },
-  machines: { w: 420, h: 560, minW: 320, minH: 280 }
+  machines: { w: 420, h: 560, minW: 320, minH: 280 },
+  voice: { w: 520, h: 560, minW: 360, minH: 320 },
+  settings: { w: 620, h: 560, minW: 420, minH: 320 }
 }
 
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
@@ -78,7 +93,9 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   browser: { title: '浏览器', icon: '🌐' },
   agents: { title: '子 Agent', icon: '◈' },
   activity: { title: '活动总览', icon: '◎' },
-  machines: { title: '机器与会话', icon: '⛁' }
+  machines: { title: '机器与会话', icon: '⛁' },
+  voice: { title: '语音', icon: '🎙' },
+  settings: { title: '设置', icon: '⚙' }
 }
 
 export const useAppStore = defineStore('app', {
@@ -113,9 +130,18 @@ export const useAppStore = defineStore('app', {
     teamRuns: [] as TeamRun[],
     /** 活动的浏览器帧（base64 jpeg）与它的视口 */
     browserFrame: null as { tab: string; data: string; viewport: [number, number] } | null,
+    /** 助手日志（assistant.subscribe；M3-A 语音用它看回复） */
+    assistantEntries: [] as AssistantEntry[],
+    assistantSubscribed: false,
+    /** 远端助手开没开（关着时只记日志、不回复，语音窗口要提示） */
+    assistantEnabled: false,
+    /** 这台机器的引擎（hello 快照 + engines 事件；设置窗口只读展示） */
+    engines: [] as EngineView[],
+    /** 正在朗读的那条（朗读时界面显示暂停按钮） */
+    speakingEntryID: '',
     /** 当前在 watch 的标签（关窗口时 unwatch） */
     watchedTabID: '',
-    /** 停靠卡片：终端窗口里选中的终端 id */
+    /** 终端窗口里选中的终端 id */
     activeTerminalID: '',
     /** 文件卡片里选中的文件（null = 只开目录树） */
     activeFile: null as null | { path: string; name: string },
@@ -374,7 +400,9 @@ export const useAppStore = defineStore('app', {
           terminals: { terminals: TerminalInfo[]; available: boolean; reason?: string }
           browser: { tabs: BrowserTab[]; available: boolean; reason?: string }
           team: { runs: TeamRun[] }
+          engines?: EngineView[]
         }
+        this.engines = state.engines ?? []
         this.terminals = state.terminals?.terminals ?? []
         this.terminalsAvailable = state.terminals?.available ?? false
         this.terminalsReason = state.terminals?.reason ?? ''
@@ -533,9 +561,16 @@ export const useAppStore = defineStore('app', {
           if (detail && payload.runtime) detail.runtime = payload.runtime
           break
         }
-        case 'attention':
-          // M1：侧边栏的橙色点由 activity 状态驱动（approvals）
+        case 'attention': {
+          // 有调用等着确认：系统通知（点通知回到那段会话）
+          const payload = params as { conversationID?: string; title?: string } | undefined
+          window.fridayBridge?.notify({
+            title: 'Friday：有调用等你确认',
+            body: payload?.title ?? '在一段会话里，智能体等你批准一个操作',
+            conversationID: payload?.conversationID
+          })
           break
+        }
         case 'activity': {
           // 增量事件：按 kind 合并进 SessionActivity（REMOTE.md §6）
           const evt = params as ActivityEventParams
@@ -630,6 +665,33 @@ export const useAppStore = defineStore('app', {
         }
         case 'team': {
           this.teamRuns = (params as { runs: TeamRun[] }).runs ?? []
+          break
+        }
+        case 'engines': {
+          const state = params as { engines?: EngineView[] }
+          this.engines = state.engines ?? []
+          break
+        }
+        // 助手日志（M3-A 语音）：流式的同一条合并，定稿了新回复念出来
+        case 'assistant.entry': {
+          const entry = (params as { entry?: AssistantEntry }).entry
+          if (!entry) break
+          const index = this.assistantEntries.findIndex((item) => item.id === entry.id)
+          if (index >= 0) this.assistantEntries[index] = entry
+          else this.assistantEntries.push(entry)
+          if (entry.kind === 'assistant' && !entry.streaming && !entry.data?.silent && entry.text.trim()) {
+            this.speakEntry(entry)
+          }
+          break
+        }
+        case 'assistant.reset': {
+          this.assistantEntries = []
+          this.assistantSubscribed = false
+          break
+        }
+        case 'assistant.state': {
+          const state = (params as { state?: { enabled?: boolean } }).state
+          if (state) this.assistantEnabled = state.enabled ?? false
           break
         }
       }
@@ -762,6 +824,25 @@ export const useAppStore = defineStore('app', {
       const target = conversationID ?? this.activeConversationID
       if (!this.currentMachine || !target) return
       await rpc(this.currentMachine, 'runner.stop', { conversationID: target })
+    },
+
+    /** 朗读一条助手回复（M3-A，方案 §6.1；用系统语音，打断 = cancel） */
+    speakEntry(entry: AssistantEntry) {
+      if (typeof speechSynthesis === 'undefined' || !entry.text.trim()) return
+      speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(entry.text)
+      utterance.lang = 'zh-CN'
+      utterance.rate = 1.05
+      utterance.onend = () => {
+        if (this.speakingEntryID === entry.id) this.speakingEntryID = ''
+      }
+      this.speakingEntryID = entry.id
+      speechSynthesis.speak(utterance)
+    },
+
+    stopSpeaking() {
+      if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel()
+      this.speakingEntryID = ''
     },
 
     /** 上传一个主进程背书的文件，返回服务端路径 */

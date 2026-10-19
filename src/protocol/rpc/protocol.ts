@@ -495,8 +495,55 @@ export interface ActivityEventParams {
   [key: string]: unknown
 }
 
-// MARK: 终端 / 浏览器 / 文件（M2）
+// MARK: 助手日志（M3-A 语音 / 助手时间线，REMOTE.md §6「助手」）
 
+export interface AssistantAttachment {
+  path: string
+  size?: number
+  missing?: boolean
+}
+
+export interface AssistantEntry {
+  id: string
+  at: Iso
+  kind: 'user' | 'assistant' | 'receipt' | 'tool' | 'notice'
+  source?: string
+  text: string
+  projects?: string[]
+  refs?: string[]
+  interrupted?: boolean
+  streaming?: boolean
+  data?: {
+    silent?: boolean
+    error?: boolean
+    details?: string
+    name?: string
+    arguments?: string
+    result?: string
+    reply?: string
+    attachments?: AssistantAttachment[]
+    direct?: { machineID: string; conversationID: Uuid }
+    [key: string]: unknown
+  }
+}
+
+export interface AssistantState {
+  enabled: boolean
+  reacting: boolean
+  reactingEntryID?: string
+  config?: Record<string, unknown>
+  brainEngineTitle?: string
+  engines?: Array<{ id: string; title: string; model: string; supportsTools?: boolean }>
+}
+
+export interface AssistantSubscribeResult {
+  state: AssistantState
+  entries: AssistantEntry[]
+  board?: Record<string, unknown>
+  channels?: Array<Record<string, unknown>>
+}
+
+// MARK: 终端 / 浏览器 / 文件（M2）
 /** term.attach 回执：最近输出（≤512 KB）+ 伪终端现在的大小 */
 export interface TermAttachResult {
   data: string
@@ -575,6 +622,21 @@ export interface MachineLiveState {
   terminals: TerminalsState
   browser: BrowserState
   team: TeamState
+  /** 引擎（设置窗口用；字段与 EnginesState.engines 一致） */
+  engines: EngineConfigView[]
+  defaultEngineID: string
+}
+
+/** EnginesState 里的引擎条目（REMOTE.md §5；只有密钥名，没有值） */
+export interface EngineConfigView {
+  id: string
+  title: string
+  model: string
+  kind?: string
+  supportsTools?: boolean
+  disabled?: boolean
+  apiKeySecret?: string
+  [key: string]: unknown
 }
 
 export interface ServerPairResult {

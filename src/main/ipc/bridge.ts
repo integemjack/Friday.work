@@ -2,8 +2,9 @@
 // 上传不接受渲染进程传来的任意本机路径：只认对话框选中的、或拖放进来的 File
 // （preload 用 webUtils 换出路径），协议进程只能读这里背书过的路径。
 
-import { dialog, ipcMain, type FileFilter, type WebContents } from 'electron'
-import { stat } from 'node:fs/promises'
+import { app, dialog, ipcMain, Notification, type FileFilter, type WebContents } from 'electron'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 export interface PickedFile {
@@ -15,7 +16,10 @@ export interface PickedFile {
 export class IpcBridge {
   private readonly handles = new Map<string, string>()
 
-  constructor(private readonly protocolHost: { providePort(webContents: WebContents): void }) {}
+  constructor(
+    private readonly protocolHost: { providePort(webContents: WebContents): void },
+    private readonly getWindow: () => Electron.BrowserWindow | null = () => null
+  ) {}
 
   private async registerPath(path: string): Promise<PickedFile | null> {
     try {
@@ -54,6 +58,44 @@ export class IpcBridge {
     ipcMain.handle('upload:register-drop', async (_event, path: unknown): Promise<PickedFile | null> => {
       if (typeof path !== 'string' || !path) return null
       return this.registerPath(path)
+    })
+
+    // 语音（M3-A）：渲染进程录好的一段音频字节落成临时文件、领一个句柄（路径由主进程决定，不信任渲染进程）
+    ipcMain.handle('voice:save-clip', async (_event, payload: unknown): Promise<PickedFile | null> => {
+      const input = payload as { bytes?: ArrayBuffer | Uint8Array; mimeType?: string } | null
+      if (!input?.bytes) return null
+      const bytes = Buffer.from(input.bytes as ArrayBuffer)
+      if (bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) return null
+      const ext = /ogg/.test(input.mimeType ?? '')
+        ? 'ogg'
+        : /mp4|m4a/.test(input.mimeType ?? '')
+          ? 'm4a'
+          : /wav/.test(input.mimeType ?? '')
+            ? 'wav'
+            : 'webm'
+      const dir = join(app.getPath('temp'), 'friday-voice')
+      await mkdir(dir, { recursive: true })
+      const path = join(dir, `voice-${Date.now()}.${ext}`)
+      await writeFile(path, bytes)
+      return this.registerPath(path)
+    })
+
+    // 系统通知（attention、任务跑完这类）：点通知回到对应会话
+    ipcMain.on('notify:show', (_event, payload: unknown) => {
+      const input = payload as { title?: string; body?: string; conversationID?: string } | null
+      if (!input?.title) return
+      if (!Notification.isSupported()) return
+      const notification = new Notification({ title: input.title, body: input.body ?? '' })
+      notification.on('click', () => {
+        const window = this.getWindow()
+        if (!window) return
+        if (window.isMinimized()) window.restore()
+        window.focus()
+        if (input.conversationID) {
+          window.webContents.send('friday-open-conversation', input.conversationID)
+        }
+      })
+      notification.show()
     })
   }
 }

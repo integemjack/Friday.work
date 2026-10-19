@@ -10,6 +10,7 @@ import {
   RpcErrors,
   type BrowserState,
   type ConversationSummary,
+  type EngineConfigView,
   type HelloResult,
   type MachineLiveState,
   type RunnerState,
@@ -48,9 +49,19 @@ export class MachineConnection {
   terminals: TerminalsState = { terminals: [], available: false }
   browser: BrowserState = { available: false, tabs: [] }
   team: TeamState = { runs: [] }
+  /** 引擎（hello 快照的 state.engines + engines 事件维护；设置窗口用） */
+  engines: EngineConfigView[] = []
+  /** 新对话默认引擎 */
+  defaultEngineID = ''
 
   liveState(): MachineLiveState {
-    return { terminals: this.terminals, browser: this.browser, team: this.team }
+    return {
+      terminals: this.terminals,
+      browser: this.browser,
+      team: this.team,
+      engines: this.engines,
+      defaultEngineID: this.defaultEngineID
+    }
   }
 
   private transport: SshTransport | WsTransport | null = null
@@ -194,6 +205,11 @@ export class MachineConnection {
       if (method === 'team') {
         this.team = params as TeamState
       }
+      if (method === 'engines') {
+        const state = params as { engines?: EngineConfigView[]; defaultEngineID?: string }
+        this.engines = state.engines ?? []
+        this.defaultEngineID = state.defaultEngineID ?? ''
+      }
       if (method === 'runner') {
         const runner = params as RunnerState | undefined
         this.hasPendingApproval = !!runner && runner.pendingApproval.length > 0
@@ -264,6 +280,11 @@ export class MachineConnection {
     if (state.terminals) this.terminals = state.terminals
     if (state.browser) this.browser = state.browser
     if (state.team) this.team = state.team
+    if (state.engines) {
+      const engines = state.engines as { engines?: EngineConfigView[]; defaultEngineID?: string }
+      this.engines = engines.engines ?? []
+      this.defaultEngineID = engines.defaultEngineID ?? ''
+    }
   }
 
   private onTransportDown(reason?: string): void {

@@ -2,7 +2,7 @@
 // 主进程 = 窗口、凭据、安全边界；网络 I/O 全在协议进程（utilityProcess）。
 // 数据面端口由渲染进程加载完成后主动请求（preload: friday-request-port）。
 
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
 import { join } from 'node:path'
 import { CredentialStore } from './CredentialStore.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
@@ -62,8 +62,13 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // 麦克风只给本应用页面（方案 §11 风险对策）
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
+  })
+
   protocolProcessHost.start()
-  bridge = new IpcBridge(protocolProcessHost)
+  bridge = new IpcBridge(protocolProcessHost, () => mainWindow)
   bridge.register()
   createWindow()
 
