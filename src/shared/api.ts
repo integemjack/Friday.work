@@ -1,0 +1,105 @@
+// 渲染进程 ⇆ 协议进程的 API 消息（方案 §7.3「暴露一组带类型的方法」）。
+// 数据面走 MessagePort（高频事件不经过主进程），请求用 reqID 配对。
+
+import type { ServerInfo } from '../protocol/rpc/protocol.js'
+
+export type MachineRuntimeState =
+  | 'disconnected'
+  | 'probing'
+  | 'connecting'
+  | 'ready'
+  | 'failed'
+  | 'unpaired'
+  | 'versionMismatch'
+
+export interface MachineStateInfo {
+  id: string
+  name: string
+  targetKind: 'ssh' | 'wsl' | 'ws'
+  /** 与 Qt remotes.json 的 target 一致：ssh:user@host[:port] / wsl:发行版 / wss://… */
+  targetText: string
+  state: MachineRuntimeState
+  detail?: string
+  serverInfo?: ServerInfo
+  /** 这台机器上有会话等着确认（侧边栏橙色点） */
+  hasPendingApproval: boolean
+}
+
+/** remotes.json 里的一条（REMOTE.md §11） */
+export interface MachineEntry {
+  id: string
+  target: string
+  name?: string
+  identityFile?: string
+  addedAt: string
+}
+
+export interface ParsedTarget {
+  kind: 'ssh' | 'wsl' | 'ws'
+  host?: string
+  port?: number
+  distro?: string
+  url?: string
+  /** 配对链接带来的 */
+  token?: string
+  fingerprint?: string
+  suggestedName?: string
+  /** SSH 指定私钥文件 */
+  identityFile?: string
+}
+
+export interface UploadedFileInfo {
+  handle: string
+  name: string
+  size: number
+}
+
+/** 主进程背书过的本地文件（只认对话框/拖放得到的句柄，方案 §7.3） */
+export interface PickedFile {
+  handle: string
+  name: string
+  size: number
+}
+
+// MARK: 渲染 → 协议
+
+export type HostRequest =
+  | { type: 'machines.list' }
+  | { type: 'machines.add'; target: string; name?: string; identityFile?: string }
+  | { type: 'machines.remove'; id: string }
+  | { type: 'machines.connect'; id: string }
+  | { type: 'machines.disconnect'; id: string }
+  /** 取一台机器最近的会话列表（hello 快照 + summaries 事件维护，REMOTE.md §5） */
+  | { type: 'summaries.get'; machineID: string }
+  /** 取一台机器的实时卡片状态（终端/浏览器/子 Agent，M2） */
+  | { type: 'state.get'; machineID: string }
+  /** 任意协议方法透传（conversation.create / runner.submit / assistant.* …） */
+  | { type: 'rpc'; machineID: string; method: string; params?: unknown }
+  /** 在协议进程登记会话订阅（断线重连后自动恢复，并把事件转给渲染进程） */
+  | { type: 'conversations.subscribe'; machineID: string; conversationID: string }
+  | { type: 'conversations.unsubscribe'; machineID: string; conversationID: string }
+  /** 补丁打不上时拉整条消息 */
+  | { type: 'conversations.getMessage'; machineID: string; conversationID: string; messageID: string }
+  /** 上传主进程背书的一个文件（file.upload 分块） */
+  | { type: 'upload.sendFile'; machineID: string; handle: string }
+
+// MARK: 协议 → 渲染
+
+export type HostEvent =
+  | { type: 'machines'; machines: MachineStateInfo[] }
+  | { type: 'event'; machineID: string; method: string; params: unknown }
+
+/** 请求的回执 */
+export interface HostResponse {
+  reqID: number
+  ok: boolean
+  result?: unknown
+  error?: string
+  /** 协议错误码（REMOTE.md §4） */
+  code?: number
+}
+
+export interface HostEnvelope {
+  reqID: number
+  request: HostRequest
+}
