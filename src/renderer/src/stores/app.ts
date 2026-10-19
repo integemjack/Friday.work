@@ -81,6 +81,7 @@ export type WindowKind =
   | 'settings'
   | 'schat'
   | 'call'
+  | 'timeline'
 
 export interface DesktopWindow {
   id: string
@@ -112,7 +113,8 @@ const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH
   voice: { w: 520, h: 560, minW: 360, minH: 320 },
   settings: { w: 620, h: 560, minW: 420, minH: 320 },
   schat: { w: 720, h: 560, minW: 420, minH: 360 },
-  call: { w: 360, h: 480, minW: 300, minH: 380 }
+  call: { w: 360, h: 480, minW: 300, minH: 380 },
+  timeline: { w: 680, h: 540, minW: 380, minH: 300 }
 }
 
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
@@ -126,7 +128,8 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   voice: { title: '语音', icon: '🎙' },
   settings: { title: '设置', icon: '⚙' },
   schat: { title: '扫码一键连', icon: '⚡' },
-  call: { title: '通话', icon: '📞' }
+  call: { title: '通话', icon: '📞' },
+  timeline: { title: '助手时间线', icon: '🗒' }
 }
 
 export const useAppStore = defineStore('app', {
@@ -981,6 +984,18 @@ export const useAppStore = defineStore('app', {
     },
 
     // MARK: 通话（M3-D）
+
+    /** 通话结束写一条记录进时间线（方案 M3-D 验收「挂断后时间线出现通话记录」） */
+    logCall(peerName: string, durationSec: number, reason: string) {
+      const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+      this.assistantEntries.push({
+        id: `call-${Date.now()}`,
+        at: stamp,
+        kind: 'notice',
+        text: reason ? `通话 ${peerName}（${durationSec} 秒）：${reason}` : `通话 ${peerName}，${durationSec} 秒`,
+        data: { name: 'call', silent: true, details: reason }
+      })
+    },
 
     async callDial(botID: number, callType: 'audio' | 'video' = 'audio') {
       this.openWindow('call')

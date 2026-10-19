@@ -275,6 +275,9 @@ onBeforeUnmount(() => {
   teardownMedia()
 })
 
+/** 已经为哪一通写过时间线记录 */
+let loggedCall = ''
+
 /** 上次看到的阶段（只在变化时做一次处理，避免天天重置计时器） */
 let lastPhase = ''
 
@@ -296,7 +299,15 @@ const unwatch = setInterval(async () => {
     }
   }
   if (phaseNow === 'active') startTicker()
-  if (phaseNow === 'ended') teardownMedia()
+  if (phaseNow === 'ended') {
+    teardownMedia()
+    // 挂断后写一条通话记录进时间线（只写一次）
+    if (loggedCall !== state.requestId) {
+      loggedCall = state.requestId ?? ''
+      const info = store.schat.call as { peerName?: string; durationSec?: number; endedReason?: string }
+      store.logCall(info.peerName ?? '', info.durationSec ?? 0, info.endedReason ?? '')
+    }
+  }
 }, 200)
 onBeforeUnmount(() => clearInterval(unwatch))
 
