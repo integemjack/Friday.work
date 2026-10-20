@@ -100,8 +100,14 @@ async function openTerminal(): Promise<void> {
 
 async function closeTerminal(id: string): Promise<void> {
   if (!store.currentMachine) return
+  const hadTerminals = store.terminals.length > 0
+  // 本地先把这个标签摘掉（同 closeAllTerminalsOnWindowClose）：服务端的 terminals 事件回来只是确认，
+  // 桥断了也不能让标签挂着不走——下面 watch(terminals) 会负责清画面 / 切到剩下的那个
+  store.terminals = store.terminals.filter((terminal) => terminal.id !== id)
+  if (store.activeTerminalID === id) store.activeTerminalID = ''
+  // 关掉的就是最后一个：窗口里再没标签，跟着一起收掉
+  store.closeTerminalWindowIfEmpty(hadTerminals)
   await rpc(store.currentMachine, 'term.close', { id }).catch(() => {})
-  if (currentID === id) currentID = ''
 }
 
 /** 终端窗口关掉时：把里面挂着的终端全部真关掉（term.close）。
@@ -114,6 +120,8 @@ function closeAllTerminalsOnWindowClose(): void {
   // 先把本地列表清掉（标签随窗口一起消失）；服务端的 terminals 事件回来只是确认，断了也不残留
   store.terminals = []
   store.activeTerminalID = ''
+  currentID = ''
+  term?.reset() // 标签清掉的同时画面也得清掉（下面的 watch 因为 currentID 已经空了不会再跑）
   for (const id of ids) {
     void rpc(machine, 'term.close', { id }).catch(() => {})
   }
@@ -160,7 +168,10 @@ onMounted(async () => {
   observer.observe(container.value)
 
   doFit()
-  if (store.activeTerminalID) await attach(store.activeTerminalID)
+  // 只挂列表里真的存在的那个：刷新前留下的 activeTerminalID 可能已经指向一个关掉的终端，
+  // 直接 attach 会在空标签栏下面写一行「接不上这个终端」——那也是一种残留
+  const want = wantedTerminal()
+  if (want) await attach(want)
 })
 
 // 切主题时热切换终端配色（xterm 支持运行时改 options.theme）
@@ -178,6 +189,33 @@ onBeforeUnmount(() => {
   term?.dispose()
   term = null
 })
+
+/** 该挂哪个终端：活动的那个还在列表里就用它，已经不在了（跑完被回收 / Agent close_terminal / 点了 ×）
+ *  就退到剩下的第一个，一个都不剩就是空。 */
+function wantedTerminal(): string {
+  const id = store.activeTerminalID
+  if (id && store.terminals.some((terminal) => terminal.id === id)) return id
+  return store.terminals[0]?.id ?? ''
+}
+
+// 列表 / 活动终端一变就跟过去：这是「标签关了、画面还挂着上一个终端的输出」的根治处——
+// 光清掉标签不够，xterm 是本地实例，服务端不会再推它的内容，必须自己 reset。
+// 挂在 watch 上而不是 closeTerminal 里：终端消失的路径不止点 ×（Agent 关掉、shell 退出被回收、
+// 快照整份换掉），它们最后都落到这里。
+watch(
+  () => [store.activeTerminalID, store.terminals.map((terminal) => terminal.id).join(',')] as const,
+  () => {
+    if (!term) return
+    const want = wantedTerminal()
+    if (want === currentID) return
+    if (!want) {
+      currentID = ''
+      term.reset() // 没有终端可挂了：画面跟着标签一起清干净，只留下面的空态提示
+      return
+    }
+    void attach(want)
+  }
+)
 
 // 终端窗口从窗口列表里消失 = 用户把它关了：把里面挂着的终端全部真关掉（closeAllTerminalsOnWindowClose）。
 // 用 watch 窗口列表而不是 onBeforeUnmount：热更新也会卸载重挂组件，那样不能把终端带走；
@@ -207,7 +245,7 @@ async function selectTerminal(id: string): Promise<void> {
           v-for="terminal in store.terminals"
           :key="terminal.id"
           class="tab"
-          :class="{ active: terminal.id === currentID }"
+          :class="{ active: terminal.id === store.activeTerminalID }"
           :title="terminal.command || terminal.shell"
           @click="selectTerminal(terminal.id)"
         >

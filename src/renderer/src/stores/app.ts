@@ -673,7 +673,17 @@ export const useAppStore = defineStore('app', {
 
     // MARK: M2 实时卡片
 
+    /** 终端标签从「有」变成「一个都不剩」：终端窗口跟着关掉——空窗口里只剩一句提示，留着没意义。
+     *  只在真的清空过的那一下关（hadTerminals 是赋值前的状态）：用户自己点开窗口、还没按 ＋ 的时候
+     *  列表本来就是空的，不能一开就被关掉。 */
+    closeTerminalWindowIfEmpty(hadTerminals: boolean) {
+      if (!hadTerminals || this.terminals.length > 0) return
+      const win = this.windows.find((item) => item.kind === 'terminals')
+      if (win) this.closeWindow(win.id)
+    },
+
     resetLiveState() {
+      const hadTerminals = this.terminals.length > 0
       this.terminals = []
       this.terminalsAvailable = false
       this.terminalsReason = ''
@@ -687,6 +697,7 @@ export const useAppStore = defineStore('app', {
       this.activeFile = null
       this.activities = {}
       this.approvals = {}
+      this.closeTerminalWindowIfEmpty(hadTerminals)
     },
 
     /** 取当前机器的终端/浏览器/子 Agent 状态（hello 快照 + 事件维护，切换/重连后调） */
@@ -703,6 +714,7 @@ export const useAppStore = defineStore('app', {
         }
         this.engines = state.engines ?? []
         this.defaultEngineID = state.defaultEngineID ?? ''
+        const hadTerminals = this.terminals.length > 0
         this.terminals = state.terminals?.terminals ?? []
         this.terminalsAvailable = state.terminals?.available ?? false
         this.terminalsReason = state.terminals?.reason ?? ''
@@ -711,9 +723,14 @@ export const useAppStore = defineStore('app', {
         this.browserReason = state.browser?.reason ?? ''
         this.teamRuns = state.team?.runs ?? []
         this.runnerState = state.runner ?? null
+        // 同上：换机器 / 重连后拿到的快照里已经没有它了，就别当活动终端留着
+        if (this.activeTerminalID && !this.terminals.some((terminal) => terminal.id === this.activeTerminalID)) {
+          this.activeTerminalID = ''
+        }
         if (!this.activeTerminalID && this.terminals.length > 0) {
           this.activeTerminalID = this.terminals[0]!.id
         }
+        this.closeTerminalWindowIfEmpty(hadTerminals)
       } catch {
         // 没连上时忽略
       }
@@ -974,9 +991,15 @@ export const useAppStore = defineStore('app', {
         case 'terminals': {
           const state = params as { terminals: TerminalInfo[]; available: boolean; reason?: string }
           const before = new Set(this.terminals.map((terminal) => terminal.id))
+          const hadTerminals = this.terminals.length > 0
           this.terminals = state.terminals ?? []
           this.terminalsAvailable = state.available
           this.terminalsReason = state.reason ?? ''
+          // 活动的那个已经不在这份快照里了（终端跑完被回收 / Agent 关掉）：清掉，
+          // 别让 activeTerminalID 指着一个没有标签的终端——下面会重新选一个存在的
+          if (this.activeTerminalID && !this.terminals.some((terminal) => terminal.id === this.activeTerminalID)) {
+            this.activeTerminalID = ''
+          }
           // Agent 用 run_in_terminal 开的新终端：一出现就选中并打开卡片（方案 §5.4）
           const fresh = this.terminals.find((terminal) => !before.has(terminal.id) && terminal.command)
           if (fresh) {
@@ -985,6 +1008,8 @@ export const useAppStore = defineStore('app', {
           } else if (!this.activeTerminalID && this.terminals.length > 0) {
             this.activeTerminalID = this.terminals[0]!.id
           }
+          // 终端跑完被关掉、Agent 收了终端：标签从有到无，窗口跟着收（卡片里的画面由 TerminalCard 自己清）
+          this.closeTerminalWindowIfEmpty(hadTerminals)
           break
         }
         case 'browser': {
