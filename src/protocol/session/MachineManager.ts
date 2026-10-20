@@ -347,10 +347,13 @@ export class MachineConnection {
 
   private teardown(): void {
     this.rpc?.failAll(new Error('连接已断开'))
-    if (this.workSignaling) {
-      this.workSignaling.hangup()
-      this.workSignaling.dispose()
-      this.workSignaling = null
+    // 先取快照、先置空再挂断：hangup() 可能同步触发信令回调重入 teardown()，
+    // 重入时看到 null 跳过；外层拿着局部变量走完，不会对 null 调 dispose（连接被顶掉时崩过）
+    const signaling = this.workSignaling
+    this.workSignaling = null
+    if (signaling) {
+      signaling.hangup()
+      signaling.dispose()
     }
     this.transport?.close()
     this.transport = null
