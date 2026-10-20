@@ -14,7 +14,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 自动升版：推 main 时如果 rolling 上已有“同版本号、不同提交”的构建，
+  # 说明这次推送忘了按规则人工升 package.json（历史上有会话忘升，导致
+  # 新构建仍叫旧版本号，客户端比对版本号也误判“已是最新”）。
+  # 这里自动把 patch +1、写回 main 再构建，不依赖人工；
+  # 人工已升版（rolling 版本 ≠ package.json 版本）或同一提交重建则不动。
+  bump-version:
+    name: Auto-bump patch version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bump patch version if needed
+        id: bump
+        run: |
+          set -euo pipefail
+          CUR=$(node -p "require('./package.json').version")
+          FINAL="$CUR"
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
+            && curl -fsSL "https://github.com/${{ github.repository }}/releases/download/rolling/latest.json" -o prev.json 2>/dev/null; then
+            PREV_VER=$(node -p "JSON.parse(require('fs').readFileSync('prev.json','utf8')).version")
+            PREV_COMMIT=$(node -p "(JSON.parse(require('fs').readFileSync('prev.json','utf8')).commit)||''")
+            if [ "$PREV_VER" = "$CUR" ] && [ -n "$PREV_COMMIT" ] && [ "$PREV_COMMIT" != "${{ github.sha }}" ]; then
+              NEW=$(node -e "const s='$CUR'.split('.');s[2]=Number(s[2])+1;console.log(s.join('.'))")
+              node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='$NEW';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add package.json
+              git commit -m "chore(release): bump $CUR -> $NEW (CI 自动升版，源提交 ${{ github.sha }}) [skip ci]"
+              git push origin HEAD:main
+              FINAL="$NEW"
+              echo "自动升版 $CUR -> $NEW"
+            else
+              echo "不升版：rolling=$PREV_VER/$PREV_COMMIT，本次=$CUR/${{ github.sha }}"
+            fi
+          else
+            echo "非 main push 或 rolling 不存在，不升版"
+          fi
+          echo "version=$FINAL" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: bump-version
     name: ${{ matrix.os }} / ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -28,6 +77,10 @@ jobs:
         arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
+
+      # 用 bump-version 定稿的版本号构建（自动升版时与 main 回写一致）
+      - name: Apply release version
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ needs.bump-version.outputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
 
       - uses: actions/setup-node@v4
         with:
@@ -70,11 +123,14 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [bump-version, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      - name: Apply release version
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ needs.bump-version.outputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
 
       - uses: actions/setup-node@v4
         with:
