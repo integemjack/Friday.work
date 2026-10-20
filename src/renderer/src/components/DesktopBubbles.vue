@@ -22,9 +22,14 @@ const TOP_SAFE = 60 // 桌面顶部安全边（HUD 之下）
 const BOTTOM_SAFE = 12 // 桌面底部安全边
 
 const elOf = new Map<string, HTMLElement>()
+/** 用户滚轮上翻过的气泡：流式跟随滚动要让路（别把正在看旧内容的人拽回底部）；
+ *  滚回底部附近时清除标记，恢复跟随 */
+const scrolledUp = new Map<string, true>()
 function setEl(id: string, el: unknown) {
-  if (el instanceof HTMLElement) elOf.set(id, el)
-  else elOf.delete(id)
+  if (el instanceof HTMLElement) {
+    elOf.set(id, el)
+    el.addEventListener('wheel', () => scrolledUp.set(id, true), { passive: true })
+  } else elOf.delete(id)
 }
 
 /** 越界修正 + 跟底：底边超出气泡层就整体上移；内部能滚时滚到最底（新内容从下面滚上来）。
@@ -46,7 +51,10 @@ async function adjust() {
     }
     const body = el.querySelector('.text')
     if (body instanceof HTMLElement && body.scrollHeight > body.clientHeight + 1) {
-      body.scrollTop = body.scrollHeight
+      const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48
+      if (nearBottom) scrolledUp.delete(bubble.id)
+      // 只在用户没有上翻（或已翻回底）时跟随到最新；用户停在上方看旧内容时不拽
+      if (!scrolledUp.has(bubble.id)) body.scrollTop = body.scrollHeight
     }
   }
 }
@@ -58,9 +66,10 @@ function onResize() {
 watch(
   () => store.bubbles.map((b) => `${b.id}:${b.text.length}:${b.fading}:${b.y}`).join('|'),
   () => {
-    // 顺手回收已删气泡的 md 缓存（气泡 5 秒渐隐后从数组移除，缓存不能跟着漏）
+    // 顺手回收已删气泡的 md 缓存与上翻标记（气泡 5 秒渐隐后从数组移除，缓存不能跟着漏）
     const alive = new Set(store.bubbles.map((b) => b.id))
     for (const id of mdHtml.keys()) if (!alive.has(id)) mdHtml.delete(id)
+    for (const id of scrolledUp.keys()) if (!alive.has(id)) scrolledUp.delete(id)
     void adjust()
   },
   { immediate: true }

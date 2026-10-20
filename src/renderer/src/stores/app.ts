@@ -319,6 +319,9 @@ export const useAppStore = defineStore('app', {
     opCards: [] as DesktopOp[],
     /** 流式标记：messageID → 已投过气泡的 thinking/text 长度（增量从这里算） */
     streamMarks: {} as Record<string, { thinking: number; text: number }>,
+    /** 气泡全文记忆：id（会话:类型）→ 最后全文。气泡 5 秒渐隐后会从数组删除，
+     *  流式一断再续时只能重建气泡——没有这份记忆新气泡就只剩尾巴那截（显示不全） */
+    castTexts: {} as Record<string, string>,
     /** 投出物置顶层级：气泡与操作卡共用，有新活动的递增抬到最前（同一投层里跨气泡/卡可比） */
     castZTop: 10,
     /** 全局置顶节流：上次抬 z 的时刻（整个投层一个窗口；castTick 每秒检查，到期抬最活跃的） */
@@ -1368,7 +1371,9 @@ export const useAppStore = defineStore('app', {
       return best
     },
 
-    /** 投一条气泡（思考/文本）：同一会话同类内容续在同一条气泡里，5 秒无新内容渐隐 */
+    /** 投一条气泡（思考/文本）：同一会话同类内容续在同一条气泡里，5 秒无新内容渐隐。
+     *  渐隐删除只是「看不见」，全文记在 castTexts；断流超过 5 秒后再来增量时按全文重建，
+     *  不能只投增量那截（流式间隔一大就会变成「内容只剩一小段」） */
     pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string) {
       if (!chunk.trim()) return
       // 空白归一但保留换行：行内空白压成单个空格、连续换行压成单个换行（全压成空格会把整段思考挤成一行）。
@@ -1380,11 +1385,15 @@ export const useAppStore = defineStore('app', {
         .replace(/\n{2,}/g, '\n')
       const id = `${conversationID}:${kind}`
       const existing = this.bubbles.find((item) => item.id === id)
+      // 基底：气泡还在用气泡全文；已渐隐删除用 castTexts 里的全文（断流重建时续上，不丢前文）
+      const base = existing ? existing.text : (this.castTexts[id] ?? '')
+      const gap = base && !/\s$/.test(base) && !/^\s/.test(add) ? ' ' : ''
+      const full = (base + gap + add).trim()
+      this.castTexts[id] = full
       if (existing) {
         // 全量内容不截断（气泡不限高）。内容更新只记活跃时刻（activeAt），不当场抬 z——
         // 由 castTick 在 5 秒窗口到期时抬「当前最活跃」的；窗口内更新照常续文本、刷新渐隐计时
-        const gap = existing.text && !/\s$/.test(existing.text) && !/^\s/.test(add) ? ' ' : ''
-        existing.text = existing.text + gap + add
+        existing.text = full
         existing.activeAt = Date.now()
         window.clearTimeout(existing.timer)
         existing.fading = false
@@ -1397,7 +1406,7 @@ export const useAppStore = defineStore('app', {
         id,
         conversationID,
         kind,
-        text: add.trim(),
+        text: full,
         x: spot.x,
         y: spot.y,
         z: ++this.castZTop,
