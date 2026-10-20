@@ -1,0 +1,66 @@
+/* ============================================================
+   桌面投出物公共外观（styles/main.css 引入；思考/回复气泡与操作卡复用这一套）
+   覆盖：定位与点击、面板毛玻璃、标题行右缘渐隐、内部滚动条、渐隐/进场动画。
+   两种形态的差异（圆角/边框/底色/阴影/内边距/字体）留在各自组件 scoped 里。
+   限高单源 lib/cast.ts（main.ts 注入 --cast-max-h）：气泡限在根上、
+   卡限在 .content/.result 上，各自引用。
+   ============================================================ */
+
+.cast {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* 标题行：占满整宽，超出的会话名在右缘渐隐，不用 ... 截断 */
+.cast-head {
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+}
+
+/* 内部滚动条：比全局窄一半的细光条（贴边的负 margin 在各自组件，随各自内边距不同） */
+.cast-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cast-scroll::-webkit-scrollbar-thumb {
+  background: var(--accent-a45);
+  border: none;
+  border-radius: 3px;
+}
+
+.cast-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-a70);
+}
+
+.cast-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 渐隐：5 秒计时到 → 加 fading → 动画完从数组里删（气泡与卡同款） */
+.cast.fading {
+  animation: cast-out 0.6s ease forwards;
+}
+
+@keyframes cast-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
+/* 进场：两处 transition-group 都是 name="pop"（全项目仅这两个投出物在用） */
+.pop-enter-active {
+  animation: cast-in 0.22s ease;
+}
+
+@keyframes cast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 桌面操作卡（2026-10 布局改版）：会话里的操作以极简终端样式直接投在桌面上——
 // 没有标签页，只有「来自哪段会话 / 内容 / 结果」；有结果后 5 秒渐隐消失。
+// 面板基础（定位/毛玻璃/标题行渐隐/滚动条/进出场动画）与思考/回复气泡共用 styles/cast.css；
+// 所有卡一套限高（不截断，超高内部滚动），无 tall 普通卡之分。
 // 审批也走这里（带 批准/拒绝 按钮）；数据与定时全在 store（pushOp / scheduleOpFade / fadeOp）。
 import { useAppStore } from '../stores/app.js'
 import InlineMedia from './InlineMedia.vue'
@@ -26,17 +28,17 @@ const statusMark: Record<string, string> = {
       <div
         v-for="card in store.opCards"
         :key="card.id"
-        class="op"
-        :class="[card.status, { fading: card.fading, tall: card.tall }]"
+        class="op cast"
+        :class="[card.status, { fading: card.fading }]"
         :style="{ left: `${card.x}px`, top: `${card.y}px`, zIndex: card.z }"
         @click="card.status !== 'awaitingApproval' && card.status !== 'running' && store.fadeOp(card.id)"
       >
-        <div class="from">来自 {{ titleOf(card.conversationID) }}</div>
+        <div class="from cast-head">来自 {{ titleOf(card.conversationID) }}</div>
         <div class="line cmd">
           <span class="mark">{{ statusMark[card.status] ?? '·' }}</span>
           <span class="body">
             <span class="title">{{ card.title }}</span>
-            <span v-if="card.content" class="content">{{ card.content }}</span>
+            <span v-if="card.content" class="content cast-scroll">{{ card.content }}</span>
           </span>
         </div>
         <!-- 看图/看视频的卡：媒体直接嵌在卡里（图片内联显示、视频静音循环自动播放）。
@@ -49,7 +51,7 @@ const statusMark: Record<string, string> = {
           :conversationID="card.conversationID"
           compact
         />
-        <div v-if="card.result" class="line result" :class="card.status">{{ card.result }}</div>
+        <div v-if="card.result" class="line result cast-scroll" :class="card.status">{{ card.result }}</div>
         <div v-if="card.status === 'awaitingApproval'" class="approval-row">
           <button class="abtn" @click.stop="store.resolveApproval(card.id, false)">拒绝</button>
           <button class="abtn primary" @click.stop="store.resolveApproval(card.id, true)">批准</button>
@@ -67,9 +69,8 @@ const statusMark: Record<string, string> = {
   pointer-events: none;
 }
 
+/* 面板基础（定位/点击穿透/毛玻璃/点击手型）在公共 .cast（styles/cast.css） */
 .op {
-  position: absolute;
-  pointer-events: auto;
   width: 400px;
   max-width: 44vw;
   padding: 6px 10px 8px;
@@ -77,10 +78,7 @@ const statusMark: Record<string, string> = {
   border: 1px solid var(--accent-a22);
   background: rgba(4, 8, 14, 0.86);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  cursor: pointer;
 }
 
 .from {
@@ -88,11 +86,7 @@ const statusMark: Record<string, string> = {
   letter-spacing: 1px;
   color: var(--text-3);
   margin-bottom: 3px;
-  /* 占满整宽，超出的会话名在右缘渐隐，不用 ... 截断 */
-  overflow: hidden;
-  white-space: nowrap;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
-  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  /* 右缘渐隐 mask 在公共 .cast-head */
 }
 
 .line {
@@ -144,43 +138,20 @@ const statusMark: Record<string, string> = {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 72px;
-  overflow: hidden;
 }
 
-/* 全量内容的卡（执行命令/写入文件/看图/看视频）：内容与结果不截断，
-   限高与思考气泡同源（lib/cast.ts，由 main.ts 注入为 --cast-max-h），内部滚动看全文 */
-.op.tall .content,
-.op.tall .result {
+/* 内容/结果统一一套限高（原普通卡 72px/96px 截断与全量卡的分叉已并入）：不截断文本，
+   限高与思考气泡同源（lib/cast.ts 经 --cast-max-h 注入），超高内部滚动看全文；
+   滚动条样式在公共 .cast-scroll。
+   滚动条贴紧卡右边框：负 margin 抵消卡的右内边距（10px），文字再补回右内边距。
+   不能加 scrollbar-gutter:stable——它会把滚动条连着预留槽一起缩到元素内侧，
+   离右边框空出一个滚动条宽（实验实测）；代价是滚动条出现时文字窄 6px，可接受 */
+.content,
+.result {
   max-height: var(--cast-max-h, 400px);
   overflow-y: auto;
-  /* 滚动条贴紧卡右边框：负 margin 抵消卡的右内边距（10px），文字再补回右内边距。
-     不能加 scrollbar-gutter:stable——它会把滚动条连着预留槽一起缩到元素内侧，
-     离右边框空出一个滚动条宽（实验实测）；代价是滚动条出现时文字窄 6px，可接受 */
   margin-right: -10px;
   padding-right: 10px;
-}
-
-.op.tall .content::-webkit-scrollbar,
-.op.tall .result::-webkit-scrollbar {
-  width: 6px;
-}
-
-.op.tall .content::-webkit-scrollbar-thumb,
-.op.tall .result::-webkit-scrollbar-thumb {
-  background: var(--accent-a45);
-  border: none;
-  border-radius: 3px;
-}
-
-.op.tall .content::-webkit-scrollbar-thumb:hover,
-.op.tall .result::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-a70);
-}
-
-.op.tall .content::-webkit-scrollbar-track,
-.op.tall .result::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .op-media {
@@ -195,8 +166,6 @@ const statusMark: Record<string, string> = {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 96px;
-  overflow: hidden;
 }
 
 .result.failed,
@@ -239,26 +208,5 @@ const statusMark: Record<string, string> = {
   background: var(--accent-a15, rgba(80, 170, 255, 0.15));
 }
 
-/* 渐隐：结果后 5 秒计时到 → fadeOp 加 fading → 动画完从数组里删 */
-.op.fading {
-  animation: op-out 0.6s ease forwards;
-}
-
-@keyframes op-out {
-  to {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
-.pop-enter-active {
-  animation: op-in 0.18s ease;
-}
-
-@keyframes op-in {
-  from {
-    opacity: 0;
-    transform: translateY(-5px);
-  }
-}
+/* 渐隐与进场动画在公共 .cast（.cast.fading / .pop-enter-active，styles/cast.css） */
 </style>
