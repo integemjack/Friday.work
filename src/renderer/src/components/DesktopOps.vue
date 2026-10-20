@@ -149,10 +149,10 @@ const statusMark: Record<string, string> = {
 }
 
 /* 全量内容的卡（执行命令/写入文件/看图/看视频）：内容与结果不截断，
-   各自限高与思考气泡一致（400，窗口矮时按窗口收紧），内部滚动看全文 */
+   限高与思考气泡同源（lib/cast.ts，由 main.ts 注入为 --cast-max-h），内部滚动看全文 */
 .op.tall .content,
 .op.tall .result {
-  max-height: min(400px, calc(100vh - 116px));
+  max-height: var(--cast-max-h, 400px);
   overflow-y: auto;
   /* 滚动条贴紧卡右边框：负 margin 抵消卡的右内边距（10px），文字再补回右内边距。
      不能加 scrollbar-gutter:stable——它会把滚动条连着预留槽一起缩到元素内侧，

@@ -5,6 +5,7 @@
 import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import { CAST_MAX_H, CAST_MIN_H } from '../lib/cast.js'
 
 const store = useAppStore()
 
@@ -40,12 +41,13 @@ async function adjust() {
   const layer = first ? (first.offsetParent as HTMLElement | null) : null
   if (!layer) return
   const limit = layer.clientHeight - BOTTOM_SAFE
-  const maxH = Math.max(120, limit - TOP_SAFE)
+  // layer 高 = 窗口高 - 标题栏 44，再扣顶安全边后与 lib/cast.ts 的 100vh-116 同式；下限同源 CAST_MIN_H
+  const maxH = Math.max(CAST_MIN_H, limit - TOP_SAFE)
   for (const bubble of store.bubbles) {
     const el = elOf.get(bubble.id)
     if (!el) continue
-    // 思考与回复气泡都限高 400px（超长内部滚动、自动滚到最新）；窗口矮时再按窗口高收紧
-    el.style.maxHeight = `${Math.min(400, maxH)}px`
+    // 思考与回复气泡都限高 CAST_MAX_H（单源 lib/cast.ts；超长内部滚动、自动滚到最新）；窗口矮时再按窗口高收紧
+    el.style.maxHeight = `${Math.min(CAST_MAX_H, maxH)}px`
     if (el.offsetTop + el.offsetHeight > limit) {
       store.shiftBubbleY(bubble.id, limit - el.offsetTop - el.offsetHeight)
     }
@@ -114,9 +116,10 @@ function titleOf(conversationID: string): string {
   position: absolute;
   pointer-events: auto;
   max-width: 360px;
-  /* 限高 400px：超长内部滚动（adjust() 会再按窗口高度收紧）；思考/回复一致。
-     底边不出桌面：超高先上移，顶到头再内部滚动（maxHeight 由 adjust() 按窗口高度设置） */
-  max-height: 400px;
+  /* 限高 400（单源 lib/cast.ts，经 --cast-max-h 注入）：超长内部滚动、思考/回复一致；
+     底边不出桌面：超高先上移，顶到头再内部滚动（maxHeight 由 adjust() 按窗口高度设置，
+     inline style 每次覆盖这里的初始值） */
+  max-height: var(--cast-max-h, 400px);
   display: flex;
   flex-direction: column;
   gap: 4px;

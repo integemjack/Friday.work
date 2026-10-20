@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
 import { isMediaTool } from '../lib/mediaTools.js'
+import { castLimitH } from '../lib/cast.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
 import {
@@ -1335,17 +1336,15 @@ export const useAppStore = defineStore('app', {
      *  避让值妥协取 400（与思考一致）：再大会把采样空间挤到退让。 */
     castMaxSize(kind: 'bubble' | 'op'): { w: number; h: number } {
       if (kind === 'op') return { w: 400, h: 240 } // 卡内容截断在 content 72 + result 96，总高封顶约 240
-      // 与 DesktopBubbles.adjust 的限高同源：窗口高 - 标题栏 44 - 顶安全 60 - 底安全 12
-      const maxH = Math.max(120, window.innerHeight - 116)
-      return { w: 360, h: Math.min(400, maxH) }
+      // 限高单源 lib/cast.ts：castLimitH(窗口高) = min(400, max(120, 窗口高-116))，与 CSS 的 --cast-max-h 同式
+      return { w: 360, h: castLimitH(window.innerHeight) }
     },
 
     /** 全量内容卡的避让尺寸：内容+结果各限 400，总高可到 800+，避让取气泡同款妥协值
      *  （400）——再大会把采样空间挤到退让；宽用操作卡自己的 400 */
     castOpMaxSize(tall: boolean): { w: number; h: number } {
       if (!tall) return this.castMaxSize('op')
-      const maxH = Math.max(120, window.innerHeight - 116)
-      return { w: 400, h: Math.min(400, maxH) }
+      return { w: 400, h: castLimitH(window.innerHeight) }
     },
 
     /** 桌面主区里的随机落点（避开左侧会话列、右侧面板，留边距）：
