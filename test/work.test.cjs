@@ -86,6 +86,43 @@ test('work 信令：还没被接受就挂断 → request_cancel（口径同 Call
   assert.equal(sent[1].data.type, 'request_cancel')
 })
 
+test('work 信令：hangup 带「新的连接来了」→ ended 标记 replaced（上层不重拨）', () => {
+  const { signaling, sent, events } = rig()
+  signaling.dial(100)
+  const requestId = sent[0].data.requestId
+  signaling.onResponse(requestId, true, '')
+  // 旧版服务端（≤ 2.43）新拨顶旧时发的 hangup：reason 在信令帧顶层
+  signaling.onSignal(requestId, 'hangup', '', '新的连接来了')
+  assert.equal(events.at(-1).kind, 'ended')
+  assert.equal(events.at(-1).replaced, true)
+  assert.ok(events.at(-1).reason.includes('另一台设备'))
+})
+
+test('work 信令：普通 hangup / 别的 reason → 不算被顶，照旧重拨', () => {
+  const { signaling, sent, events } = rig()
+  signaling.dial(100)
+  const requestId = sent[0].data.requestId
+  signaling.onResponse(requestId, true, '')
+  // 无 reason（服务端收尾不带原因）、别的 reason（通道断了）
+  signaling.onSignal(requestId, 'hangup', '')
+  assert.equal(events.at(-1).replaced, false)
+  assert.equal(events.at(-1).reason, '机器人挂断了工作连接')
+
+  const second = rig()
+  second.signaling.dial(100)
+  second.signaling.onResponse(second.sent[0].data.requestId, true, '')
+  second.signaling.onSignal(second.sent[0].data.requestId, 'hangup', '', '通道断了')
+  assert.equal(second.events.at(-1).replaced, false)
+})
+
+test('work 信令：英文机器码 replaced 也认（服务端未来换成机器可读码）', () => {
+  const { signaling, sent, events } = rig()
+  signaling.dial(100)
+  const requestId = sent[0].data.requestId
+  signaling.onSignal(requestId, 'hangup', '', 'replaced')
+  assert.equal(events.at(-1).replaced, true)
+})
+
 // MARK: 分片器
 
 test('小消息：一条文本帧原样往返', () => {

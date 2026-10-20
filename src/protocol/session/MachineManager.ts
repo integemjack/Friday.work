@@ -55,12 +55,15 @@ export class MachineConnection {
   engines: EngineConfigView[] = []
   /** 新对话默认引擎 */
   defaultEngineID = ''
+  /** 运行状态（hello 快照 + runner 事件维护；标题栏的实时智能体数 / token 速度用） */
+  runner?: RunnerState
 
   liveState(): MachineLiveState {
     return {
       terminals: this.terminals,
       browser: this.browser,
       team: this.team,
+      runner: this.runner,
       engines: this.engines,
       defaultEngineID: this.defaultEngineID
     }
@@ -171,6 +174,7 @@ export class MachineConnection {
       }
       if (method === 'runner') {
         const runner = params as RunnerState | undefined
+        this.runner = runner
         this.hasPendingApproval = !!runner && runner.pendingApproval.length > 0
       }
       this.host.onEvent(this, method, params)
@@ -181,6 +185,18 @@ export class MachineConnection {
 
   private onWorkEvent(event: WorkSignalEvent): void {
     if (event.kind === 'ended') {
+      // 被同一账号的另一台设备顶掉（旧版服务端的「新拨顶旧」）：不重拨——
+      // 重拨会把对方顶掉、来回互踢；等服务端升到 2.44+（多端并存）或用户手动重连
+      if (event.replaced) {
+        this.wanted = false
+        this.clearReconnect()
+        this.teardown()
+        this.state = 'failed'
+        this.detail = '同一账号的另一台设备正在使用这台机器（服务端 ≤ 2.43 会顶掉已有连接）'
+        this.connecting = false
+        this.host.onStateChange(this)
+        return
+      }
       // 信令断了（被拒 / 超时 / 对端挂断）：走传输断开的路（退避重拨用新 requestId）
       this.onTransportDown(event.reason)
       return
@@ -235,7 +251,8 @@ export class MachineConnection {
       signaling.onSignal(
         requestId,
         typeof data.type === 'string' ? data.type : '',
-        typeof data.payload === 'string' ? data.payload : ''
+        typeof data.payload === 'string' ? data.payload : '',
+        typeof data.reason === 'string' ? data.reason : ''
       )
       return true
     }
@@ -310,6 +327,7 @@ export class MachineConnection {
       this.engines = engines.engines ?? []
       this.defaultEngineID = engines.defaultEngineID ?? ''
     }
+    if (state.runner) this.runner = state.runner
   }
 
   private onTransportDown(reason?: string): void {

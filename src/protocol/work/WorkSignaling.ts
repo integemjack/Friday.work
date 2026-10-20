@@ -23,7 +23,12 @@ export interface WorkSignalingHost {
 export type WorkSignalEvent =
   | { kind: 'accepted'; requestId: string }
   | { kind: 'signal'; requestId: string; type: string; payload: string }
-  | { kind: 'ended'; requestId: string; reason: string }
+  | { kind: 'ended'; requestId: string; reason: string; replaced?: boolean }
+
+/** 服务端 hangup 的 reason：同账号另一台设备把这条连接顶掉了
+ *  （friday-server ≤ 2.43 的「新拨顶旧」；2.44 起多端并存不再发）。被顶时不能自动重拨——
+ *  重拨会把对方顶掉、来回互踢 */
+const REPLACED_REASONS = ['新的连接来了', 'replaced']
 
 export class WorkSignaling {
   private requestId = ''
@@ -97,11 +102,12 @@ export class WorkSignaling {
     }
   }
 
-  /** p2p_signaling 进来（offer / answer / ice_candidate / hangup） */
-  onSignal(requestId: string, type: string, payload: string): void {
+  /** p2p_signaling 进来（offer / answer / ice_candidate / hangup）；hangup 的 reason 在信令帧的顶层字段 */
+  onSignal(requestId: string, type: string, payload: string, reason = ''): void {
     if (this.ended || requestId !== this.requestId) return
     if (type === 'hangup' || type === 'request_cancel') {
-      this.finish('机器人挂断了工作连接')
+      const replaced = type === 'hangup' && REPLACED_REASONS.includes(reason)
+      this.finish(replaced ? '同一账号的另一台设备把这条连接顶掉了' : '机器人挂断了工作连接', replaced)
       return
     }
     this.onEvent({ kind: 'signal', requestId, type, payload })
@@ -138,7 +144,7 @@ export class WorkSignaling {
     this.finish('已断开')
   }
 
-  private finish(reason: string): void {
+  private finish(reason: string, replaced = false): void {
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = null
@@ -146,7 +152,7 @@ export class WorkSignaling {
     if (this.ended) return
     this.ended = true
     const requestId = this.requestId
-    this.onEvent({ kind: 'ended', requestId, reason })
+    this.onEvent({ kind: 'ended', requestId, reason, replaced })
   }
 
   dispose(): void {
