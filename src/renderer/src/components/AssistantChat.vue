@@ -118,19 +118,16 @@ const statusLine = computed(() => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: var(--panel-card-deep-a55, rgba(8, 14, 24, 0.55));
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* 常驻元素融在桌面上：无卡片壳（透明、无边框、无阴影） */
+  background: transparent;
+  border: none;
 }
 
 .head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
+  padding: 2px 4px 6px;
 }
 
 .head-title {

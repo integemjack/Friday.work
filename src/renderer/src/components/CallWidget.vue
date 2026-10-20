@@ -532,14 +532,12 @@ onBeforeUnmount(() => clearInterval(unwatch))
 </template>
 
 <style scoped>
-/* 常驻在右栏顶部（不再是浮动挂件）：App.vue 的右栏容器控制宽度，这里铺满即可 */
+/* 常驻在右栏顶部，融在桌面上：无卡片壳（透明、无边框、无阴影）；画面区本身保留一块播放面 */
 .call-widget {
   position: relative;
   flex: none;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--panel);
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.32);
+  background: transparent;
+  border: none;
   overflow: hidden;
   user-select: none;
 }
@@ -547,6 +545,7 @@ onBeforeUnmount(() => clearInterval(unwatch))
 .media {
   position: relative;
   height: 138px;
+  border-radius: 12px;
   /* 半透明暗底：无画面时背景网格透出来；有画面时被视频帧盖住，不影响观看 */
   background: rgba(6, 11, 20, 0.55);
   display: flex;
