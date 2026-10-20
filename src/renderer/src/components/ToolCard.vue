@@ -236,12 +236,12 @@ function symbol(): string {
 
 /* 贾维斯界面：工具卡片变任务遥测条（左侧状态条在全局 jarvis.css） */
 [data-theme='jarvis'] .tool-card {
-  background: rgba(10, 25, 45, 0.45);
-  border-color: rgba(34, 211, 238, 0.18);
+  background: var(--panel-card-deep-a45);
+  border-color: var(--accent-a18);
 }
 
 [data-theme='jarvis'] .tool-card.open {
-  border-color: rgba(34, 211, 238, 0.32);
+  border-color: var(--accent-a32);
 }
 
 [data-theme='jarvis'] .tool-title {
@@ -257,11 +257,11 @@ function symbol(): string {
 
 [data-theme='jarvis'] .tool-status.run {
   color: var(--accent);
-  text-shadow: 0 0 8px rgba(34, 211, 238, 0.55);
+  text-shadow: 0 0 8px var(--accent-a55);
 }
 
 [data-theme='jarvis'] .tool-symbol {
-  filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.5));
+  filter: drop-shadow(0 0 5px var(--accent-a50));
 }
 
 [data-theme='jarvis'] .section-label {

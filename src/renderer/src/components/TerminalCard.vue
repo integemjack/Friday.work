@@ -331,12 +331,12 @@ async function selectTerminal(id: string): Promise<void> {
 /* 贾维斯界面：终端变 CRT 全息屏——透明底（文字浮在全息网格上）、青色 tab、扫描线覆层 */
 [data-theme='jarvis'] .term-card {
   background: transparent;
-  box-shadow: inset 0 0 60px rgba(34, 211, 238, 0.045);
+  box-shadow: inset 0 0 60px var(--accent-a4-5);
 }
 
 [data-theme='jarvis'] .term-tabs {
-  background: rgba(10, 25, 45, 0.28);
-  border-bottom-color: rgba(34, 211, 238, 0.25);
+  background: var(--panel-card-deep-a28);
+  border-bottom-color: var(--accent-a25);
 }
 
 [data-theme='jarvis'] .tab {
@@ -345,11 +345,11 @@ async function selectTerminal(id: string): Promise<void> {
 }
 
 [data-theme='jarvis'] .tab:hover {
-  background: rgba(34, 211, 238, 0.08);
+  background: var(--accent-a8);
 }
 
 [data-theme='jarvis'] .tab.active {
-  background: rgba(34, 211, 238, 0.14);
+  background: var(--accent-a14);
   color: #c9f2ff;
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }
@@ -360,7 +360,7 @@ async function selectTerminal(id: string): Promise<void> {
 
 [data-theme='jarvis'] .tab .dot.running {
   background: var(--ok);
-  box-shadow: 0 0 6px rgba(45, 212, 167, 0.7);
+  box-shadow: 0 0 6px var(--ok-a70);
 }
 
 [data-theme='jarvis'] .term-host {
@@ -375,7 +375,7 @@ async function selectTerminal(id: string): Promise<void> {
   pointer-events: none;
   background: repeating-linear-gradient(
     180deg,
-    rgba(34, 211, 238, 0.028) 0 1px,
+    var(--accent-a2-8) 0 1px,
     transparent 1px 3px
   );
 }

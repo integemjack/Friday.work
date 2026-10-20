@@ -663,26 +663,26 @@ watch(() => store.detail?.conversationID, () => void loadChanges())
 }
 /* 贾维斯界面：文件窗变档案终端——工具条、路径、目录行、diff 都青色化（半透明，背景透出来） */
 [data-theme='jarvis'] .toolbar {
-  background: rgba(10, 25, 45, 0.28);
-  border-bottom-color: rgba(34, 211, 238, 0.2);
+  background: var(--panel-card-deep-a28);
+  border-bottom-color: var(--accent-a20);
   font-family: var(--font-hud);
 }
 
 [data-theme='jarvis'] .path {
-  color: #7dd3fc;
+  color: var(--code-inline-fg);
 }
 
 [data-theme='jarvis'] .crumb:hover:not(:disabled) {
-  background: rgba(34, 211, 238, 0.1);
+  background: var(--accent-a10);
 }
 
 [data-theme='jarvis'] .entry.active {
-  background: rgba(34, 211, 238, 0.1);
+  background: var(--accent-a10);
   box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
 [data-theme='jarvis'] .entry:hover {
-  background: rgba(34, 211, 238, 0.06);
+  background: var(--accent-a6);
 }
 
 [data-theme='jarvis'] .size,
@@ -697,6 +697,6 @@ watch(() => store.detail?.conversationID, () => void loadChanges())
 
 [data-theme='jarvis'] .diff {
   /* diff 是文本对照区，保留较高不透明度保可读性，但不再是实底 */
-  background: rgba(7, 20, 36, 0.6);
+  background: var(--panel-code-a60);
 }
 </style>
