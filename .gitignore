@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 .tmp/
+.tmp-*
 # dev:debug 的沙盒用户数据（扫码凭据/机器存档，不能被 npm test 清 .tmp 带走）
 .dev-user-data/
 *.log
