@@ -104,6 +104,37 @@ jobs:
           GIT_COMMIT: ${{ github.sha }}
         run: node scripts/make-update-manifest.cjs artifacts "$TAG" > artifacts/latest.json
 
+      # rolling 是同一个 tag 反复覆盖，旧版本的产物会一直堆积（曾积到 90+ 个文件，
+      # 从 0.1.0 到最新版混在一起，容易下到与 package.json 不一致的旧包）。
+      # 发布前把不属于当前版本的旧产物清掉，rolling 页面永远只剩最新一套。
+      - name: Prune stale rolling assets
+        if: steps.rel.outputs.tag == 'rolling'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "保留版本：$VERSION"
+          gh api "repos/${{ github.repository }}/releases/tags/rolling" \
+            --jq '.assets[] | [.id, .name] | @tsv' \
+          | while IFS=$'\t' read -r id name; do
+              case "$name" in
+                "Friday-Work-$VERSION-"*|latest.json|SHA256SUMS.txt)
+                  echo "保留 $name" ;;
+                *)
+                  echo "删除 $name"
+                  gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" ;;
+              esac
+            done
+
+      # 直连下载大安装包（~112MB）经常中断，NSIS 对不完整的文件会报
+      # “Installer integrity check has failed”直接无法安装。
+      # 附一份校验和，下载后 sha256sum -c 即可确认文件完整。
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Publish to GitHub Release
         uses: ncipollo/release-action@v1
         with:
@@ -114,11 +145,16 @@ jobs:
           replacesArtifacts: true
           makeLatest: true
           body: |
-            全自动构建（GitHub Actions）：Windows / macOS / Linux × x64 / arm64。
+            全自动构建（GitHub Actions）：Windows / macOS / Linux × x64 / arm64。rolling 只保留最新版本的一套产物。
 
-            - **Windows**：NSIS 安装包 + 便携 zip（未签名）
+            - **Windows**：NSIS 安装包 + 便携 zip（未签名）。普通 PC 选 win-x64，Windows on ARM 设备选 win-arm64
             - **macOS**：dmg + app zip（未签名；首次打开：右键 → 打开，或在 系统设置 → 隐私与安全性 里放行）
             - **Linux**：AppImage + deb
+
+            **下载与安装注意**（安装器报“NSIS Error / Installer integrity check has failed”＝文件没下完整）：
+            - 安装包约 100–155MB，网络不稳时浏览器可能下载中断；失败请重试，或用支持断点续传的方式下载（`curl -L -C - -o 文件名 下载链接`）
+            - 下载后对照 **SHA256SUMS.txt** 校验完整性：`sha256sum -c SHA256SUMS.txt`（Windows 可用 `certutil -hashfile 文件 SHA256`）
+            - Windows 首次运行若弹“Windows 已保护你的电脑”（SmartScreen）：点 **更多信息 → 仍要运行**
 
             提交：${{ github.sha }}
 
