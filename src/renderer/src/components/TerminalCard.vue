@@ -6,9 +6,10 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TermAttachResult } from '../../../protocol/rpc/protocol.js'
 import { host, rpc } from '../lib/host.js'
+import { uiTheme } from '../lib/theme.js'
 import { useAppStore } from '../stores/app.js'
 
 const store = useAppStore()
@@ -18,6 +19,43 @@ const unavailable = computed(() => !store.terminalsAvailable && !!store.terminal
 
 let term: Terminal | null = null
 let fitAddon: FitAddon | null = null
+
+// xterm 的配色是 JS 层主题（CSS 盖不到）：贾维斯下换深空蓝底 + 青色光标/选区 + 调过的 ANSI 色板
+const XTERM_THEMES = {
+  system: {
+    background: '#14151a',
+    foreground: '#e6e6e8',
+    cursor: '#8ab4f8',
+    selectionBackground: '#3a4a6b'
+  },
+  jarvis: {
+    background: '#071018',
+    foreground: '#c9e7f2',
+    cursor: '#22d3ee',
+    cursorAccent: '#071018',
+    selectionBackground: 'rgba(34, 211, 238, 0.28)',
+    black: '#0c1a2a',
+    red: '#ff6b81',
+    green: '#3ddc97',
+    yellow: '#ffd166',
+    blue: '#6bb8ff',
+    magenta: '#c792ea',
+    cyan: '#4dd9e8',
+    white: '#c9d6e3',
+    brightBlack: '#4a6a80',
+    brightRed: '#ff8fa0',
+    brightGreen: '#6fe7b4',
+    brightYellow: '#ffe08a',
+    brightBlue: '#93ccff',
+    brightMagenta: '#dcb3f5',
+    brightCyan: '#7ce6f2',
+    brightWhite: '#eef8fc'
+  }
+} as const
+
+function xtermTheme() {
+  return XTERM_THEMES[uiTheme.value === 'jarvis' ? 'jarvis' : 'system']
+}
 let currentID = ''
 let unsubscribe: (() => void) | null = null
 let observer: ResizeObserver | null = null
@@ -103,12 +141,7 @@ onMounted(async () => {
     cursorBlink: true,
     fontSize: 12.5,
     fontFamily: 'Consolas, "Cascadia Mono", "Sarasa Mono SC", monospace',
-    theme: {
-      background: '#14151a',
-      foreground: '#e6e6e8',
-      cursor: '#8ab4f8',
-      selectionBackground: '#3a4a6b'
-    },
+    theme: xtermTheme(),
     scrollback: 4000,
     allowProposedApi: true
   })
@@ -141,6 +174,11 @@ onMounted(async () => {
 
   doFit()
   if (store.activeTerminalID) await attach(store.activeTerminalID)
+})
+
+// 切主题时热切换终端配色（xterm 支持运行时改 options.theme）
+watch(uiTheme, () => {
+  if (term) term.options.theme = xtermTheme()
 })
 
 onBeforeUnmount(() => {
@@ -280,5 +318,57 @@ async function selectTerminal(id: string): Promise<void> {
   padding: 8px 12px;
   font-size: 12px;
   color: #7a8090;
+}
+
+/* 贾维斯界面：终端变 CRT 全息屏——深蓝底、青色 tab、扫描线覆层 */
+[data-theme='jarvis'] .term-card {
+  background: #071018;
+  box-shadow: inset 0 0 60px rgba(34, 211, 238, 0.045);
+}
+
+[data-theme='jarvis'] .term-tabs {
+  background: rgba(10, 25, 45, 0.7);
+  border-bottom-color: rgba(34, 211, 238, 0.25);
+}
+
+[data-theme='jarvis'] .tab {
+  color: #6f9fb8;
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .tab:hover {
+  background: rgba(34, 211, 238, 0.08);
+}
+
+[data-theme='jarvis'] .tab.active {
+  background: rgba(34, 211, 238, 0.14);
+  color: #c9f2ff;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
+[data-theme='jarvis'] .tab .dot {
+  background: #2c5a72;
+}
+
+[data-theme='jarvis'] .tab .dot.running {
+  background: var(--ok);
+  box-shadow: 0 0 6px rgba(45, 212, 167, 0.7);
+}
+
+[data-theme='jarvis'] .term-host {
+  position: relative;
+}
+
+/* CRT 扫描线：极淡，纯装饰不挡交互 */
+[data-theme='jarvis'] .term-host::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(34, 211, 238, 0.028) 0 1px,
+    transparent 1px 3px
+  );
 }
 </style>

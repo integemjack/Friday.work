@@ -14,6 +14,12 @@ declare global {
       saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
       /** 系统通知 */
       notify(payload: { title: string; body?: string; conversationID?: string }): void
+      /** 界面主题底色（贾维斯深空蓝 / 跟随系统深浅） */
+      setWindowBackground(color: string): void
+      /** 无边框窗口的窗控钮 */
+      winMinimize(): void
+      winMaximizeToggle(): void
+      winClose(): void
       /** 点通知回会话 */
       onOpenConversation(listener: (conversationID: string) => void): () => void
       /** 客户端更新（设置窗口展示；状态变化由主进程推送） */

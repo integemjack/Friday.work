@@ -174,4 +174,19 @@ function briefOf(activity: SessionActivity): string {
 .step.doing {
   background: var(--run);
 }
+
+/* 贾维斯界面：活动总览变遥测面板（分头/行/进度块的样式在全局 jarvis.css） */
+[data-theme='jarvis'] .activity-head {
+  border-bottom: 1px solid rgba(34, 211, 238, 0.2);
+  padding-bottom: 6px;
+}
+
+[data-theme='jarvis'] .row {
+  border-left: 2px solid transparent;
+}
+
+[data-theme='jarvis'] .row:hover {
+  border-left-color: rgba(34, 211, 238, 0.5);
+  background: rgba(34, 211, 238, 0.05);
+}
 </style>

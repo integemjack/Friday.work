@@ -233,4 +233,48 @@ function symbol(): string {
   font-size: 12.5px;
   color: var(--text-2);
 }
+
+/* 贾维斯界面：工具卡片变任务遥测条（左侧状态条在全局 jarvis.css） */
+[data-theme='jarvis'] .tool-card {
+  background: rgba(10, 25, 45, 0.45);
+  border-color: rgba(34, 211, 238, 0.18);
+}
+
+[data-theme='jarvis'] .tool-card.open {
+  border-color: rgba(34, 211, 238, 0.32);
+}
+
+[data-theme='jarvis'] .tool-title {
+  letter-spacing: 0.5px;
+}
+
+[data-theme='jarvis'] .tool-status {
+  font-family: var(--font-hud);
+  font-size: 10.5px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+[data-theme='jarvis'] .tool-status.run {
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.55);
+}
+
+[data-theme='jarvis'] .tool-symbol {
+  filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.5));
+}
+
+[data-theme='jarvis'] .section-label {
+  font-family: var(--font-hud);
+  font-size: 10.5px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.75;
+}
+
+[data-theme='jarvis'] .arg,
+[data-theme='jarvis'] .res {
+  color: #9adcf2;
+}
 </style>

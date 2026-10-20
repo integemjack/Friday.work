@@ -219,4 +219,28 @@ async function send(run: TeamRun): Promise<void> {
   padding: 3px 7px;
   outline: none;
 }
+
+/* 贾维斯界面：子 Agent 变在役任务单元——左侧青线、运行中渐变、状态等宽化 */
+[data-theme='jarvis'] .run {
+  border-left: 2px solid rgba(34, 211, 238, 0.35);
+}
+
+[data-theme='jarvis'] .run:not(.done) {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.05), transparent 60%);
+}
+
+[data-theme='jarvis'] .live-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.7);
+}
+
+[data-theme='jarvis'] .chip,
+[data-theme='jarvis'] .run-line.muted {
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .chip {
+  color: var(--accent);
+  background: rgba(34, 211, 238, 0.1);
+}
 </style>

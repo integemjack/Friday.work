@@ -252,4 +252,30 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--fail);
 }
+/* 贾维斯界面：实时语音条变通讯链路面板 */
+[data-theme='jarvis'] .rt {
+  border-color: rgba(34, 211, 238, 0.25);
+  background: rgba(10, 25, 45, 0.5);
+}
+
+[data-theme='jarvis'] .rt-head {
+  border-bottom-color: rgba(34, 211, 238, 0.2);
+}
+
+[data-theme='jarvis'] .rt-title {
+  font-family: var(--font-hud);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+[data-theme='jarvis'] .rt-phase,
+[data-theme='jarvis'] .rt-caption {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+}
+
+[data-theme='jarvis'] .rt-caption {
+  color: #9adcf2;
+}
 </style>

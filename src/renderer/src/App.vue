@@ -2,10 +2,10 @@
 // 桌面（用户 2026-10-19 定稿的范式）：应用本身是一个桌面，
 // 会话 / 终端 / 文件 / 浏览器 / 子 Agent / 活动总览 / 机器与会话 都以窗口显示：
 // 可拖动、可缩放、可最小化/最大化、可层叠，底部任务栏切换。
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
-import { applyTheme, loadTheme } from './lib/theme.js'
+import { uiTheme } from './lib/theme.js'
 import { host } from './lib/host.js'
 import { WorkChannelHub, type WorkSignalIn } from './lib/workChannel.js'
 import TitleBar from './components/TitleBar.vue'
@@ -23,6 +23,8 @@ import TimelineWindow from './components/TimelineWindow.vue'
 import MachinesWindow from './desktop/MachinesWindow.vue'
 import TaskBar from './desktop/TaskBar.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
+import JarvisHUD from './desktop/JarvisHUD.vue'
+import JarvisTelemetry from './desktop/JarvisTelemetry.vue'
 
 const store = useAppStore()
 
@@ -43,6 +45,9 @@ const offWork = host.onWork((message) => {
     workHub.send(message.machineID, String(message.text ?? ''))
   }
 })
+
+// 贾维斯界面开着才挂桌面 HUD（雷达/时钟/连接状态）
+const jarvis = computed(() => uiTheme.value === 'jarvis')
 
 // 布局持久化：窗口开/关/拖/缩后防抖存一份（saveLayout 里已有内容签名比对，重复状态不落盘）
 let saveTimer = 0
@@ -67,9 +72,7 @@ onBeforeUnmount(() => {
 })
 
 onMounted(() => {
-  // 恢复界面主题（本机偏好；选了贾维斯则 <html> 带 data-theme，样式见 style.css [data-theme='jarvis']）
-  applyTheme(loadTheme())
-  // 先恢复上次的窗口布局（会话窗口等机器连上后再补开），再接协议事件；恢复不到才开「机器与会话」
+  // 界面主题已在 main.ts 挂载前应用（避免首帧闪系统样式）；这里只恢复布局、接协议事件
   store.restoreLayout()
   store.bindHost()
   store.$subscribe(() => scheduleLayoutSave(), { detached: true })
@@ -112,6 +115,12 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
     <TitleBar />
 
     <div class="desktop" @mousedown.self="store.activeConversationID = store.activeConversationID">
+      <!-- 贾维斯 HUD：全息雷达 + 真实状态（机器连接 / 窗口数 / 待确认 / 时钟），窗口盖在上面 -->
+      <JarvisHUD v-if="jarvis" />
+
+      <!-- 贾维斯桌面遥测：正在跑的会话 / 子 Agent / 系统日志直接投在桌面上，点开才进窗口 -->
+      <JarvisTelemetry v-if="jarvis" />
+
       <!-- 桌面上没有窗口时的提示 -->
       <div v-if="!store.windows.length" class="desktop-empty">
         <div class="desktop-title">Friday</div>
@@ -225,6 +234,49 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   letter-spacing: 4px;
   text-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
   text-transform: uppercase;
+}
+
+/* 贾维斯：桌面四角的 HUD 括号（压在窗口层下面，纯定位装饰） */
+[data-theme='jarvis'] .desktop::before {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--accent) 0 0) left top / 22px 1.5px,
+    linear-gradient(var(--accent) 0 0) left top / 1.5px 22px,
+    linear-gradient(var(--accent) 0 0) right top / 22px 1.5px,
+    linear-gradient(var(--accent) 0 0) right top / 1.5px 22px,
+    linear-gradient(var(--accent) 0 0) left bottom / 22px 1.5px,
+    linear-gradient(var(--accent) 0 0) left bottom / 1.5px 22px,
+    linear-gradient(var(--accent) 0 0) right bottom / 22px 1.5px,
+    linear-gradient(var(--accent) 0 0) right bottom / 1.5px 22px;
+  background-repeat: no-repeat;
+  opacity: 0.4;
+}
+
+/* 贾维斯：一条扫描线周期性扫过桌面（在窗口层下面，不干扰阅读） */
+[data-theme='jarvis'] .desktop::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -140px;
+  height: 140px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(34, 211, 238, 0.07) 82%,
+    rgba(34, 211, 238, 0.2)
+  );
+  animation: jarvis-scan 8s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes jarvis-scan {
+  to {
+    transform: translateY(calc(100vh + 280px));
+  }
 }
 
 .error-toast {

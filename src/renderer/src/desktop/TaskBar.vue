@@ -261,4 +261,18 @@ const stateDot: Record<string, string> = {
   font-size: 12px;
   color: var(--warn);
 }
+
+/* 贾维斯界面：任务栏磨砂玻璃，选中 chip 和图标带青色微光 */
+[data-theme='jarvis'] .taskbar {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme='jarvis'] .task-chip.current {
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.22);
+}
+
+[data-theme='jarvis'] .icon {
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.35);
+}
 </style>

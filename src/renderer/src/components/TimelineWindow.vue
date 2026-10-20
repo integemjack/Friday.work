@@ -157,4 +157,24 @@ function bodyText(entry: AssistantEntry): string {
 .bad {
   color: var(--fail);
 }
+
+/* 贾维斯界面：时间线变日志流——时间戳等宽青色、Friday 行发光 */
+[data-theme='jarvis'] .at {
+  font-family: var(--font-hud);
+  color: rgba(34, 211, 238, 0.55);
+}
+
+[data-theme='jarvis'] .row.assistant .who {
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.4);
+}
+
+[data-theme='jarvis'] .row:hover {
+  background: rgba(34, 211, 238, 0.05);
+}
+
+[data-theme='jarvis'] .tip {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+}
 </style>

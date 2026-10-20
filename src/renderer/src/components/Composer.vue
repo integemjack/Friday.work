@@ -520,4 +520,148 @@ textarea::placeholder {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* 贾维斯界面：输入台 = 全息指令台。真四角括号（伪元素画，不被圆角裁掉）、顶部能量线、聚焦辉光 */
+[data-theme='jarvis'] .composer {
+  background: transparent;
+}
+
+[data-theme='jarvis'] .composer-card {
+  position: relative;
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.4), transparent) top / 100% 1px no-repeat,
+    rgba(8, 22, 40, 0.62);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-color: rgba(34, 211, 238, 0.26);
+  box-shadow:
+    0 0 20px rgba(34, 211, 238, 0.07),
+    0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+/* 四角括号：::before 画上面两角，::after 画下面两角 */
+[data-theme='jarvis'] .composer-card::before,
+[data-theme='jarvis'] .composer-card::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  height: 14px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--accent) 0 0) left top / 14px 2px,
+    linear-gradient(var(--accent) 0 0) left top / 2px 14px,
+    linear-gradient(var(--accent) 0 0) right top / 14px 2px,
+    linear-gradient(var(--accent) 0 0) right top / 2px 14px;
+  background-repeat: no-repeat;
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+
+[data-theme='jarvis'] .composer-card::before {
+  top: -1px;
+}
+
+[data-theme='jarvis'] .composer-card::after {
+  bottom: -1px;
+  background:
+    linear-gradient(var(--accent) 0 0) left bottom / 14px 2px,
+    linear-gradient(var(--accent) 0 0) left bottom / 2px 14px,
+    linear-gradient(var(--accent) 0 0) right bottom / 14px 2px,
+    linear-gradient(var(--accent) 0 0) right bottom / 2px 14px;
+  background-repeat: no-repeat;
+}
+
+[data-theme='jarvis'] .composer-card.focused {
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.2),
+    0 0 28px rgba(34, 211, 238, 0.16);
+}
+
+[data-theme='jarvis'] .composer-card.focused::before,
+[data-theme='jarvis'] .composer-card.focused::after {
+  opacity: 1;
+}
+
+[data-theme='jarvis'] .composer-card textarea {
+  background: transparent;
+  caret-color: var(--accent);
+}
+
+[data-theme='jarvis'] .composer-card textarea::placeholder {
+  font-family: var(--font-hud);
+  letter-spacing: 2px;
+}
+
+[data-theme='jarvis'] .icon-btn {
+  color: rgba(34, 211, 238, 0.65);
+}
+
+[data-theme='jarvis'] .icon-btn:hover {
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+}
+
+[data-theme='jarvis'] .hint {
+  color: rgba(77, 125, 153, 0.7);
+}
+
+[data-theme='jarvis'] .model-chip {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+  border-color: rgba(34, 211, 238, 0.3);
+  border-radius: 4px;
+  color: rgba(125, 211, 252, 0.9);
+}
+
+[data-theme='jarvis'] .model-chip .model-caret {
+  color: var(--accent);
+}
+
+[data-theme='jarvis'] .model-chip:hover,
+[data-theme='jarvis'] .model-chip.open {
+  border-color: rgba(34, 211, 238, 0.55);
+  color: #c9f2ff;
+}
+
+/* 发送 / 停止钮：圆环辉光；生成中停止键红色脉冲 */
+[data-theme='jarvis'] .round-btn {
+  border: 1px solid rgba(34, 211, 238, 0.55);
+  background: rgba(34, 211, 238, 0.1);
+  color: #bdf3ff;
+  box-shadow:
+    0 0 12px rgba(34, 211, 238, 0.25),
+    inset 0 0 8px rgba(34, 211, 238, 0.12);
+}
+
+[data-theme='jarvis'] .round-btn.send:hover:not(:disabled) {
+  box-shadow:
+    0 0 20px rgba(34, 211, 238, 0.5),
+    inset 0 0 10px rgba(34, 211, 238, 0.2);
+}
+
+[data-theme='jarvis'] .round-btn.send:disabled {
+  opacity: 0.35;
+  box-shadow: none;
+}
+
+[data-theme='jarvis'] .round-btn.stop {
+  border-color: rgba(251, 95, 125, 0.65);
+  background: rgba(251, 95, 125, 0.12);
+  color: #ffc2cd;
+  animation: jarvis-stop-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes jarvis-stop-pulse {
+  50% {
+    box-shadow: 0 0 22px rgba(251, 95, 125, 0.5);
+  }
+}
+
+[data-theme='jarvis'] .busy-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.8);
+}
 </style>

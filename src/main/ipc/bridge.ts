@@ -2,7 +2,7 @@
 // 上传不接受渲染进程传来的任意本机路径：只认对话框选中的、或拖放进来的 File
 // （preload 用 webUtils 换出路径），协议进程只能读这里背书过的路径。
 
-import { app, dialog, ipcMain, Notification, type FileFilter, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, type FileFilter, type WebContents } from 'electron'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -96,6 +96,26 @@ export class IpcBridge {
         }
       })
       notification.show()
+    })
+
+    // 界面主题底色（贾维斯深空蓝 / 跟随系统）：渲染层应用主题时报过来，避免窗口底色和页面不一致
+    ipcMain.on('ui:background', (_event, color: unknown) => {
+      if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) return
+      this.getWindow()?.setBackgroundColor(color)
+    })
+
+    // 无边框窗口的窗控钮（TitleBar.vue）：最小化 / 最大化切换 / 关闭
+    ipcMain.on('win:minimize', (event) => {
+      BrowserWindow.fromWebContents(event.sender)?.minimize()
+    })
+    ipcMain.on('win:maximize-toggle', (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) return
+      if (win.isMaximized()) win.unmaximize()
+      else win.maximize()
+    })
+    ipcMain.on('win:close', (event) => {
+      BrowserWindow.fromWebContents(event.sender)?.close()
     })
   }
 }

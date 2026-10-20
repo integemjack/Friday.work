@@ -374,4 +374,37 @@ onBeforeUnmount(() => {
   cursor: pointer;
   font-size: 12px;
 }
+/* 贾维斯界面：麦克风变反应堆按钮，日志条目变通讯记录 */
+[data-theme='jarvis'] .mic {
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  background: radial-gradient(circle at 50% 40%, rgba(34, 211, 238, 0.14), rgba(34, 211, 238, 0.03));
+  box-shadow:
+    0 0 22px rgba(34, 211, 238, 0.18),
+    inset 0 0 16px rgba(34, 211, 238, 0.1);
+}
+
+[data-theme='jarvis'] .mic:hover:not(:disabled) {
+  box-shadow:
+    0 0 30px rgba(34, 211, 238, 0.3),
+    inset 0 0 18px rgba(34, 211, 238, 0.14);
+}
+
+[data-theme='jarvis'] .mic.recording {
+  border-color: rgba(251, 95, 125, 0.7);
+  box-shadow:
+    0 0 28px rgba(251, 95, 125, 0.3),
+    inset 0 0 16px rgba(251, 95, 125, 0.12);
+}
+
+[data-theme='jarvis'] .mic-text,
+[data-theme='jarvis'] .entry-kind {
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .entry-kind {
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent);
+  opacity: 0.8;
+}
 </style>

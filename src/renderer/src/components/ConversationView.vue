@@ -328,4 +328,89 @@ const statusLine = computed(() => {
   text-align: center;
   padding: 40px 0;
 }
+
+/* 贾维斯界面：状态条 = 遥测条（脉冲光标 + 等宽字），窗口本体透玻璃 */
+[data-theme='jarvis'] .conversation-view {
+  background: transparent;
+}
+
+[data-theme='jarvis'] .status-bar {
+  border-bottom-color: rgba(34, 211, 238, 0.25);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.07), transparent);
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .status-line {
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.45);
+  letter-spacing: 2px;
+}
+
+[data-theme='jarvis'] .status-line::before {
+  content: '▸ ';
+  animation: jt-blink 1s step-end infinite;
+}
+
+[data-theme='jarvis'] .status-idle {
+  letter-spacing: 1px;
+}
+
+[data-theme='jarvis'] .status-idle::before {
+  content: '◦ ';
+  color: var(--ok);
+}
+
+[data-theme='jarvis'] .stop-btn {
+  font-family: var(--font-hud);
+  letter-spacing: 2px;
+  border: 1px solid rgba(251, 95, 125, 0.5);
+  border-radius: 4px;
+  color: #ffc2cd;
+  background: rgba(251, 95, 125, 0.08);
+}
+
+[data-theme='jarvis'] .stop-btn:hover {
+  background: rgba(251, 95, 125, 0.18);
+}
+
+[data-theme='jarvis'] .approval-bar {
+  border-left: 3px solid var(--warn);
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.1), rgba(251, 191, 36, 0.02));
+  box-shadow: 0 2px 18px rgba(251, 191, 36, 0.18);
+}
+
+[data-theme='jarvis'] .approval-tool {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+  color: var(--warn);
+}
+
+[data-theme='jarvis'] .branch-row {
+  justify-content: center;
+}
+
+[data-theme='jarvis'] .branch-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+[data-theme='jarvis'] .earlier {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+  border: 1px dashed rgba(34, 211, 238, 0.3);
+  border-radius: 4px;
+  padding: 4px 12px;
+  display: inline-block;
+  margin: 0 auto 10px;
+}
+
+@keyframes jt-blink {
+  50% {
+    opacity: 0;
+  }
+}
 </style>

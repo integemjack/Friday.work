@@ -660,4 +660,41 @@ watch(() => store.detail?.conversationID, () => void loadChanges())
   background: rgba(200, 80, 70, 0.12);
   color: #a83d34;
 }
+/* 贾维斯界面：文件窗变档案终端——工具条、路径、目录行、diff 都青色化 */
+[data-theme='jarvis'] .toolbar {
+  background: rgba(10, 25, 45, 0.5);
+  border-bottom-color: rgba(34, 211, 238, 0.2);
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .path {
+  color: #7dd3fc;
+}
+
+[data-theme='jarvis'] .crumb:hover:not(:disabled) {
+  background: rgba(34, 211, 238, 0.1);
+}
+
+[data-theme='jarvis'] .entry.active {
+  background: rgba(34, 211, 238, 0.1);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
+[data-theme='jarvis'] .entry:hover {
+  background: rgba(34, 211, 238, 0.06);
+}
+
+[data-theme='jarvis'] .size,
+[data-theme='jarvis'] .changes-head,
+[data-theme='jarvis'] .change-path {
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .changes-head {
+  letter-spacing: 1px;
+}
+
+[data-theme='jarvis'] .diff {
+  background: rgba(7, 20, 36, 0.85);
+}
 </style>

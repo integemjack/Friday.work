@@ -302,6 +302,47 @@ watch(
   line-height: 1.7;
 }
 
+/* 贾维斯界面：浏览器变远程观测屏——青色 tab 栏、等宽地址栏、画面框描边 */
+[data-theme='jarvis'] .tabs {
+  background: rgba(10, 25, 45, 0.7);
+  border-bottom-color: rgba(34, 211, 238, 0.25);
+}
+
+[data-theme='jarvis'] .tab {
+  color: #6f9fb8;
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .tab.active {
+  background: rgba(34, 211, 238, 0.14);
+  color: #c9f2ff;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
+[data-theme='jarvis'] .navbar {
+  background: rgba(10, 25, 45, 0.5);
+  border-bottom-color: rgba(34, 211, 238, 0.2);
+}
+
+[data-theme='jarvis'] .nav {
+  color: #6f9fb8;
+}
+
+[data-theme='jarvis'] .nav:hover {
+  background: rgba(34, 211, 238, 0.1);
+  color: #c9f2ff;
+}
+
+[data-theme='jarvis'] .address-input {
+  font-family: var(--font-hud);
+}
+
+[data-theme='jarvis'] .screen {
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  border-radius: 6px;
+  box-shadow: inset 0 0 40px rgba(34, 211, 238, 0.04);
+}
+
 .tabs {
   display: flex;
   align-items: center;

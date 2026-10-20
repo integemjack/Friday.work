@@ -78,6 +78,9 @@
   --hover: rgba(34, 211, 238, 0.08);
   --selected: rgba(34, 211, 238, 0.14);
   --chip: rgba(34, 211, 238, 0.12);
+
+  /* HUD 文案（状态行、时间戳、提示）用的等宽字体 */
+  --font-hud: 'Cascadia Code', Consolas, monospace;
 }
 
 /* 深空底：中心一圈青色辉光 + 暗角，窗口浮在上面像全息投影 */
@@ -89,12 +92,12 @@ html[data-theme='jarvis'] body {
 }
 
 html[data-theme='jarvis'] ::-webkit-scrollbar-thumb {
-  background: rgba(34, 211, 238, 0.25);
+  background: rgba(34, 211, 238, 0.35);
   background-clip: content-box;
 }
 
 html[data-theme='jarvis'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(34, 211, 238, 0.4);
+  background: rgba(34, 211, 238, 0.55);
   background-clip: content-box;
 }
 

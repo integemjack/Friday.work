@@ -31,6 +31,20 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   notify: (payload: { title: string; body?: string; conversationID?: string }): void => {
     ipcRenderer.send('notify:show', payload)
   },
+  /** 界面主题底色：渲染层应用主题后同步给主进程（BrowserWindow 底色 CSS 管不到） */
+  setWindowBackground: (color: string): void => {
+    ipcRenderer.send('ui:background', color)
+  },
+  /** 无边框窗口的窗控钮 */
+  winMinimize: (): void => {
+    ipcRenderer.send('win:minimize')
+  },
+  winMaximizeToggle: (): void => {
+    ipcRenderer.send('win:maximize-toggle')
+  },
+  winClose: (): void => {
+    ipcRenderer.send('win:close')
+  },
   /** 点系统通知回到对应会话 */
   onOpenConversation: (listener: (conversationID: string) => void): (() => void) => {
     const handler = (_event: unknown, conversationID: string): void => listener(conversationID)

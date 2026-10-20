@@ -493,4 +493,16 @@ input:focus {
   padding: 12px 6px;
   line-height: 1.7;
 }
+/* 贾维斯界面：扫码窗头部等宽化（弹窗玻璃、输入、按钮由全局 jarvis.css 覆盖） */
+[data-theme='jarvis'] .head {
+  border-bottom-color: rgba(34, 211, 238, 0.25);
+}
+
+[data-theme='jarvis'] .title {
+  font-family: var(--font-hud);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.85;
+}
 </style>

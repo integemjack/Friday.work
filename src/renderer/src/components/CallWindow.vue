@@ -492,4 +492,33 @@ function phaseText(): string {
   background: #71717a;
   border-color: #71717a;
 }
+/* 贾维斯界面：通话屏变全息通讯舱——头像反应堆化、阶段文案 HUD 化 */
+[data-theme='jarvis'] .call {
+  background:
+    radial-gradient(ellipse at 50% 35%, rgba(34, 211, 238, 0.08), transparent 60%),
+    #060b14;
+}
+
+[data-theme='jarvis'] .avatar {
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  box-shadow:
+    0 0 30px rgba(34, 211, 238, 0.25),
+    inset 0 0 20px rgba(34, 211, 238, 0.12);
+}
+
+[data-theme='jarvis'] .phase {
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+[data-theme='jarvis'] .phase,
+[data-theme='jarvis'] .hint,
+[data-theme='jarvis'] .diag {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+}
+
+[data-theme='jarvis'] .round {
+  border-color: rgba(34, 211, 238, 0.4);
+}
 </style>

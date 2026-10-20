@@ -99,4 +99,28 @@ h3 { margin: 0; font-size: 15px; }
 .sub { font-size: 11px; opacity: 0.6; }
 .error { color: #ff8a80; font-size: 12px; }
 .row { display: flex; justify-content: flex-end; }
+
+/* 贾维斯界面：对话框变全息面板（输入/按钮由全局 jarvis.css 覆盖） */
+[data-theme='jarvis'] .dialog-backdrop {
+  background: rgba(3, 8, 16, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+[data-theme='jarvis'] .dialog {
+  background: rgba(10, 25, 45, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-color: rgba(34, 211, 238, 0.35);
+  box-shadow:
+    0 0 30px rgba(34, 211, 238, 0.12),
+    0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme='jarvis'] h3 {
+  font-family: var(--font-hud);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
 </style>

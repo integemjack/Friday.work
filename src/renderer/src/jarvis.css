@@ -1,0 +1,260 @@
+/* ============================================================
+   贾维斯界面 —— 全窗口 HUD 化（全局层，main.ts 在 style.css 之后引入）
+   只在 <html data-theme="jarvis"> 下生效。这里负责所有窗口通用的元素
+   （输入、按钮、代码块、状态行、卡片、头像、菜单、表格、状态点…），
+   各窗口的结构性装饰（角括号、雷达、扫描线）在各组件 scoped 里。
+   注意：xterm 的隐藏输入框 .xterm-helper-textarea 必须排除，不能动。
+   ============================================================ */
+
+/* ---- 输入框 / 文本域：透明青底 + 聚焦辉光 ---- */
+html[data-theme='jarvis']
+  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea) {
+  background-color: rgba(34, 211, 238, 0.04);
+  border-color: rgba(34, 211, 238, 0.25);
+  caret-color: var(--accent);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+html[data-theme='jarvis']
+  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea):focus {
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.22),
+    0 0 14px rgba(34, 211, 238, 0.12);
+  outline: none;
+}
+
+html[data-theme='jarvis'] ::placeholder {
+  color: rgba(77, 125, 153, 0.8);
+}
+
+/* ---- 代码 / 终端输出 ---- */
+html[data-theme='jarvis'] code {
+  color: #7dd3fc;
+  background: rgba(34, 211, 238, 0.08);
+}
+
+html[data-theme='jarvis'] pre,
+html[data-theme='jarvis'] .md pre {
+  background: rgba(7, 20, 36, 0.85);
+  border-color: rgba(34, 211, 238, 0.18);
+  border-left: 2px solid rgba(34, 211, 238, 0.4);
+}
+
+/* ---- 链接 / 分隔线 ---- */
+html[data-theme='jarvis'] a {
+  color: var(--accent);
+}
+
+html[data-theme='jarvis'] a:hover {
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.6);
+}
+
+html[data-theme='jarvis'] hr,
+html[data-theme='jarvis'] .md hr {
+  border: none;
+  border-top: 1px solid rgba(34, 211, 238, 0.25);
+}
+
+/* ---- 状态点：发光 ---- */
+html[data-theme='jarvis'] .dot.ok,
+html[data-theme='jarvis'] .dot.ready { box-shadow: 0 0 5px rgba(45, 212, 167, 0.3); }
+html[data-theme='jarvis'] .dot.run,
+html[data-theme='jarvis'] .dot.running { box-shadow: 0 0 5px rgba(56, 189, 248, 0.35); }
+html[data-theme='jarvis'] .dot.warn { box-shadow: 0 0 5px rgba(251, 191, 36, 0.3); }
+html[data-theme='jarvis'] .dot.fail { box-shadow: 0 0 5px rgba(251, 95, 125, 0.35); }
+
+/* ---- 徽章 / 标签 ---- */
+html[data-theme='jarvis'] .badge {
+  font-family: var(--font-hud);
+}
+
+/* ---- section 标题（各窗口的 h3 / 分区头）：HUD 头风格 ---- */
+html[data-theme='jarvis'] h3,
+html[data-theme='jarvis'] .section-head,
+html[data-theme='jarvis'] .activity-head,
+html[data-theme='jarvis'] .menu-title,
+html[data-theme='jarvis'] .section-label {
+  font-family: var(--font-hud);
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: var(--accent);
+  opacity: 0.75;
+}
+
+/* ---- 会话状态条 / 提示行：等宽 HUD 文案 ---- */
+html[data-theme='jarvis'] .status-bar,
+html[data-theme='jarvis'] .status-line,
+html[data-theme='jarvis'] .status-idle,
+html[data-theme='jarvis'] .earlier,
+html[data-theme='jarvis'] .no-messages,
+html[data-theme='jarvis'] .empty,
+html[data-theme='jarvis'] .empty-tip,
+html[data-theme='jarvis'] .empty-line,
+html[data-theme='jarvis'] .note,
+html[data-theme='jarvis'] .hint,
+html[data-theme='jarvis'] .detail,
+html[data-theme='jarvis'] .stats,
+html[data-theme='jarvis'] .conv-time,
+html[data-theme='jarvis'] .machine-state,
+html[data-theme='jarvis'] .status {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+}
+
+html[data-theme='jarvis'] .status-line {
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.4);
+}
+
+/* ---- 工具卡片：左侧状态色条 + 运行中呼吸 ---- */
+html[data-theme='jarvis'] .tool-card {
+  background: rgba(10, 25, 45, 0.5);
+}
+
+html[data-theme='jarvis'] .tool-card.run {
+  border-left: 2px solid var(--run);
+  animation: jarvis-tool-run 1.6s ease-in-out infinite;
+}
+
+html[data-theme='jarvis'] .tool-card.ok {
+  border-left: 2px solid rgba(45, 212, 167, 0.55);
+}
+
+html[data-theme='jarvis'] .tool-card.fail {
+  border-left: 2px solid rgba(251, 95, 125, 0.6);
+}
+
+html[data-theme='jarvis'] .tool-card.warn {
+  border-left: 2px solid rgba(251, 191, 36, 0.55);
+}
+
+@keyframes jarvis-tool-run {
+  50% {
+    border-left-color: rgba(56, 189, 248, 0.25);
+  }
+}
+
+html[data-theme='jarvis'] .tool-status {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+}
+
+html[data-theme='jarvis'] .arg,
+html[data-theme='jarvis'] .t-text {
+  font-family: var(--font-hud);
+}
+
+/* ---- 审批横幅：橙色辉光 ---- */
+html[data-theme='jarvis'] .approval-bar {
+  box-shadow: 0 2px 18px rgba(251, 191, 36, 0.25);
+}
+
+/* ---- 分叉切换器 ---- */
+html[data-theme='jarvis'] .branch-btn {
+  border-color: rgba(34, 211, 238, 0.35);
+  color: var(--accent);
+}
+
+html[data-theme='jarvis'] .branch-btn:hover {
+  background: rgba(34, 211, 238, 0.1);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.2);
+}
+
+html[data-theme='jarvis'] .branch-pos {
+  font-family: var(--font-hud);
+}
+
+/* ---- 头像：Friday 变 HUD 环，用户变青框 ---- */
+html[data-theme='jarvis'] .avatar:not(.user) {
+  background: transparent;
+  border: 1px solid rgba(34, 211, 238, 0.7);
+  color: var(--accent);
+  box-shadow:
+    0 0 10px rgba(34, 211, 238, 0.35),
+    inset 0 0 6px rgba(34, 211, 238, 0.2);
+}
+
+html[data-theme='jarvis'] .avatar.user {
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  color: var(--text-2);
+}
+
+/* ---- 用户消息气泡：青色描边全息气泡 ---- */
+html[data-theme='jarvis'] .message.user .md {
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.32);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.07);
+}
+
+/* ---- 思考块：青色引用线 ---- */
+html[data-theme='jarvis'] .thinking-body {
+  border-left-color: rgba(34, 211, 238, 0.45);
+  background: rgba(10, 25, 45, 0.5);
+}
+
+/* ---- markdown 正文 ---- */
+html[data-theme='jarvis'] .md blockquote {
+  border-left-color: rgba(34, 211, 238, 0.45);
+}
+
+html[data-theme='jarvis'] .md table th {
+  background: rgba(34, 211, 238, 0.08);
+}
+
+html[data-theme='jarvis'] .md :is(h1, h2, h3, h4, h5, h6) {
+  color: #d9f6ff;
+}
+
+/* ---- 弹层菜单：全息玻璃 ---- */
+html[data-theme='jarvis'] .menu,
+html[data-theme='jarvis'] .model-menu {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-color: rgba(34, 211, 238, 0.3);
+  box-shadow:
+    0 0 24px rgba(34, 211, 238, 0.1),
+    0 14px 36px rgba(0, 0, 0, 0.6);
+}
+
+html[data-theme='jarvis'] .menu-item.active {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
+/* ---- 机器 / 会话列表行：选中态左侧青线 ---- */
+html[data-theme='jarvis'] .machine-row.active {
+  box-shadow:
+    inset 2px 0 0 0 var(--accent),
+    0 0 14px rgba(34, 211, 238, 0.08);
+}
+
+html[data-theme='jarvis'] .conv-row.open {
+  box-shadow: inset 2px 0 0 0 rgba(34, 211, 238, 0.4);
+}
+
+html[data-theme='jarvis'] .conv-row.active {
+  border-color: rgba(34, 211, 238, 0.55);
+}
+
+/* ---- 任务步骤块：发光 ---- */
+html[data-theme='jarvis'] .step.done {
+  box-shadow: 0 0 4px rgba(45, 212, 167, 0.28);
+}
+
+html[data-theme='jarvis'] .step.doing {
+  box-shadow: 0 0 4px rgba(56, 189, 248, 0.32);
+}
+
+/* ---- 文字选中色：青色半透明（浏览器默认蓝和主题不搭） ---- */
+html[data-theme='jarvis'] ::selection {
+  background: rgba(34, 211, 238, 0.28);
+  color: #eef8fc;
+}
+
+/* ---- 键盘焦点可见性：青色描边替代默认蓝圈 ---- */
+/* （HMR 触发点） */
+html[data-theme='jarvis'] :focus-visible {
+  outline: 1px solid rgba(34, 211, 238, 0.6);
+  outline-offset: 1px;
+}

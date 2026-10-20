@@ -2,7 +2,7 @@
 // 主进程 = 窗口、凭据、安全边界；网络 I/O 全在协议进程（utilityProcess）。
 // 数据面端口由渲染进程加载完成后主动请求（preload: friday-request-port）。
 
-import { app, BrowserWindow, nativeTheme, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, session, shell } from 'electron'
 import { join } from 'node:path'
 import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
@@ -31,6 +31,8 @@ let bridge: IpcBridge | null = null
 const updater = new ClientUpdate(() => mainWindow?.webContents ?? null)
 
 function createWindow(): void {
+  // 贾维斯风：去掉系统边框和默认英文菜单，标题栏由应用自己画（TitleBar.vue，带拖拽区和窗控钮）
+  Menu.setApplicationMenu(null)
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -38,6 +40,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'Friday',
+    frame: false,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1f22' : '#f6f6f7',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

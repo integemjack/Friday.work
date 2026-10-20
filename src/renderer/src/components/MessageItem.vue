@@ -141,6 +141,18 @@ function md(blockID: string, caseName: string): string {
   justify-content: flex-end;
 }
 
+/* 用户消息的附件/图片也靠右，跟文字气泡同一条右边线（否则图片甩在左边，看起来像插错了位置） */
+.message.user .block.media {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.message.user .block.media .media-name {
+  background: var(--chip);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+
 .message.user .md {
   background: var(--accent-weak);
   border-radius: 12px;
@@ -316,5 +328,87 @@ function md(blockID: string, caseName: string): string {
 .md :deep(img) {
   max-width: 100%;
   border-radius: 8px;
+}
+
+/* 贾维斯界面：Friday 头像是 HUD 环（全局层已改底色），时间戳等宽化 */
+[data-theme='jarvis'] .role {
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-size: 11.5px;
+}
+
+[data-theme='jarvis'] .message.assistant .role {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+/* 消息头右侧拉一条渐隐分隔线（HUD 报文头） */
+[data-theme='jarvis'] .meta {
+  display: flex;
+  align-items: center;
+}
+
+[data-theme='jarvis'] .meta::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin-left: 10px;
+  margin-right: 6px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.45), rgba(34, 211, 238, 0.08));
+  box-shadow: 0 0 6px rgba(34, 211, 238, 0.25);
+}
+
+/* 用户气泡：右侧切角 + 锚死右边线（含媒体块） */
+[data-theme='jarvis'] .message.user .meta {
+  flex-direction: row-reverse;
+}
+
+[data-theme='jarvis'] .message.user .block.text,
+[data-theme='jarvis'] .message.user .block.media {
+  justify-content: flex-end;
+}
+
+[data-theme='jarvis'] .message.user .md {
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+}
+
+/* 流式占位（…）闪烁；思考块标签 HUD 化；统计行加能量符 */
+[data-theme='jarvis'] .message.assistant .block.empty {
+  font-family: var(--font-hud);
+  color: var(--accent);
+  animation: jt-blink 1s step-end infinite;
+}
+
+[data-theme='jarvis'] .thinking-label {
+  font-family: var(--font-hud);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(34, 211, 238, 0.6);
+}
+
+[data-theme='jarvis'] .thinking-caret {
+  color: var(--accent);
+}
+
+[data-theme='jarvis'] .stats {
+  color: rgba(34, 211, 238, 0.55);
+}
+
+[data-theme='jarvis'] .stats::before {
+  content: '◢ ';
+  color: var(--accent);
+}
+
+[data-theme='jarvis'] .tag.fail {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+  border-color: rgba(251, 95, 125, 0.5);
+  color: #ffc2cd;
+}
+
+@keyframes jt-blink {
+  50% {
+    opacity: 0;
+  }
 }
 </style>

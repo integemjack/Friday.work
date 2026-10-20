@@ -1,15 +1,8 @@
-fix(work): 信令按 requestId 认领——同一 bot 的语音通话不再被 work 路由截胡
+feat(theme): 贾维斯主题合并进 0.3 WebRTC 结构
 
-- 同一个 bot 可以同时有 audio 通话和 work 通道：p2p_response / p2p_signaling
-  只有 requestId 属于在连 work 会话才截走，其余交回普通通话（真机验收时
-  语音拨打被 work 路由吃掉、卡在 outgoing，就是这个）
-- WorkSignaling.currentRequestID()；handleWorkEnvelope 改认领式（返回 boolean）
-- bindHost 启动补拉一次 SChat 状态（协议进程静默恢复比渲染层先 online，
-  界面之前要等下一次变化才对）
-- 验收日志：信令进出 / WorkChannel 关键节点（console + window.__workDebug）
-
-真机验收（239 · Linux 239 bot · 加盐才会甜扫码）：
-- work 通道 ready（hello → 会话/终端/文件/设置全走 DataChannel）
-- 终端 term.open/write 输出回显；fs.read 900KB → 1.2MB 响应分片往返 232ms
-- 文字聊天（schat-ws）；语音通话 connected 计时 40 秒（无麦克风自动只收）
-- 重启客户端自动恢复 ready
+- 上个会话的主题改动（HUD/雷达/时钟、全局 jarvis.css、输入框照 Friday 重做、
+  布局修复）与「只留 SChat 扫码 + WebRTC 工作通道」重构（31a1c50、65f83a5）合流
+- 冲突按两边意图解：App.vue 保留 workChannel 初始化 + 贾维斯 HUD 挂载；
+  AddMachineDialog 用 0.3 的机器人列表内容 + 贾维斯面板样式；
+  PairDialog 删除（0.3 已无配对功能）
+- 主题应用挪到 main.ts 挂载前（贾维斯版做法），App.vue 只读 uiTheme

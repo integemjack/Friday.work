@@ -36,6 +36,9 @@ async function pickMachine(id: string) {
 }
 
 const hasNoMachine = computed(() => store.machines.length === 0)
+
+// 无边框窗口的窗控（preload 暴露的 IPC；模板里拿不到 window 全局，setup 里取一次）
+const bridge = window.fridayBridge
 </script>
 
 <template>
@@ -48,6 +51,12 @@ const hasNoMachine = computed(() => store.machines.length === 0)
       <span class="chevron">▾</span>
     </div>
     <div class="spacer" />
+    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区） -->
+    <div class="win-controls">
+      <button class="win-btn" title="最小化" @click="bridge.winMinimize()">─</button>
+      <button class="win-btn" title="最大化 / 还原" @click="bridge.winMaximizeToggle()">▢</button>
+      <button class="win-btn close" title="关闭" @click="bridge.winClose()">×</button>
+    </div>
 
     <teleport to="body">
       <div v-if="machineMenuOpen" class="menu-mask" @click="machineMenuOpen = false">
@@ -82,6 +91,40 @@ const hasNoMachine = computed(() => store.machines.length === 0)
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar button,
+.titlebar .machine {
+  -webkit-app-region: no-drag;
+}
+
+.win-controls {
+  display: flex;
+  gap: 2px;
+  margin-left: 6px;
+}
+
+.win-btn {
+  width: 36px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.win-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.win-btn.close:hover {
+  background: rgba(251, 95, 125, 0.85);
+  color: #fff;
 }
 
 .brand {
@@ -182,5 +225,36 @@ const hasNoMachine = computed(() => store.machines.length === 0)
   padding: 10px;
   color: var(--text-2);
   font-size: 13px;
+}
+
+/* 贾维斯界面：顶部标题栏变成 HUD 主控条——品牌发光、底部青色渐变线、状态等宽化 */
+[data-theme='jarvis'] .titlebar {
+  border-bottom-color: rgba(34, 211, 238, 0.28);
+  background:
+    linear-gradient(90deg, rgba(34, 211, 238, 0.09), transparent 28%, transparent 72%, rgba(34, 211, 238, 0.09)),
+    var(--panel);
+}
+
+[data-theme='jarvis'] .brand {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 5px;
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
+}
+
+[data-theme='jarvis'] .machine {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+[data-theme='jarvis'] .machine:hover {
+  border-color: rgba(34, 211, 238, 0.3);
+}
+
+[data-theme='jarvis'] .machine-state,
+[data-theme='jarvis'] .menu-item-detail {
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
 }
 </style>
