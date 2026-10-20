@@ -75,6 +75,8 @@
   --text-2: #82b9d6;
   --text-3: #4d7d99;
   --accent: #22d3ee;
+  --accent-bright: #67e8f9; /* 比 accent 亮一档的青（HUD 扫描线/内环） */
+  --accent-brighter: #a5f3fc; /* 最亮档（HUD 核心辉光/目标点） */
   --accent-weak: rgba(34, 211, 238, 0.12);
   --ok: #2dd4a7;
   --run: #38bdf8;

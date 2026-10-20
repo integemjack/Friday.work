@@ -63,16 +63,16 @@ const blips = [20, 130, 250].map((deg) => {
 
     <svg viewBox="0 0 400 400">
       <defs>
-        <!-- 雷达扫过的扇形：从扫描边往回渐隐 -->
+        <!-- 雷达扫过的扇形：从扫描边往回渐隐（颜色走令牌，见下方 CSS） -->
         <linearGradient id="hud-sweep" x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0" stop-color="#22d3ee" stop-opacity="0.3" />
-          <stop offset="1" stop-color="#22d3ee" stop-opacity="0" />
+          <stop offset="0" stop-opacity="0.3" />
+          <stop offset="1" stop-opacity="0" />
         </linearGradient>
         <!-- 核心辉光 -->
         <radialGradient id="hud-core" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0" stop-color="#a5f3fc" stop-opacity="0.9" />
-          <stop offset="0.55" stop-color="#22d3ee" stop-opacity="0.35" />
-          <stop offset="1" stop-color="#22d3ee" stop-opacity="0" />
+          <stop class="hi" offset="0" stop-opacity="0.9" />
+          <stop offset="0.55" stop-opacity="0.35" />
+          <stop offset="1" stop-opacity="0" />
         </radialGradient>
       </defs>
 
@@ -84,46 +84,44 @@ const blips = [20, 130, 250].map((deg) => {
           :x1="t.x1" :y1="t.y1" :x2="t.x2" :y2="t.y2"
           :stroke-width="t.long ? 2 : 1"
           :opacity="t.long ? 0.75 : 0.35"
-          stroke="#22d3ee"
         />
       </g>
 
       <!-- 四段弧环：反向转 -->
       <g class="spin-rev">
-        <circle cx="200" cy="200" r="160" fill="none" stroke="#22d3ee" stroke-width="2.5" stroke-dasharray="205 46.33" opacity="0.5" />
+        <circle cx="200" cy="200" r="160" fill="none" stroke-width="2.5" stroke-dasharray="205 46.33" opacity="0.5" />
       </g>
 
       <!-- 雷达外圈 + 扫描扇形（5s 一圈）+ 目标点 -->
-      <circle cx="200" cy="200" r="150" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.35" />
+      <circle cx="200" cy="200" r="150" fill="none" stroke-width="1" opacity="0.35" />
       <g class="sweep">
         <path d="M200 200 L200 50 A150 150 0 0 1 329.9 125 Z" fill="url(#hud-sweep)" />
-        <line x1="200" y1="200" x2="200" y2="50" stroke="#67e8f9" stroke-width="1.5" opacity="0.8" />
+        <line class="mid" x1="200" y1="200" x2="200" y2="50" stroke-width="1.5" opacity="0.8" />
       </g>
       <circle
         v-for="(b, i) in blips"
         :key="i"
-        class="blip"
+        class="blip hi"
         :class="`blip-${i + 1}`"
         :cx="b.x" :cy="b.y" r="3"
-        fill="#a5f3fc"
       />
 
       <!-- 中圈虚线：反向转 -->
       <g class="spin-rev-fast">
-        <circle cx="200" cy="200" r="120" fill="none" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3 9" opacity="0.4" />
+        <circle cx="200" cy="200" r="120" fill="none" stroke-width="1" stroke-dasharray="3 9" opacity="0.4" />
       </g>
 
       <!-- 内圈三段弧：顺时针 -->
       <g class="spin-mid">
-        <circle cx="200" cy="200" r="94" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="140 56.87" opacity="0.55" />
+        <circle cx="200" cy="200" r="94" fill="none" stroke-width="2" stroke-dasharray="140 56.87" opacity="0.55" />
       </g>
 
       <!-- 反应堆核心：辉光 + 双环 + 三角，呼吸脉冲 -->
       <circle class="core-glow" cx="200" cy="200" r="58" fill="url(#hud-core)" />
       <g class="core">
-        <circle cx="200" cy="200" r="36" fill="none" stroke="#67e8f9" stroke-width="1.5" opacity="0.85" />
-        <circle cx="200" cy="200" r="24" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.6" />
-        <path d="M200 182 L216 212 L184 212 Z" fill="#a5f3fc" opacity="0.9" />
+        <circle class="mid" cx="200" cy="200" r="36" fill="none" stroke-width="1.5" opacity="0.85" />
+        <circle cx="200" cy="200" r="24" fill="none" stroke-width="1" opacity="0.6" />
+        <path class="hi" d="M200 182 L216 212 L184 212 Z" opacity="0.9" />
       </g>
     </svg>
 
@@ -164,6 +162,33 @@ svg {
   height: auto;
   opacity: 0.55;
   filter: drop-shadow(0 0 6px var(--accent-a25));
+}
+
+/* 雷达配色全走令牌（CSS 覆盖 SVG 表现属性，改 --accent 全套跟随）：
+   默认描边/渐变 = --accent；.mid = 亮一档；.hi = 最亮档填充/渐变。
+   注意规则顺序：通用描边 → .mid 加亮 → .blip/.core-glow 恢复无描边。 */
+.jarvis-hud svg :is(line, circle) {
+  stroke: var(--accent);
+}
+
+.jarvis-hud svg :is(line, circle).mid {
+  stroke: var(--accent-bright);
+}
+
+.jarvis-hud svg :is(.blip, .core-glow) {
+  stroke: none;
+}
+
+.jarvis-hud stop {
+  stop-color: var(--accent);
+}
+
+.jarvis-hud stop.hi {
+  stop-color: var(--accent-brighter);
+}
+
+.jarvis-hud svg .hi:not(stop) {
+  fill: var(--accent-brighter);
 }
 
 .hud-data {

@@ -28,11 +28,16 @@ const COMMON_SETUP = `(() => {
   return store ? 'ok' : 'no-store'
 })()`
 
+const PIN_JS = `s.loginOverlay = false; s.workbenchReady = true; s.autoConnectDone = true
+  s.schat.phase = 'idle'; s.schat.status = ''; s.schat.restoring = false; s.schat.qrPayload = ''`
+
 const MOCK_JS = `const s = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('app')
+  ${PIN_JS}
   s.machines = [{ id: 'mock-1', name: 'MOCK-MACHINE', targetKind: 'work', targetText: 'work:mock', state: 'ready', detail: '', hasPendingApproval: false }]
   s.currentMachine = 'mock-1'`
 
 const NOMEMO_JS = `const s = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('app')
+  ${PIN_JS}
   s.machines = []
   s.currentMachine = ''`
 
@@ -51,7 +56,7 @@ const VIEWS = [
 
 // 页面内执行：computed style 全量 dump（DOM 路径为 key，动画属性只记 animation-name）
 const DUMP_JS = `(() => {
-  const PROPS = ['color','backgroundColor','backgroundImage','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','boxShadow','fontFamily','fontSize','fontWeight','letterSpacing','textTransform','opacity','textShadow','caretColor','outlineColor']
+  const PROPS = ['color','backgroundColor','backgroundImage','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','boxShadow','fontFamily','fontSize','fontWeight','letterSpacing','textTransform','opacity','textShadow','caretColor','outlineColor','stroke','stopColor','fill']
   const ANIMATED = new Set(['color','backgroundColor','backgroundImage','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','boxShadow','opacity','textShadow','transform','filter','backgroundPosition'])
   // 非视觉元素不进 dump（Vite 注入的 STYLE/LINK 数量随构建方式变，与样式无关）
   const SKIP = new Set(['STYLE','SCRIPT','LINK','META','TEMPLATE','TITLE','HEAD','BASE','NOSCRIPT'])
@@ -202,8 +207,8 @@ async function main() {
     const r = await evalJS(view.setup)
     if (r !== 'ok') throw new Error(view.name + ' 设置失败: ' + r)
     await sleep(500)
-    // 截图前重申状态：清错误横幅、防止任何异步写入改变视图
-    await evalJS(`(() => { const s = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('app'); s.error = ''; return 'ok' })()`)
+    // 截图前重申状态：清错误横幅、钉死易变状态（SChat 相位/登录层），防异步事件污染快照
+    await evalJS(`(() => { const s = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('app'); s.error = ''; ${PIN_JS}; return 'ok' })()`)
     await sleep(80)
     // 窗口弹层动画（transition）结束再取数
     const shot = await send('Page.captureScreenshot', { format: 'png' })
