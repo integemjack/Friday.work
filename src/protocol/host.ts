@@ -264,6 +264,10 @@ export class ProtocolHost {
         await this.schat.send(request.botID, request.text)
         return {}
 
+      case 'schat.refreshBots':
+        await this.schat.loadBots()
+        return this.schat.getState()
+
       case 'machines.addWork': {
         // 0.3：扫码后从机器人列表直接建机器（WebRTC 工作通道，不再走 /connect + wss）
         const botID = Number(request.botID)

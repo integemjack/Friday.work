@@ -7,6 +7,7 @@
   "author": "Friday Desktop Work",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:debug": "electron-vite dev -- --remote-debugging-port=9222 --user-data-dir=.dev-user-data",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "test": "node scripts/run-tests.cjs",

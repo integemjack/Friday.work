@@ -1,14 +1,10 @@
 <script setup lang="ts">
-// 扫码一键连（M1.5）：手机 Secret-Chat 扫二维码确认 → 拿到凭据 → 连 schat-ws → 列出机器人 → 和 Friday bot 对话。
-// 载波是 SCSH:1:login:<token>（Secret-Chat docs/qr_login_plan.md），手机扫标准二维码即可。
-import QRCode from 'qrcode'
+// 机器人聊天（M1.5）：登录后和 Friday bot 对话、语音通话、一键连机器。
+// 登录（二维码）不在这里——登录页（LoginView）负责：未登录时这里只给一个「去扫码登录」的引导。
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 
 const store = useAppStore()
-const serverInput = ref(store.schat.server || 'https://47.100.98.3:2012')
-const deviceName = ref('')
-const svg = ref('')
 const activeBot = ref(0)
 const draft = ref('')
 const scroller = ref<HTMLDivElement | null>(null)
@@ -64,16 +60,6 @@ const statusText = computed(() => {
   }
 })
 
-async function renderQr(): Promise<void> {
-  if (!state.value.qrPayload) {
-    svg.value = ''
-    return
-  }
-  svg.value = await QRCode.toString(state.value.qrPayload, { type: 'svg', margin: 1, width: 220 })
-}
-
-watch(() => state.value.qrPayload, () => void renderQr(), { immediate: true })
-
 // 自动选中第一个机器人
 watch(
   bots,
@@ -92,10 +78,6 @@ watch(
     })
   }
 )
-
-async function login(): Promise<void> {
-  await store.schatLogin(serverInput.value, deviceName.value)
-}
 
 async function send(): Promise<void> {
   if (!canSend.value) return
@@ -116,7 +98,7 @@ onMounted(() => {
 <template>
   <div class="schat">
     <div class="head">
-      <span class="title">Secret-Chat 一键连</span>
+      <span class="title">机器人聊天</span>
       <span class="phase" :class="state.phase">{{ statusText }}</span>
       <button v-if="state.phase === 'online' || state.phase === 'error'" class="small-btn" @click="store.schatDisconnect()">
         退出登录
@@ -128,35 +110,14 @@ onMounted(() => {
     <div v-if="workResult" class="work-ok">{{ workResult }}</div>
     <div v-if="workError" class="error">{{ workError }}</div>
 
-    <!-- 未登录：填服务器、生成二维码 -->
-    <div v-if="state.phase === 'idle' || (state.phase === 'error' && !state.qrPayload)" class="setup">
-      <label>
-        聊天服务器
-        <input v-model="serverInput" placeholder="https://47.100.98.3:2012" @keydown.enter="login" />
-      </label>
-      <label>
-        这台设备的名字（手机上显示）
-        <input v-model="deviceName" placeholder="比如「办公室的 Windows」" @keydown.enter="login" />
-      </label>
-      <button class="btn primary" @click="login">
-        {{ state.phase === 'error' ? '重新生成二维码' : '生成登录二维码' }}
-      </button>
-      <p class="hint">
-        用手机 Secret-Chat 扫一扫，在手机上确认后这台电脑就登上了；之后连机器人不需要再输密码。
-      </p>
-    </div>
-
-    <!-- 登录中：二维码 + 状态 -->
-    <div v-if="state.qrPayload" class="qr-area">
-      <div class="qr" v-html="svg" />
-      <div class="qr-side">
-        <div class="qr-title">用手机 Secret-Chat 扫一扫</div>
-        <div class="qr-status">{{ state.status || '等着你扫码…' }}</div>
-        <div class="qr-payload">
-          <code>{{ state.qrPayload }}</code>
-        </div>
-        <button class="small-btn" @click="login">换一个码</button>
+    <!-- 未登录：登录在登录页（二维码），这里只给引导 -->
+    <div v-if="state.phase !== 'online'" class="not-logged-in" data-testid="schat-need-login">
+      <div class="nl-icon">⚡</div>
+      <div class="nl-text">
+        {{ state.phase === 'logging-in' ? '正在登录，等手机确认…' : '还没登录' }}
       </div>
+      <p class="nl-hint">用手机 Secret-Chat 扫二维码登录后，就能在这里和机器人对话、一键连机器。</p>
+      <button v-if="state.phase !== 'logging-in'" class="btn primary" @click="store.openLogin()">去扫码登录</button>
     </div>
 
     <!-- 已登录：机器人列表 + 对话 -->
@@ -172,7 +133,20 @@ onMounted(() => {
           @click="activeBot = bot.id"
         >
           <span class="bot-name">{{ bot.name }}</span>
-          <span v-if="bot.botCalls" class="bot-call" title="语音通话" @click.stop="store.callDial(bot.id, 'audio')">📞</span>
+          <span class="bot-actions">
+            <span
+              v-if="bot.botCalls"
+              class="bot-call"
+              title="语音通话"
+              @click.stop="store.callDial(bot.id, 'audio')"
+            >📞</span>
+            <span
+              v-if="bot.botCalls"
+              class="bot-call"
+              title="视频通话（右下角挂件里看画面）"
+              @click.stop="store.callDial(bot.id, 'video')"
+            >📹</span>
+          </span>
           <span
             v-if="machineByBot.has(bot.id)"
             class="bot-linked"
@@ -187,7 +161,10 @@ onMounted(() => {
           >⚡</span>
           <span v-if="bot.botCalls" class="bot-tag">通话</span>
         </button>
-        <div v-if="bots.length === 0" class="empty-tip">好友里还没有机器人。先在手机上把这个 Friday 机器人加成好友。</div>
+        <div v-if="bots.length === 0" class="empty-tip">
+          好友里还没有机器人。先在手机上把这个 Friday 机器人加成好友，
+          <button class="link-btn" @click="store.schatRefreshBots()">刷新一下</button>。
+        </div>
       </div>
 
       <div class="chat">
@@ -273,83 +250,34 @@ onMounted(() => {
   border-bottom: 1px solid var(--border);
 }
 
-.setup {
-  padding: 16px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--text-2);
-}
-
-input {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: var(--panel-2);
-  color: var(--text);
-  outline: none;
-}
-
-input:focus {
-  border-color: var(--accent);
-}
-
-.hint {
-  color: var(--text-3);
-  font-size: 11.5px;
-  line-height: 1.6;
-  margin: 0;
-}
-
-.qr-area {
-  display: flex;
-  gap: 16px;
-  padding: 16px 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.qr {
-  flex: none;
-  background: #fff;
-  padding: 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-}
-
-.qr :deep(svg) {
-  display: block;
-}
-
-.qr-side {
+/* 未登录引导 */
+.not-logged-in {
   flex: 1;
-  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
 }
 
-.qr-title {
-  font-weight: 600;
+.nl-icon {
+  font-size: 30px;
+  opacity: 0.8;
 }
 
-.qr-status {
-  color: var(--warn);
+.nl-text {
+  font-size: 14px;
+  color: var(--text);
 }
 
-.qr-payload code {
-  display: block;
-  font-size: 10.5px;
+.nl-hint {
+  margin: 0 0 6px;
+  max-width: 300px;
+  text-align: center;
   color: var(--text-3);
-  word-break: break-all;
-  background: var(--code-bg);
-  border-radius: 6px;
-  padding: 6px;
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .online {
@@ -535,7 +463,21 @@ input:focus {
   padding: 12px 6px;
   line-height: 1.7;
 }
-/* 贾维斯界面：扫码窗头部等宽化（弹窗玻璃、输入、按钮由全局 jarvis.css 覆盖） */
+
+.link-btn {
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* 贾维斯界面：聊天窗头部等宽化（弹窗玻璃、输入、按钮由全局 jarvis.css 覆盖） */
 [data-theme='jarvis'] .head {
   border-bottom-color: rgba(34, 211, 238, 0.25);
 }

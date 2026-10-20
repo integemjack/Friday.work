@@ -6,7 +6,21 @@
    注意：xterm 的隐藏输入框 .xterm-helper-textarea 必须排除，不能动。
    ============================================================ */
 
-/* ---- 输入框 / 文本域：透明青底 + 聚焦辉光 ---- */
+/* ---- 融合层：桌面上常驻的实底容器全部磨砂玻璃化，让全息网格背景透出来 ----
+   （变量 --panel 已半透明；这里补 backdrop blur，没有 blur 的半透明只是发灰） */
+html[data-theme='jarvis'] .titlebar,
+html[data-theme='jarvis'] .call-widget,
+html[data-theme='jarvis'] .dock-rail,
+html[data-theme='jarvis'] .composer {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+html[data-theme='jarvis'] .titlebar {
+  border-bottom: 1px solid rgba(34, 211, 238, 0.18);
+}
+
+/* 输入框 / 文本域：透明青底 + 聚焦辉光 */
 html[data-theme='jarvis']
   :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea) {
   background-color: rgba(34, 211, 238, 0.04);

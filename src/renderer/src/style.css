@@ -1,9 +1,9 @@
 /* Friday Work —— 简洁大气：纯色底、1px 分隔、圆角卡片；深浅色跟随系统 */
 
 :root {
-  --bg: #f6f6f7;
-  --panel: #ffffff;
-  --panel-2: #fafafa;
+  /* 面板半透明：桌面内容与背景融合（磨砂玻璃），浅色 = 白玻璃 */
+  --panel: rgba(255, 255, 255, 0.62);
+  --panel-2: rgba(255, 255, 255, 0.45);
   --border: #e4e4e7;
   --text: #18181b;
   --text-2: #71717a;
@@ -29,8 +29,9 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1e1f22;
-    --panel: #26272b;
-    --panel-2: #2b2c31;
+    /* 深色 = 烟熏玻璃 */
+    --panel: rgba(38, 39, 43, 0.55);
+    --panel-2: rgba(43, 44, 49, 0.5);
     --border: #3a3b3f;
     --text: #e4e4e7;
     --text-2: #a1a1aa;
@@ -57,8 +58,10 @@
    specificity 是 0,2,0，压过上面浅/深两套 :root（0,1,0），不管系统偏好固定走这套。 */
 :root[data-theme='jarvis'] {
   --bg: #060b14;
-  --panel: rgba(9, 21, 38, 0.92);
-  --panel-2: rgba(13, 30, 52, 0.94);
+  /* 面板半透明：桌面上的内容（窗口/挂件/工具栏）和全息网格背景融为一体，
+     配合各容器的 backdrop blur 成磨砂全息玻璃；文本对比靠深底色保住 */
+  --panel: rgba(9, 21, 38, 0.45);
+  --panel-2: rgba(13, 30, 52, 0.5);
   --border: rgba(34, 211, 238, 0.22);
   --text: #d7f2ff;
   --text-2: #82b9d6;
@@ -149,6 +152,17 @@ input,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/* MARK: 融合层（所有主题）：桌面上常驻的容器半透明 + 磨砂模糊，背景透出来。
+   半透明没有 blur 只是发灰；blur 在这里统一给，不挑主题 */
+.win,
+.titlebar,
+.call-widget,
+.composer,
+.dock-rail {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 ::-webkit-scrollbar {

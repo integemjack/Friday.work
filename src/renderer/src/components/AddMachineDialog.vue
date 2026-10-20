@@ -62,7 +62,10 @@ async function add(botID: number, name: string) {
           </button>
         </div>
       </template>
-      <div v-else class="empty">SChat 没登录：先到 设置 → SChat 扫码登录，再回来添加。</div>
+      <div v-else class="empty">
+        SChat 没登录，扫码后才能从机器人列表连机器。
+        <button class="primary" style="margin-top: 8px" @click="emit('close'); store.openLogin()">去扫码登录</button>
+      </div>
 
       <div v-if="error" class="error">{{ error }}</div>
       <div class="row">

@@ -116,7 +116,7 @@ export class MachineConnection {
       if (!signalingHost) {
         this.connecting = false
         this.state = 'failed'
-        this.detail = 'SChat 没在线：先在设置里扫码登录'
+        this.detail = 'SChat 没在线：先在登录页扫码登录'
         this.host.onStateChange(this)
         if (this.wanted) this.scheduleReconnect()
         return

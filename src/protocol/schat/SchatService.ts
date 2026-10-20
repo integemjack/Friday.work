@@ -53,6 +53,8 @@ export interface SchatState {
   server: string
   userId: number
   deviceName: string
+  /** 启动时正用存档凭据静默恢复（登录页据此不急着生成新二维码） */
+  restoring: boolean
   /** 登录中：要渲染的 SCSH:1:login:<token> */
   qrPayload: string
   qrExpiresAt: number
@@ -86,6 +88,7 @@ export class SchatService {
     server: DEFAULT_SCHAT_SERVER,
     userId: 0,
     deviceName: '',
+    restoring: false,
     qrPayload: '',
     qrExpiresAt: 0,
     status: '',
@@ -154,10 +157,11 @@ export class SchatService {
     this.hooks.onChange(this.state)
   }
 
-  /** 启动时读回已登录的会话（有就直连，不再扫码） */
+  /** 启动时读回已登录的会话（有就直连，不再扫码）。restoring 期间渲染层的登录页显示「正在恢复」而不是立刻生成新二维码 */
   async load(): Promise<void> {
     if (this.loading) return
     this.loading = true
+    this.patch({ restoring: true })
     try {
       const raw = await this.backend.load(KEY)
       if (!raw) return
@@ -170,6 +174,7 @@ export class SchatService {
       // 存档坏了当没登录
     } finally {
       this.loading = false
+      this.patch({ restoring: false })
     }
   }
 
@@ -310,8 +315,8 @@ export class SchatService {
     return `${protocol}//${url.host}/ws`
   }
 
-  /** 好友里 isBot 的那些（周五机器人就在这） */
-  private async loadBots(): Promise<void> {
+  /** 好友里 isBot 的那些（周五机器人就在这）；登录页/聊天窗都能主动刷新 */
+  async loadBots(): Promise<void> {
     if (!this.session) return
     try {
       const friends = await fetchFriends(this.session.server, this.session.token, {

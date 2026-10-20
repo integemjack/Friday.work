@@ -366,6 +366,7 @@ watch(() => store.detail?.conversationID, () => void loadChanges())
   gap: 6px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
   flex: 0 0 auto;
 }
 
@@ -660,9 +661,9 @@ watch(() => store.detail?.conversationID, () => void loadChanges())
   background: rgba(200, 80, 70, 0.12);
   color: #a83d34;
 }
-/* 贾维斯界面：文件窗变档案终端——工具条、路径、目录行、diff 都青色化 */
+/* 贾维斯界面：文件窗变档案终端——工具条、路径、目录行、diff 都青色化（半透明，背景透出来） */
 [data-theme='jarvis'] .toolbar {
-  background: rgba(10, 25, 45, 0.5);
+  background: rgba(10, 25, 45, 0.28);
   border-bottom-color: rgba(34, 211, 238, 0.2);
   font-family: var(--font-hud);
 }
@@ -695,6 +696,7 @@ watch(() => store.detail?.conversationID, () => void loadChanges())
 }
 
 [data-theme='jarvis'] .diff {
-  background: rgba(7, 20, 36, 0.85);
+  /* diff 是文本对照区，保留较高不透明度保可读性，但不再是实底 */
+  background: rgba(7, 20, 36, 0.6);
 }
 </style>

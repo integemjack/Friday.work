@@ -21,6 +21,8 @@ class HostLink {
   private readonly schatListeners = new Set<(state: unknown) => void>()
   private readonly callSignalListeners = new Set<(signal: unknown) => void>()
   private readonly workListeners = new Set<(message: { type: string; machineID: string } & Record<string, unknown>) => void>()
+  /** port 还没到时排队等它的请求（渲染层挂载比 preload 建 port 早，登录页的自动登录首拍就会撞上） */
+  private portWaiters: Array<() => void> = []
 
   constructor() {
     window.addEventListener('message', (event) => {
@@ -32,6 +34,8 @@ class HostLink {
 
   private attach(port: MessagePort): void {
     this.port = port
+    // port 到了：唤醒在排队的请求
+    for (const wake of this.portWaiters.splice(0)) wake()
     port.onmessage = (event) => {
       const data = event.data as HostResponse | HostEvent
       if (!data || typeof data !== 'object') return
@@ -76,8 +80,28 @@ class HostLink {
     port.start()
   }
 
+  /** 等 port 就绪（最多 timeoutMs，超时拒绝） */
+  private waitForPort(timeoutMs: number): Promise<void> {
+    if (this.port) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      const wake = (): void => {
+        window.clearTimeout(timer)
+        resolve()
+      }
+      const timer = window.setTimeout(() => {
+        const index = this.portWaiters.indexOf(wake)
+        if (index >= 0) this.portWaiters.splice(index, 1)
+        reject(new Error('还没连上协议进程'))
+      }, timeoutMs)
+      this.portWaiters.push(wake)
+    })
+  }
+
   request(request: HostRequest): Promise<unknown> {
-    if (!this.port) return Promise.reject(new Error('还没连上协议进程'))
+    if (!this.port) {
+      // 渲染层可能比协议进程的 port 早准备好：等一等再发，别第一拍就报「还没连上」
+      return this.waitForPort(10_000).then(() => this.request(request))
+    }
     const reqID = this.nextReqID++
     return new Promise((resolve, reject) => {
       this.pending.set(reqID, { resolve, reject })

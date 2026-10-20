@@ -128,7 +128,7 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   machines: { title: '机器与会话', icon: '⛁' },
   voice: { title: '语音', icon: '🎙' },
   settings: { title: '设置', icon: '⚙' },
-  schat: { title: '扫码一键连', icon: '⚡' },
+  schat: { title: '机器人聊天', icon: '🤖' },
   call: { title: '通话', icon: '📞' },
   timeline: { title: '助手时间线', icon: '🗒' }
 }
@@ -244,6 +244,7 @@ export const useAppStore = defineStore('app', {
       server: 'https://47.100.98.3:2012',
       userId: 0,
       deviceName: '',
+      restoring: false,
       qrPayload: '',
       qrExpiresAt: 0,
       status: '',
@@ -284,6 +285,14 @@ export const useAppStore = defineStore('app', {
     },
     /** 启动后是否已尝试自动连接存着的机器 */
     autoConnectDone: false,
+    /** 已进入工作台（连过机器/静默恢复过）：登录页不再自动盖在桌面上 */
+    workbenchReady: false,
+    /** 登录页正在显示（LoginView 挂/卸时维护）：机器广播不再自动把它收起来，由登录页连上后自己收 */
+    loginActive: false,
+    /** 手动打开的登录页（换账号/重新扫码时盖在桌面上） */
+    loginOverlay: false,
+    /** 桌面直显面板（终端/文件/浏览器不再是浮动窗口）：true=展开。连上机器后铺在桌面上 */
+    docks: { files: true, browser: true, terminals: true } as Record<'files' | 'browser' | 'terminals', boolean>,
     /** 信令队列（state）：通话窗口从里面取（带序号，取过就不重复） */
     callSignals: [] as Array<{ seq: number; signal: unknown }>,
     callSignalSeq: 0,
@@ -381,6 +390,13 @@ export const useAppStore = defineStore('app', {
 
     /** 开一个窗口（同类型已在就置顶；会话窗口按 conversationID 区分） */
     openWindow(kind: WindowKind, options: { conversationID?: string; title?: string } = {}): string {
+      // 终端/文件/浏览器是桌面直显面板：入口点击=把面板亮出来，不开浮动窗口
+      if (kind === 'terminals' || kind === 'files' || kind === 'browser') {
+        this.docks[kind] = true
+        return ''
+      }
+      // 通话不再是窗口：右下角挂件随通话状态自动出现/消失
+      if (kind === 'call') return ''
       const existing = this.windows.find((item) =>
         kind === 'conversation'
           ? item.kind === kind && item.conversationID === options.conversationID
@@ -480,6 +496,11 @@ export const useAppStore = defineStore('app', {
       }
     },
 
+    /** 折叠/展开一个桌面面板（终端/文件/浏览器） */
+    toggleDock(name: 'files' | 'browser' | 'terminals') {
+      this.docks[name] = !this.docks[name]
+    },
+
     /** 关掉某类窗口（切机器时用） */
     closeWindowsOfKind(kind: WindowKind) {
       for (const item of this.windows.filter((entry) => entry.kind === kind)) {
@@ -504,7 +525,7 @@ export const useAppStore = defineStore('app', {
       // 去重（与 saveLayout 同一套规则）：旧存档里可能攒着同类重复窗口，原样恢复会越攒越多
       const seen = new Set<string>()
       for (const item of items) {
-        if (item.kind === 'call' || !WINDOW_SIZE[item.kind]) continue
+        if (item.kind === 'call' || item.kind === 'terminals' || item.kind === 'files' || item.kind === 'browser' || !WINDOW_SIZE[item.kind]) continue
         const key = item.kind === 'conversation' ? `conversation:${item.conversationID}` : item.kind
         if (seen.has(key)) continue
         seen.add(key)
@@ -576,6 +597,9 @@ export const useAppStore = defineStore('app', {
       void this.schatRefresh().catch(() => {})
       host.onMachines((info) => {
         this.machines = info.machines
+        // 存着机器就算进了工作台，登录页退下去；但登录页自己在场时不行——
+        // 它刚添加的机器还在连接中，要等它连上（ready）自己收（否则连接失败会把用户撂在半开的工作台上）
+        if (info.machines.length > 0 && !this.loginActive) this.workbenchReady = true
         if (!this.currentMachine && info.machines.length > 0) {
           this.currentMachine = info.current || info.machines[0]!.id
         }
@@ -621,9 +645,8 @@ export const useAppStore = defineStore('app', {
       host.onSchat((state) => {
         const previous = this.schat.call.phase
         this.schat = state as typeof this.schat
-        // 来电：自动把通话窗口弹出来（用户看得见才不会漏接）
+        // 来电：右下角挂件自动出现（看 phase 即可），再补一条系统通知
         if (this.schat.call.phase === 'incoming' && previous !== 'incoming') {
-          this.openWindow('call')
           window.fridayBridge?.notify({
             title: '来电',
             body: `${this.schat.call.peerName} 打来电话`
@@ -1180,23 +1203,54 @@ export const useAppStore = defineStore('app', {
       await host.request({ type: 'schat.send', botID, text })
     },
 
-    /** 一键连上这台机器（0.3）：从机器人列表直接建机器（WebRTC 工作通道）→ 连上 */
+    /** 重拉好友里的机器人列表（登录后列表为空/新加了机器人时用） */
+    async schatRefreshBots() {
+      const state = (await host.request({ type: 'schat.refreshBots' })) as typeof this.schat
+      this.schat = state
+      return state
+    },
+
+    /** 一键连上这台机器（0.3）：从机器人列表直接建机器（WebRTC 工作通道）→ 连接；返回 machineID（登录页盯它的连接状态） */
     async connectWork(botID: number, name?: string): Promise<string> {
       this.connectingWork = true
       try {
         const bot = (this.schat as { bots?: { id: number; name?: string }[] }).bots?.find(
           (item) => item.id === botID
         )
+        // machines.addWork 回的是 { machines, current }（协议进程 addMachine 末尾的 machinesInfo）
         const added = (await host.request({
           type: 'machines.addWork',
           botID,
           name: name ?? bot?.name
-        })) as { id?: string }
-        if (added.id) await this.connectMachine(added.id)
-        return added.id ?? String(botID)
+        })) as { machines?: MachineStateInfo[]; current?: string }
+        if (added.machines) this.machines = added.machines
+        const machineID =
+          added.current ??
+          this.machines.find((machine) => machine.targetText === `work:${botID}`)?.id ??
+          String(botID)
+        if (added.current) await this.connectMachine(machineID)
+        return machineID
       } finally {
         this.connectingWork = false
       }
+    },
+
+    // MARK: 登录页 / 工作台
+
+    /** 连接成功，收起登录页进工作台：桌上没窗口时补开「机器与会话」 */
+    enterWorkbench() {
+      this.workbenchReady = true
+      this.loginOverlay = false
+      if (!this.windows.length) this.openWindow('machines')
+    },
+
+    /** 打开登录页（工作台里重新扫码/换账号时盖在桌面上） */
+    openLogin() {
+      this.loginOverlay = true
+    },
+
+    closeLogin() {
+      this.loginOverlay = false
     },
 
     // MARK: 通话（M3-D）
@@ -1214,7 +1268,6 @@ export const useAppStore = defineStore('app', {
     },
 
     async callDial(botID: number, callType: 'audio' | 'video' = 'audio') {
-      this.openWindow('call')
       return host.request({ type: 'schat.call.dial', botID, callType })
     },
 

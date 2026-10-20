@@ -23,13 +23,15 @@ let fitAddon: FitAddon | null = null
 // xterm 的配色是 JS 层主题（CSS 盖不到）：贾维斯下换深空蓝底 + 青色光标/选区 + 调过的 ANSI 色板
 const XTERM_THEMES = {
   system: {
-    background: '#14151a',
+    /* 半透明深底：融合（需要 allowTransparency，见 new Terminal） */
+    background: 'rgba(20, 21, 26, 0.55)',
     foreground: '#e6e6e8',
     cursor: '#8ab4f8',
     selectionBackground: '#3a4a6b'
   },
   jarvis: {
-    background: '#071018',
+    // 透明底：终端文字直接浮在全息网格背景上（需要 allowTransparency，见 new Terminal）
+    background: 'rgba(6, 11, 20, 0)',
     foreground: '#c9e7f2',
     cursor: '#22d3ee',
     cursorAccent: '#071018',
@@ -143,7 +145,9 @@ onMounted(async () => {
     fontFamily: 'Consolas, "Cascadia Mono", "Sarasa Mono SC", monospace',
     theme: xtermTheme(),
     scrollback: 4000,
-    allowProposedApi: true
+    allowProposedApi: true,
+    // 融合：终端背景透明，桌面背景透出来
+    allowTransparency: true
   })
   fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
@@ -178,7 +182,10 @@ onMounted(async () => {
 
 // 切主题时热切换终端配色（xterm 支持运行时改 options.theme）
 watch(uiTheme, () => {
-  if (term) term.options.theme = xtermTheme()
+  if (term) {
+    term.options.theme = xtermTheme()
+    term.options.allowTransparency = true
+  }
 })
 
 onBeforeUnmount(() => {
@@ -228,7 +235,8 @@ async function selectTerminal(id: string): Promise<void> {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #14151a;
+  /* 融合：透明底，文字浮在桌面背景上（xterm 画布也是透明的） */
+  background: transparent;
 }
 
 .notice {
@@ -244,8 +252,8 @@ async function selectTerminal(id: string): Promise<void> {
   gap: 4px;
   padding: 6px 8px;
   overflow-x: auto;
-  border-bottom: 1px solid #26282f;
-  background: #1a1c22;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
   flex: 0 0 auto;
 }
 
@@ -320,14 +328,14 @@ async function selectTerminal(id: string): Promise<void> {
   color: #7a8090;
 }
 
-/* 贾维斯界面：终端变 CRT 全息屏——深蓝底、青色 tab、扫描线覆层 */
+/* 贾维斯界面：终端变 CRT 全息屏——透明底（文字浮在全息网格上）、青色 tab、扫描线覆层 */
 [data-theme='jarvis'] .term-card {
-  background: #071018;
+  background: transparent;
   box-shadow: inset 0 0 60px rgba(34, 211, 238, 0.045);
 }
 
 [data-theme='jarvis'] .term-tabs {
-  background: rgba(10, 25, 45, 0.7);
+  background: rgba(10, 25, 45, 0.28);
   border-bottom-color: rgba(34, 211, 238, 0.25);
 }
 

@@ -254,6 +254,13 @@ function stop() {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+/* 贾维斯界面：输入卡和背景融合——更透的底、柔和发光描边（不是锐利实线） */
+[data-theme='jarvis'] .composer-card {
+  background: rgba(13, 30, 52, 0.35);
+  border-color: rgba(34, 211, 238, 0.2);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.06);
+}
+
 .composer-card.focused {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-weak);

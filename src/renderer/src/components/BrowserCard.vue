@@ -302,9 +302,9 @@ watch(
   line-height: 1.7;
 }
 
-/* 贾维斯界面：浏览器变远程观测屏——青色 tab 栏、等宽地址栏、画面框描边 */
+/* 贾维斯界面：浏览器变远程观测屏——半透明 tab 栏（背景透出来）、等宽地址栏、画面框描边 */
 [data-theme='jarvis'] .tabs {
-  background: rgba(10, 25, 45, 0.7);
+  background: rgba(10, 25, 45, 0.28);
   border-bottom-color: rgba(34, 211, 238, 0.25);
 }
 
@@ -349,6 +349,7 @@ watch(
   gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
   overflow-x: auto;
   flex: 0 0 auto;
 }
@@ -465,10 +466,15 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #1a1b20;
+  /* 页面截图本身有底色；没页面时这层透出桌面背景 */
+  background: transparent;
   overflow: hidden;
   outline: none;
   cursor: default;
+}
+
+[data-theme='jarvis'] .screen {
+  background: rgba(6, 11, 20, 0.3);
 }
 
 .screen.hand-over {

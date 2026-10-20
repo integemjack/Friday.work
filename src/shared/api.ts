@@ -87,6 +87,8 @@ export type HostRequest =
   | { type: 'schat.login'; server?: string; deviceName?: string }
   | { type: 'schat.disconnect' }
   | { type: 'schat.send'; botID: number; text: string }
+  /** 重拉好友里的机器人列表（登录后列表为空/新加了机器人时用） */
+  | { type: 'schat.refreshBots' }
   /** 从机器人列表直接建机器（0.3：WebRTC 工作通道） */
   | { type: 'machines.addWork'; botID: number; name?: string }
   /** 1:1 通话（M3-D）：拨打 / 信令 / 接通 / 静音 / 挂断 / ICE */
