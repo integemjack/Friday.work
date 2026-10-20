@@ -1,6 +1,6 @@
 // 对拍两份快照：node scripts/theme-diff.cjs <目录A> <目录B> [--views v1,v2]
-// 目录结构：<目录>/<主题>/<视图>.styles.txt + root-vars.txt
-// 退出码：0 = 零差异；1 = 有差异（并列出）
+// 目录结构：<目录>/<主题>/<视图>.styles.txt + root-vars.txt（styles 按行首 key 配对）
+// 退出码：0 = 零差异；1 = 有差异（每视图最多列 5 处，总数照实计）
 const fs = require('fs')
 const path = require('path')
 
@@ -19,6 +19,16 @@ const report = (line) => { console.log(line); diffs++ }
 // 支持两种传参：传根目录（内含 <主题>/ 子目录）或直接传主题目录（内含 root-vars.txt）
 const themesA = fs.existsSync(path.join(dirA, 'root-vars.txt')) ? ['.'] : fs.readdirSync(dirA)
 
+const parseStyles = (txt) => {
+  const map = new Map()
+  for (const line of txt.split('\n')) {
+    if (!line.trim()) continue
+    const idx = line.indexOf('|')
+    if (idx > 0) map.set(line.slice(0, idx), line.slice(idx + 1))
+  }
+  return map
+}
+
 for (const theme of themesA) {
   const ta = path.join(dirA, theme)
   const tb = path.join(dirB, theme)
@@ -31,33 +41,38 @@ for (const theme of themesA) {
   const varMapA = new Map(va.map((l) => [l.split(' = ')[0], l.split(' = ')[1] ?? '']))
   const varMapB = new Map(vb.map((l) => [l.split(' = ')[0], l.split(' = ')[1] ?? '']))
   for (const [k, v] of varMapA) {
-    if (!varMapB.has(k)) report(`[${theme}] root-var 仅A有: ${k} = ${v}`)
-    else if (varMapB.get(k) !== v) report(`[${theme}] root-var 不一致: ${k}\n    A: ${v}\n    B: ${varMapB.get(k)}`)
+    if (!varMapB.has(k)) report(`${label}root-var 仅A有: ${k} = ${v}`)
+    else if (varMapB.get(k) !== v) report(`${label}root-var 不一致: ${k}\n    A: ${v}\n    B: ${varMapB.get(k)}`)
   }
-  for (const k of varMapB.keys()) if (!varMapA.has(k)) report(`[${theme}] root-var 仅B有: ${k} = ${varMapB.get(k)}`)
+  for (const k of varMapB.keys()) if (!varMapA.has(k)) report(`${label}root-var 仅B有: ${k} = ${varMapB.get(k)}`)
 
-  for (const file of fs.readdirSync(ta)) {
-    if (!file.endsWith('.styles.txt')) continue
-    const view = file.replace('.styles.txt', '')
-    if (viewFilter && !viewFilter.includes(view)) continue
-    const pb = path.join(tb, file)
-    if (!fs.existsSync(pb)) { report(`[${theme}/${view}] 目录B缺少该视图样式`); continue }
-    const la = fs.readFileSync(path.join(ta, file), 'utf8').split('\n')
-    const lb = fs.readFileSync(pb, 'utf8').split('\n')
-    const n = Math.max(la.length, lb.length)
-    for (let i = 0; i < n; i++) {
-      if (la[i] !== lb[i]) {
-        const keyA = la[i]?.split('|')[1] ?? '(无)'
-        const keyB = lb[i]?.split('|')[1] ?? '(无)'
-        report(`[${theme}/${view}] 第${i + 1}行元素样式不一致 (${keyA} / ${keyB})\n    A: ${la[i] ?? '(缺失)'}\n    B: ${lb[i] ?? '(缺失)'}`)
-      }
+  const views = new Set()
+  for (const dir of [ta, tb]) {
+    for (const file of fs.readdirSync(dir)) {
+      if (file.endsWith('.styles.txt')) views.add(file.replace('.styles.txt', ''))
     }
   }
-  for (const file of fs.readdirSync(tb)) {
-    if (!file.endsWith('.styles.txt')) continue
-    const view = file.replace('.styles.txt', '')
+
+  for (const view of views) {
     if (viewFilter && !viewFilter.includes(view)) continue
-    if (!fs.existsSync(path.join(ta, file))) report(`[${theme}/${view}] 目录A缺少该视图样式`)
+    const pa = path.join(ta, view + '.styles.txt')
+    const pb = path.join(tb, view + '.styles.txt')
+    if (!fs.existsSync(pa) || !fs.existsSync(pb)) {
+      report(`${label}${view}: ${!fs.existsSync(pa) ? 'A' : 'B'} 缺少该视图样式`)
+      continue
+    }
+    const mapA = parseStyles(fs.readFileSync(pa, 'utf8'))
+    const mapB = parseStyles(fs.readFileSync(pb, 'utf8'))
+    let shown = 0
+    const show = (msg) => { if (shown < 5) { console.log(msg); shown++ } }
+    for (const [k, v] of mapA) {
+      if (!mapB.has(k)) { show(`${label}${view}: 仅A有元素 ${k} → ${v}`); diffs++ }
+      else if (mapB.get(k) !== v) { show(`${label}${view}: 元素样式不一致 ${k}\n    A: ${v}\n    B: ${mapB.get(k)}`); diffs++ }
+    }
+    for (const [k, v] of mapB) {
+      if (!mapA.has(k)) { show(`${label}${view}: 仅B有元素 ${k} → ${v}`); diffs++ }
+    }
+    if (shown >= 5) console.log(`${label}${view}: ……（其余差异省略）`)
   }
 }
 

@@ -49,14 +49,26 @@ const VIEWS = [
   { name: 'win-conversation', setup: `(() => { ${MOCK_JS}; s.windows = []; s.openWindow('conversation', { conversationID: 'conv-mock' }); return 'ok' })()` }
 ]
 
-// 页面内执行：computed style 全量 dump（文档顺序索引为 key，动画属性只记 animation-name）
+// 页面内执行：computed style 全量 dump（DOM 路径为 key，动画属性只记 animation-name）
 const DUMP_JS = `(() => {
   const PROPS = ['color','backgroundColor','backgroundImage','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','boxShadow','fontFamily','fontSize','fontWeight','letterSpacing','textTransform','opacity','textShadow','caretColor','outlineColor']
   const ANIMATED = new Set(['color','backgroundColor','backgroundImage','borderTopColor','borderRightColor','borderBottomColor','borderLeftColor','boxShadow','opacity','textShadow','transform','filter','backgroundPosition'])
+  // 非视觉元素不进 dump（Vite 注入的 STYLE/LINK 数量随构建方式变，与样式无关）
+  const SKIP = new Set(['STYLE','SCRIPT','LINK','META','TEMPLATE','TITLE','HEAD','BASE','NOSCRIPT'])
+  const pathOf = (el) => {
+    const chain = []
+    let node = el
+    while (node && node.parentElement) {
+      const parent = node.parentElement
+      const k = [...parent.children].filter((c) => c.tagName === node.tagName).indexOf(node) + 1
+      chain.unshift(node.tagName + (node.id ? '#' + node.id : '') + ':nth-of-type(' + k + ')')
+      node = parent
+    }
+    return chain.join('>')
+  }
   const out = []
-  const all = document.querySelectorAll('*')
-  let i = 0
-  for (const el of all) {
+  for (const el of document.querySelectorAll('*')) {
+    if (SKIP.has(el.tagName)) continue
     const cs = getComputedStyle(el)
     const anim = cs.animationName !== 'none' ? cs.animationName : ''
     const parts = []
@@ -66,10 +78,9 @@ const DUMP_JS = `(() => {
       if (v && v !== 'none' && v !== '' && v !== 'auto' && v !== 'normal') parts.push(p + ':' + v)
     }
     if (anim) parts.push('anim:' + anim)
-    if (parts.length) out.push(i + '|' + el.tagName + (el.id ? '#' + el.id : '') + '|' + parts.join(';'))
-    i++
+    if (parts.length) out.push(pathOf(el) + '|' + parts.join(';'))
   }
-  return out.join('\\n')
+  return out.sort().join('\\n')
 })()`
 
 // 页面内执行：收集 :root 上生效的全部 CSS 变量值
