@@ -49,6 +49,11 @@ export class WorkSignaling {
     return !this.ended
   }
 
+  /** 现在这次拨号的 requestId（认领 SChat 帧用；空闲为空） */
+  currentRequestID(): string {
+    return this.ended ? '' : this.requestId
+  }
+
   /** 发起连接：p2p_request(callType work)。30 秒没被接受就报失败（上层重拨） */
   dial(botID: number): void {
     this.dispose()
@@ -64,6 +69,8 @@ export class WorkSignaling {
       timestamp: Date.now(),
       expiresAt: Date.now() + 30_000
     })
+    // eslint-disable-next-line no-console
+    console.log(`[work] → p2p_request(work) bot=${botID} req=${this.requestId}`)
     this.timer = setTimeout(() => {
       if (!this.ended) this.finish('机器人 30 秒内没接受连接（它在线吗？装的是 2.38+ 吗？）')
     }, 30_000)

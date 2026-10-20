@@ -119,11 +119,12 @@ export class ProtocolHost {
       this.entries = []
       this.current = ''
     }
-    // 上次保存的机器重建连接对象（不自动连；渲染进程决定什么时候连）
+    // 上次保存的机器重建连接对象（不自动连；渲染进程决定什么时候连）。
+    // 0.3：只认 work（SChat 扫码连入的机器人）；旧版存的 ssh / wsl / wss 条目直接跳过（界面里也建不了了）
     for (const entry of this.entries) {
       if (this.machines.has(entry.id)) continue
       const target = parseTarget(entry.target)
-      if (!target) continue
+      if (!target || target.kind !== 'work') continue
       if (entry.identityFile) target.identityFile = entry.identityFile
       const machine = new MachineConnection(
         entry.id,

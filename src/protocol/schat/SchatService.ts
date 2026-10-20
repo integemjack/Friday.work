@@ -73,7 +73,8 @@ export interface SchatHooks {
 
 /** work 通道（0.3）：callType "work" 的 p2p_* 转给对应机器的连接 */
 export interface WorkRoute {
-  onWorkEnvelope(event: string, data: Record<string, unknown>): void
+  /** 这帧是不是这台机器 work 会话的（requestId 对得上）？不是就交回普通通话处理 */
+  onWorkEnvelope(event: string, data: Record<string, unknown>): boolean
 }
 
 /** 生产 chatserver（方案 §7.4：https://47.100.98.3:2012） */
@@ -125,6 +126,14 @@ export class SchatService {
 
   unregisterWorkRoute(botID: number): void {
     this.workRoutes.delete(botID)
+  }
+
+  /** 这帧是不是 work 会话的（该 bot 的在连 work 机器认领这个 requestId）？
+   *  同一个 bot 可以同时有 audio 通话和 work 通道：requestId 对得上的才算 work 的 */
+  private isWorkFrame(botID: number, event: string, data: Record<string, unknown>): boolean {
+    const route = this.workRoutes.get(botID)
+    if (!route) return false
+    return route.onWorkEnvelope(event, data)
   }
 
   /** work 通道的发帧能力（MachineConnection → WorkSignaling 用） */
@@ -368,17 +377,19 @@ export class SchatService {
   }
 
   private onEnvelope(envelope: SchatEnvelope): void {
-    // work 通道（0.3）：callType "work" 的请求、以及命中在连机器的回执/信令，转给对应机器的连接
+    // work 通道（0.3）：callType "work" 的请求、以及命中在连机器 work 会话（requestId 对得上）的回执/信令，
+    // 转给对应机器的连接；同一个 bot 的 audio 通话信令不截（requestId 不是 work 会话的就不算）
     const d = envelope.d as Record<string, unknown> | undefined
     if (d && typeof d === 'object') {
-      const botID = Number(d.fromUserId ?? 0)
-      const route = this.workRoutes.get(botID)
-      if (route && (envelope.e === 'p2p_response' || envelope.e === 'p2p_signaling')) {
-        route.onWorkEnvelope(envelope.e, d)
-        return
+      if (envelope.e === 'p2p_response' || envelope.e === 'p2p_signaling' || envelope.e === 'p2p_request') {
+        // eslint-disable-next-line no-console
+        console.log(`[schat] ← ${envelope.e} req=${String(d.requestId ?? '')} type=${String(d.type ?? '')} accepted=${String(d.accepted ?? '')} reason=${String(d.reason ?? '')} from=${String(d.fromUserId ?? '')}`)
       }
-      if (route && envelope.e === 'p2p_request' && d.callType === 'work') {
-        route.onWorkEnvelope(envelope.e, d)
+      const botID = Number(d.fromUserId ?? 0)
+      if (botID && envelope.e === 'p2p_response' && this.isWorkFrame(botID, envelope.e, d)) return
+      if (botID && envelope.e === 'p2p_signaling' && this.isWorkFrame(botID, envelope.e, d)) return
+      if (botID && envelope.e === 'p2p_request' && d.callType === 'work' && this.workRoutes.has(botID)) {
+        this.workRoutes.get(botID)?.onWorkEnvelope(envelope.e, d)
         return
       }
     }

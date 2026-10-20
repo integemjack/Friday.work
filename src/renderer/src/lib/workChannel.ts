@@ -35,10 +35,21 @@ class WorkChannel {
   constructor(
     private readonly machineID: string,
     private readonly callbacks: WorkChannelCallbacks
-  ) {}
+  ) {
+    this.log('constructed')
+  }
+
+  /** 验收日志：console + window 留底（CDP 探针可读） */
+  private log(line: string): void {
+    // eslint-disable-next-line no-console
+    console.log(`[workChannel ${this.machineID}] ${line}`)
+    const w = window as unknown as { __workDebug?: string[] }
+    ;(w.__workDebug ??= []).push(`${new Date().toISOString().slice(11, 23)} ${line}`)
+  }
 
   /** 机器人接受了（p2p_response accepted）：建 PC + DataChannel、出 offer */
   async accept(requestId: string): Promise<void> {
+    this.log(`accept req=${requestId}`)
     this.teardownPeer()
     this.requestId = requestId
     const iceServers = await this.callbacks.iceServers()
@@ -48,7 +59,10 @@ class WorkChannel {
     const dc = pc.createDataChannel('friday-work', { ordered: true })
     this.dc = dc
     dc.binaryType = 'arraybuffer'
-    dc.onopen = () => this.callbacks.onOpen(this.machineID, this.requestId)
+    dc.onopen = () => {
+      this.log('DataChannel OPEN')
+      this.callbacks.onOpen(this.machineID, this.requestId)
+    }
     dc.onclose = () => this.callbacks.onClosed(this.machineID, this.requestId, '通道关了')
     dc.onerror = () => this.callbacks.onClosed(this.machineID, this.requestId, '通道出错')
     dc.onmessage = (event) => this.onFrame(event.data)
@@ -66,17 +80,20 @@ class WorkChannel {
     }
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState
+      this.log('pc state=' + state)
       if (state === 'failed') {
         this.callbacks.onClosed(this.machineID, this.requestId, 'WebRTC 连不上（NAT 穿透失败）')
       }
     }
     const offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
+    this.log('offer ready，iceServers=' + iceServers.length + '，发送 offer')
     this.callbacks.onSignalOut(this.machineID, 'offer', offer.sdp ?? '')
   }
 
   /** 对端信令（answer / ice_candidate） */
   async signal(type: string, payload: string): Promise<void> {
+    this.log(`signal ${type} len=${payload.length}`)
     const pc = this.pc
     if (!pc) return
     if (type === 'answer') {

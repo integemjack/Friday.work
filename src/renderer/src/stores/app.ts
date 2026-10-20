@@ -572,6 +572,8 @@ export const useAppStore = defineStore('app', {
     },
 
     bindHost() {
+      // 协议进程可能比渲染进程先连上 SChat（静默恢复）：补拉一次状态，别等下一次变化
+      void this.schatRefresh().catch(() => {})
       host.onMachines((info) => {
         this.machines = info.machines
         if (!this.currentMachine && info.machines.length > 0) {

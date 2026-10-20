@@ -210,22 +210,35 @@ export class MachineConnection {
     this.workSignaling?.send(signalType, payload)
   }
 
-  /** SChat 侧路由进来的 p2p_*（callType work 这台机器的） */
-  handleWorkEnvelope(event: string, data: Record<string, unknown>): void {
+  /** SChat 的 p2p 帧进来（botID 对得上这台）：认领是这台 work 会话的才处理。
+   *  返回认领了没有——同一个 bot 可以同时有 audio 通话，requestId 不是 work 会话的
+   *  要交回普通通话（SchatService 据此决定截不截） */
+  handleWorkEnvelope(event: string, data: Record<string, unknown>): boolean {
+    if (event === 'offline') {
+      this.invalidateWork('SChat 连接断了')
+      return true
+    }
     const requestId = typeof data.requestId === 'string' ? data.requestId : String(data.requestId ?? '')
+    const signaling = this.workSignaling
+    if (!signaling) return false
+    if (event === 'p2p_request') {
+      // callType work 的请求才这台管（SchatService 已按 callType 过滤；到这里的都是重拨）
+      return String(data.callType ?? '') === 'work'
+    }
+    if (!requestId || requestId !== signaling.currentRequestID()) return false
     if (event === 'p2p_response') {
-      this.workSignaling?.onResponse(requestId, !!data.accepted, typeof data.reason === 'string' ? data.reason : '')
-      return
+      signaling.onResponse(requestId, !!data.accepted, typeof data.reason === 'string' ? data.reason : '')
+      return true
     }
     if (event === 'p2p_signaling') {
-      this.workSignaling?.onSignal(
+      signaling.onSignal(
         requestId,
         typeof data.type === 'string' ? data.type : '',
         typeof data.payload === 'string' ? data.payload : ''
       )
-      return
+      return true
     }
-    if (event === 'offline') this.invalidateWork('SChat 连接断了')
+    return false
   }
 
   /** SChat 掉线：work 机器立刻断开重拨（信令层没了，通道活不成） */
