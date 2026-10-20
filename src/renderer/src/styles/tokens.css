@@ -98,46 +98,87 @@
      （styles/jarvis.css 与各组件 scoped 里的贾维斯段）引用；
      浅/深主题不定义这些——它们没有这层装饰，效果走 base.css 的通用变量。 */
   --accent-a4: color-mix(in srgb, var(--accent) 4%, transparent);
+  --accent-a4-5: color-mix(in srgb, var(--accent) 4.5%, transparent);
+  --accent-a5: color-mix(in srgb, var(--accent) 5%, transparent);
+  --accent-a6: color-mix(in srgb, var(--accent) 6%, transparent);
   --accent-a7: color-mix(in srgb, var(--accent) 7%, transparent);
   --accent-a8: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-a9: color-mix(in srgb, var(--accent) 9%, transparent);
   --accent-a10: color-mix(in srgb, var(--accent) 10%, transparent);
   --accent-a12: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-a14: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-a15: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-a16: color-mix(in srgb, var(--accent) 16%, transparent);
   --accent-a18: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-a2-8: color-mix(in srgb, var(--accent) 2.8%, transparent);
+  --accent-a3: color-mix(in srgb, var(--accent) 3%, transparent);
   --accent-a20: color-mix(in srgb, var(--accent) 20%, transparent);
   --accent-a22: color-mix(in srgb, var(--accent) 22%, transparent);
   --accent-a25: color-mix(in srgb, var(--accent) 25%, transparent);
+  --accent-a26: color-mix(in srgb, var(--accent) 26%, transparent);
   --accent-a28: color-mix(in srgb, var(--accent) 28%, transparent);
   --accent-a30: color-mix(in srgb, var(--accent) 30%, transparent);
   --accent-a32: color-mix(in srgb, var(--accent) 32%, transparent);
   --accent-a35: color-mix(in srgb, var(--accent) 35%, transparent);
   --accent-a40: color-mix(in srgb, var(--accent) 40%, transparent);
   --accent-a45: color-mix(in srgb, var(--accent) 45%, transparent);
+  --accent-a50: color-mix(in srgb, var(--accent) 50%, transparent);
   --accent-a55: color-mix(in srgb, var(--accent) 55%, transparent);
   --accent-a60: color-mix(in srgb, var(--accent) 60%, transparent);
+  --accent-a65: color-mix(in srgb, var(--accent) 65%, transparent);
   --accent-a70: color-mix(in srgb, var(--accent) 70%, transparent);
+  --accent-a80: color-mix(in srgb, var(--accent) 80%, transparent);
   --accent-a90: color-mix(in srgb, var(--accent) 90%, transparent);
   --ok-a28: color-mix(in srgb, var(--ok) 28%, transparent);
   --ok-a30: color-mix(in srgb, var(--ok) 30%, transparent);
+  --ok-a50: color-mix(in srgb, var(--ok) 50%, transparent);
   --ok-a55: color-mix(in srgb, var(--ok) 55%, transparent);
+  --ok-a70: color-mix(in srgb, var(--ok) 70%, transparent);
   --run-a25: color-mix(in srgb, var(--run) 25%, transparent);
   --run-a32: color-mix(in srgb, var(--run) 32%, transparent);
   --run-a35: color-mix(in srgb, var(--run) 35%, transparent);
+  --run-a50: color-mix(in srgb, var(--run) 50%, transparent);
+  --warn-a2: color-mix(in srgb, var(--warn) 2%, transparent);
+  --warn-a10: color-mix(in srgb, var(--warn) 10%, transparent);
+  --warn-a18: color-mix(in srgb, var(--warn) 18%, transparent);
   --warn-a25: color-mix(in srgb, var(--warn) 25%, transparent);
   --warn-a30: color-mix(in srgb, var(--warn) 30%, transparent);
   --warn-a55: color-mix(in srgb, var(--warn) 55%, transparent);
+  --warn-a60: color-mix(in srgb, var(--warn) 60%, transparent);
+  --fail-a3: color-mix(in srgb, var(--fail) 30%, transparent);
+  --fail-a8: color-mix(in srgb, var(--fail) 8%, transparent);
+  --fail-a12: color-mix(in srgb, var(--fail) 12%, transparent);
+  --fail-a18: color-mix(in srgb, var(--fail) 18%, transparent);
   --fail-a35: color-mix(in srgb, var(--fail) 35%, transparent);
+  --fail-a50: color-mix(in srgb, var(--fail) 50%, transparent);
   --fail-a55: color-mix(in srgb, var(--fail) 55%, transparent);
   --fail-a60: color-mix(in srgb, var(--fail) 60%, transparent);
+  --fail-a65: color-mix(in srgb, var(--fail) 65%, transparent);
+  --fail-a70: color-mix(in srgb, var(--fail) 70%, transparent);
+  --fail-a85: color-mix(in srgb, var(--fail) 85%, transparent);
+  --text-3-a70: color-mix(in srgb, var(--text-3) 70%, transparent);
   --text-3-a80: color-mix(in srgb, var(--text-3) 80%, transparent);
 
   /* ---- 贾维斯专属面板层次（深色全息玻璃）---- */
   --panel-input: rgba(13, 30, 52, 0.35); /* 输入卡 */
   --panel-code: rgba(7, 20, 36, 0.85); /* 代码块/终端输出实底 */
+  --panel-code-a60: rgba(7, 20, 36, 0.6); /* 终端输出浅一档 */
   --panel-card-deep: rgba(10, 25, 45, 0.5); /* 工具卡/思考块 */
+  --panel-card-deep-a28: rgba(10, 25, 45, 0.28);
+  --panel-card-deep-a45: rgba(10, 25, 45, 0.45);
+  --panel-card-deep-a55: rgba(10, 25, 45, 0.55);
+  --panel-card-deep-a92: rgba(10, 25, 45, 0.92);
+  --panel-glass-deep: rgba(8, 22, 40, 0.62); /* HUD 台面玻璃底（输入台/挂件） */
+  --panel-a22: rgba(9, 21, 38, 0.22); /* --panel 同色的更透一档（网格线底） */
+  --bg-a30: color-mix(in srgb, var(--bg) 30%, transparent);
+  --bg-a55: color-mix(in srgb, var(--bg) 55%, transparent);
 
   /* ---- 文字 ---- */
   --heading-bright: #d9f6ff; /* markdown 标题的亮青白 */
   --code-inline-fg: #7dd3fc; /* 行内代码 */
+  --code-inline-fg-a90: color-mix(in srgb, var(--code-inline-fg) 90%, transparent);
+  --ok-bright: #34d399; /* 比 --ok 更亮一档的绿（终端/文件卡的完成态） */
+  --warn-bright: #e3b341; /* 比 --warn 更亮一档的琥珀（终端黄/警示文字） */
 
   /* ---- 滚动条（base.css 通用规则引用）---- */
   --scrollbar-thumb: color-mix(in srgb, var(--accent) 35%, transparent);

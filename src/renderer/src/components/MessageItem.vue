@@ -354,8 +354,8 @@ function md(blockID: string, caseName: string): string {
   height: 1px;
   margin-left: 10px;
   margin-right: 6px;
-  background: linear-gradient(90deg, rgba(34, 211, 238, 0.45), rgba(34, 211, 238, 0.08));
-  box-shadow: 0 0 6px rgba(34, 211, 238, 0.25);
+  background: linear-gradient(90deg, var(--accent-a45), var(--accent-a8));
+  box-shadow: 0 0 6px var(--accent-a25);
 }
 
 /* 用户气泡：右侧切角 + 锚死右边线（含媒体块） */
@@ -383,7 +383,7 @@ function md(blockID: string, caseName: string): string {
   font-family: var(--font-hud);
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: rgba(34, 211, 238, 0.6);
+  color: var(--accent-a60);
 }
 
 [data-theme='jarvis'] .thinking-caret {
@@ -391,7 +391,7 @@ function md(blockID: string, caseName: string): string {
 }
 
 [data-theme='jarvis'] .stats {
-  color: rgba(34, 211, 238, 0.55);
+  color: var(--accent-a55);
 }
 
 [data-theme='jarvis'] .stats::before {
@@ -402,7 +402,7 @@ function md(blockID: string, caseName: string): string {
 [data-theme='jarvis'] .tag.fail {
   font-family: var(--font-hud);
   letter-spacing: 1px;
-  border-color: rgba(251, 95, 125, 0.5);
+  border-color: var(--fail-a50);
   color: #ffc2cd;
 }
 

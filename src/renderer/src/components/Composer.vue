@@ -256,9 +256,9 @@ function stop() {
 
 /* 贾维斯界面：输入卡和背景融合——更透的底、柔和发光描边（不是锐利实线） */
 [data-theme='jarvis'] .composer-card {
-  background: rgba(13, 30, 52, 0.35);
-  border-color: rgba(34, 211, 238, 0.2);
-  box-shadow: 0 0 18px rgba(34, 211, 238, 0.06);
+  background: var(--panel-input);
+  border-color: var(--accent-a20);
+  box-shadow: 0 0 18px var(--accent-a6);
 }
 
 .composer-card.focused {
@@ -537,13 +537,13 @@ textarea::placeholder {
   position: relative;
   border-radius: 6px;
   background:
-    linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.4), transparent) top / 100% 1px no-repeat,
-    rgba(8, 22, 40, 0.62);
+    linear-gradient(90deg, transparent, var(--accent-a40), transparent) top / 100% 1px no-repeat,
+    var(--panel-glass-deep);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-color: rgba(34, 211, 238, 0.26);
+  border-color: var(--accent-a26);
   box-shadow:
-    0 0 20px rgba(34, 211, 238, 0.07),
+    0 0 20px var(--accent-a7),
     0 10px 26px rgba(0, 0, 0, 0.45);
 }
 
@@ -581,10 +581,10 @@ textarea::placeholder {
 }
 
 [data-theme='jarvis'] .composer-card.focused {
-  border-color: rgba(34, 211, 238, 0.6);
+  border-color: var(--accent-a60);
   box-shadow:
-    0 0 0 1px rgba(34, 211, 238, 0.2),
-    0 0 28px rgba(34, 211, 238, 0.16);
+    0 0 0 1px var(--accent-a20),
+    0 0 28px var(--accent-a16);
 }
 
 [data-theme='jarvis'] .composer-card.focused::before,
@@ -603,24 +603,24 @@ textarea::placeholder {
 }
 
 [data-theme='jarvis'] .icon-btn {
-  color: rgba(34, 211, 238, 0.65);
+  color: var(--accent-a65);
 }
 
 [data-theme='jarvis'] .icon-btn:hover {
   color: var(--accent);
-  text-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+  text-shadow: 0 0 8px var(--accent-a60);
 }
 
 [data-theme='jarvis'] .hint {
-  color: rgba(77, 125, 153, 0.7);
+  color: var(--text-3-a70);
 }
 
 [data-theme='jarvis'] .model-chip {
   font-family: var(--font-hud);
   letter-spacing: 1px;
-  border-color: rgba(34, 211, 238, 0.3);
+  border-color: var(--accent-a30);
   border-radius: 4px;
-  color: rgba(125, 211, 252, 0.9);
+  color: var(--code-inline-fg-a90);
 }
 
 [data-theme='jarvis'] .model-chip .model-caret {
@@ -629,24 +629,24 @@ textarea::placeholder {
 
 [data-theme='jarvis'] .model-chip:hover,
 [data-theme='jarvis'] .model-chip.open {
-  border-color: rgba(34, 211, 238, 0.55);
+  border-color: var(--accent-a55);
   color: #c9f2ff;
 }
 
 /* 发送 / 停止钮：圆环辉光；生成中停止键红色脉冲 */
 [data-theme='jarvis'] .round-btn {
-  border: 1px solid rgba(34, 211, 238, 0.55);
-  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid var(--accent-a55);
+  background: var(--accent-a10);
   color: #bdf3ff;
   box-shadow:
-    0 0 12px rgba(34, 211, 238, 0.25),
-    inset 0 0 8px rgba(34, 211, 238, 0.12);
+    0 0 12px var(--accent-a25),
+    inset 0 0 8px var(--accent-a12);
 }
 
 [data-theme='jarvis'] .round-btn.send:hover:not(:disabled) {
   box-shadow:
-    0 0 20px rgba(34, 211, 238, 0.5),
-    inset 0 0 10px rgba(34, 211, 238, 0.2);
+    0 0 20px var(--accent-a50),
+    inset 0 0 10px var(--accent-a20);
 }
 
 [data-theme='jarvis'] .round-btn.send:disabled {
@@ -655,20 +655,20 @@ textarea::placeholder {
 }
 
 [data-theme='jarvis'] .round-btn.stop {
-  border-color: rgba(251, 95, 125, 0.65);
-  background: rgba(251, 95, 125, 0.12);
+  border-color: var(--fail-a65);
+  background: var(--fail-a12);
   color: #ffc2cd;
   animation: jarvis-stop-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes jarvis-stop-pulse {
   50% {
-    box-shadow: 0 0 22px rgba(251, 95, 125, 0.5);
+    box-shadow: 0 0 22px var(--fail-a50);
   }
 }
 
 [data-theme='jarvis'] .busy-dot {
   background: var(--accent);
-  box-shadow: 0 0 8px rgba(34, 211, 238, 0.8);
+  box-shadow: 0 0 8px var(--accent-a80);
 }
 </style>

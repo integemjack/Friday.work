@@ -411,9 +411,9 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 [data-theme='jarvis'] .desktop {
   background-color: var(--bg);
   background-image:
-    radial-gradient(ellipse 60% 50% at 50% 42%, rgba(34, 211, 238, 0.1), transparent 70%),
-    linear-gradient(rgba(34, 211, 238, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px);
+    radial-gradient(ellipse 60% 50% at 50% 42%, var(--accent-a10), transparent 70%),
+    linear-gradient(var(--accent-a5) 1px, transparent 1px),
+    linear-gradient(90deg, var(--accent-a5) 1px, transparent 1px);
   background-size: auto, 44px 44px, 44px 44px;
   background-position: center;
 }
@@ -421,7 +421,7 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 [data-theme='jarvis'] .desktop-title {
   color: var(--accent);
   letter-spacing: 4px;
-  text-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
+  text-shadow: 0 0 18px var(--accent-a55);
   text-transform: uppercase;
 }
 
@@ -455,8 +455,8 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   background: linear-gradient(
     180deg,
     transparent,
-    rgba(34, 211, 238, 0.07) 82%,
-    rgba(34, 211, 238, 0.2)
+    var(--accent-a7) 82%,
+    var(--accent-a20)
   );
   animation: jarvis-scan 8s linear infinite;
   pointer-events: none;

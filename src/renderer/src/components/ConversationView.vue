@@ -335,14 +335,14 @@ const statusLine = computed(() => {
 }
 
 [data-theme='jarvis'] .status-bar {
-  border-bottom-color: rgba(34, 211, 238, 0.25);
-  background: linear-gradient(180deg, rgba(34, 211, 238, 0.07), transparent);
+  border-bottom-color: var(--accent-a25);
+  background: linear-gradient(180deg, var(--accent-a7), transparent);
   font-family: var(--font-hud);
 }
 
 [data-theme='jarvis'] .status-line {
   color: var(--accent);
-  text-shadow: 0 0 8px rgba(34, 211, 238, 0.45);
+  text-shadow: 0 0 8px var(--accent-a45);
   letter-spacing: 2px;
 }
 
@@ -363,20 +363,20 @@ const statusLine = computed(() => {
 [data-theme='jarvis'] .stop-btn {
   font-family: var(--font-hud);
   letter-spacing: 2px;
-  border: 1px solid rgba(251, 95, 125, 0.5);
+  border: 1px solid var(--fail-a50);
   border-radius: 4px;
   color: #ffc2cd;
-  background: rgba(251, 95, 125, 0.08);
+  background: var(--fail-a8);
 }
 
 [data-theme='jarvis'] .stop-btn:hover {
-  background: rgba(251, 95, 125, 0.18);
+  background: var(--fail-a18);
 }
 
 [data-theme='jarvis'] .approval-bar {
   border-left: 3px solid var(--warn);
-  background: linear-gradient(90deg, rgba(251, 191, 36, 0.1), rgba(251, 191, 36, 0.02));
-  box-shadow: 0 2px 18px rgba(251, 191, 36, 0.18);
+  background: linear-gradient(90deg, var(--warn-a10), var(--warn-a2));
+  box-shadow: 0 2px 18px var(--warn-a18);
 }
 
 [data-theme='jarvis'] .approval-tool {
@@ -401,7 +401,7 @@ const statusLine = computed(() => {
 [data-theme='jarvis'] .earlier {
   font-family: var(--font-hud);
   letter-spacing: 1px;
-  border: 1px dashed rgba(34, 211, 238, 0.3);
+  border: 1px dashed var(--accent-a30);
   border-radius: 4px;
   padding: 4px 12px;
   display: inline-block;
