@@ -336,9 +336,9 @@ export const useAppStore = defineStore('app', {
     bubbles: [] as DesktopBubble[],
     /** 桌面投窗：操作极简终端卡（结果后 5 秒渐隐） */
     opCards: [] as DesktopOp[],
-    /** 流式标记：messageID → 已投过气泡的 thinking/text 长度（增量从这里算） */
-    streamMarks: {} as Record<string, { thinking: number; text: number }>,
-    /** 气泡全文记忆：id（会话:类型）→ 最后全文。气泡 5 秒渐隐后会从数组删除，
+    /** 流式标记：messageID → 块ID → 该块已投过气泡的文本长度（增量从这里算；按块记，多段思考/回复各自成泡） */
+    streamMarks: {} as Record<string, Record<string, number>>,
+    /** 气泡全文记忆：id（会话:类型:块）→ 最后全文。气泡 5 秒渐隐后会从数组删除，
      *  流式一断再续时只能重建气泡——没有这份记忆新气泡就只剩尾巴那截（显示不全） */
     castTexts: {} as Record<string, string>,
     /** 投出物置顶层级：气泡与操作卡共用，有新活动的递增抬到最前（同一投层里跨气泡/卡可比） */
@@ -1403,10 +1403,10 @@ export const useAppStore = defineStore('app', {
       return best
     },
 
-    /** 投一条气泡（思考/文本）：同一会话同类内容续在同一条气泡里，5 秒无新内容渐隐。
+    /** 投一条气泡（思考/文本）：同一个内容块续在同一条气泡里（一个块一条，多段不并泡），5 秒无新内容渐隐。
      *  渐隐删除只是「看不见」，全文记在 castTexts；断流超过 5 秒后再来增量时按全文重建，
      *  不能只投增量那截（流式间隔一大就会变成「内容只剩一小段」） */
-    pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string) {
+    pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string, blockID: string) {
       if (!chunk.trim()) return
       // 空白归一但保留换行：行内空白压成单个空格、连续换行压成单个换行（全压成空格会把整段思考挤成一行）。
       // 流式切片的分隔空白可能落在上一片尾部或本片开头，trim 掉再硬拼会粘连，所以不 trim——
@@ -1415,7 +1415,7 @@ export const useAppStore = defineStore('app', {
         .replace(/\r\n?/g, '\n')
         .replace(/[^\S\n]+/g, ' ')
         .replace(/\n{2,}/g, '\n')
-      const id = `${conversationID}:${kind}`
+      const id = `${conversationID}:${kind}:${blockID}`
       const existing = this.bubbles.find((item) => item.id === id)
       // 基底：气泡还在用气泡全文；已渐隐删除用 castTexts 里的全文（断流重建时续上，不丢前文）
       const base = existing ? existing.text : (this.castTexts[id] ?? '')
@@ -1562,34 +1562,29 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
-     * 助手消息的流式钩子：对比上次已投长度，把新增的思考/文本续到气泡上；
-     * 工具块顺手转成操作卡。首次见到整条消息只记下标、不补投历史（历史在聊天面板里看）。
+     * 助手消息的流式钩子：按块对比上次已投长度，把新增的思考/文本续到气泡上。
+     * 一个块一条气泡——同一条消息里多段思考/多段回复各自成泡，不并进同一条（并泡会把
+     * 前后不相干的段拼在一起，中间只隔一个空格）。工具块顺手转成操作卡。
+     * 首次见到整条消息只记下标、不补投历史（历史在聊天面板里看）；之后新出现的块整个当增量投（新开一条泡）。
      */
     noteAssistantStream(conversationID: string, message: ChatMessage) {
-      let thinkingText = ''
-      let textText = ''
+      const seen = this.streamMarks[message.id]
+      const marks = seen ?? {}
       for (const block of message.blocks ?? []) {
         const kind = blockCase(block)
-        if (kind === 'thinking') thinkingText += String(blockPayload<string>(block, 'thinking') ?? '')
-        else if (kind === 'text') textText += String(blockPayload<string>(block, 'text') ?? '')
-        else if (kind === 'tool') this.noteToolBlock(conversationID, blockPayload<ToolEvent>(block, 'tool'))
-      }
-      const seen = this.streamMarks[message.id]
-      const mark = seen ?? { thinking: 0, text: 0 }
-      if (seen) {
-        if (thinkingText.length > mark.thinking) {
-          this.pushBubble(conversationID, 'thinking', thinkingText.slice(mark.thinking))
-          mark.thinking = thinkingText.length
+        if (kind === 'tool') {
+          this.noteToolBlock(conversationID, blockPayload<ToolEvent>(block, 'tool'))
+          continue
         }
-        if (textText.length > mark.text) {
-          this.pushBubble(conversationID, 'text', textText.slice(mark.text))
-          mark.text = textText.length
+        if (kind !== 'thinking' && kind !== 'text') continue
+        const full = String(blockPayload<string>(block, kind) ?? '')
+        const mark = marks[block.id] ?? 0
+        if (seen && full.length > mark) {
+          this.pushBubble(conversationID, kind, full.slice(mark), block.id)
         }
-      } else {
-        mark.thinking = thinkingText.length
-        mark.text = textText.length
+        marks[block.id] = full.length
       }
-      this.streamMarks[message.id] = mark
+      this.streamMarks[message.id] = marks
     },
 
     /** 消息里的工具块 → 操作卡（带参数/结果/状态，比 activity 事件全）。
