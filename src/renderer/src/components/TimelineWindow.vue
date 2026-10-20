@@ -161,16 +161,16 @@ function bodyText(entry: AssistantEntry): string {
 /* 贾维斯界面：时间线变日志流——时间戳等宽青色、Friday 行发光 */
 [data-theme='jarvis'] .at {
   font-family: var(--font-hud);
-  color: rgba(34, 211, 238, 0.55);
+  color: var(--accent-a55);
 }
 
 [data-theme='jarvis'] .row.assistant .who {
   color: var(--accent);
-  text-shadow: 0 0 8px rgba(34, 211, 238, 0.4);
+  text-shadow: 0 0 8px var(--accent-a40);
 }
 
 [data-theme='jarvis'] .row:hover {
-  background: rgba(34, 211, 238, 0.05);
+  background: var(--accent-a5);
 }
 
 [data-theme='jarvis'] .tip {

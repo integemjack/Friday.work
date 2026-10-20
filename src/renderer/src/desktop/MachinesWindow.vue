@@ -282,6 +282,6 @@ async function toggleConnect(): Promise<void> {
 
 /* 贾维斯界面：分区头变 HUD 头、分隔线变青色渐变（行/标题的其余样式在全局 jarvis.css） */
 [data-theme='jarvis'] .divider {
-  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.35), transparent);
+  background: linear-gradient(90deg, transparent, var(--accent-a35), transparent);
 }
 </style>

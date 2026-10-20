@@ -479,7 +479,7 @@ onMounted(() => {
 
 /* 贾维斯界面：聊天窗头部等宽化（弹窗玻璃、输入、按钮由全局 jarvis.css 覆盖） */
 [data-theme='jarvis'] .head {
-  border-bottom-color: rgba(34, 211, 238, 0.25);
+  border-bottom-color: var(--accent-a25);
 }
 
 [data-theme='jarvis'] .title {

@@ -292,8 +292,8 @@ onMounted(load)
 /* 贾维斯界面下选中的主题按钮用青色描边，和整体发光风一致 */
 [data-theme='jarvis'] .small-btn.strong {
   color: var(--accent);
-  border-color: rgba(34, 211, 238, 0.55);
-  box-shadow: 0 0 10px rgba(34, 211, 238, 0.15);
+  border-color: var(--accent-a55);
+  box-shadow: 0 0 10px var(--accent-a15);
 }
 
 section {

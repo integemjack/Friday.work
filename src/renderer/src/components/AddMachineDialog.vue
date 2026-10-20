@@ -125,12 +125,12 @@ h3 { margin: 0; font-size: 15px; }
 }
 
 [data-theme='jarvis'] .dialog {
-  background: rgba(10, 25, 45, 0.92);
+  background: var(--panel-card-deep-a92);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border-color: rgba(34, 211, 238, 0.35);
+  border-color: var(--accent-a35);
   box-shadow:
-    0 0 30px rgba(34, 211, 238, 0.12),
+    0 0 30px var(--accent-a12),
     0 20px 50px rgba(0, 0, 0, 0.6);
 }
 

@@ -177,7 +177,7 @@ function briefOf(activity: SessionActivity): string {
 
 /* 贾维斯界面：活动总览变遥测面板（分头/行/进度块的样式在全局 jarvis.css） */
 [data-theme='jarvis'] .activity-head {
-  border-bottom: 1px solid rgba(34, 211, 238, 0.2);
+  border-bottom: 1px solid var(--accent-a20);
   padding-bottom: 6px;
 }
 
@@ -186,7 +186,7 @@ function briefOf(activity: SessionActivity): string {
 }
 
 [data-theme='jarvis'] .row:hover {
-  border-left-color: rgba(34, 211, 238, 0.5);
-  background: rgba(34, 211, 238, 0.05);
+  border-left-color: var(--accent-a50);
+  background: var(--accent-a5);
 }
 </style>

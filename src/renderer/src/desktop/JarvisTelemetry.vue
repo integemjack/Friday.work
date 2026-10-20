@@ -158,24 +158,24 @@ function openTimeline(): void {
   max-height: 44vh;
   overflow-y: auto;
   padding: 8px 10px 10px;
-  background: rgba(10, 25, 45, 0.55);
-  border: 1px solid rgba(34, 211, 238, 0.22);
+  background: var(--panel-card-deep-a55);
+  border: 1px solid var(--accent-a22);
   border-radius: 10px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-shadow:
-    0 0 18px rgba(34, 211, 238, 0.08),
+    0 0 18px var(--accent-a8),
     0 10px 28px rgba(0, 0, 0, 0.4);
   /* 全息角括号 */
   background-image:
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) left top / 10px 1.5px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) left top / 1.5px 10px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) right top / 10px 1.5px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) right top / 1.5px 10px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) left bottom / 10px 1.5px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) left bottom / 1.5px 10px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) right bottom / 10px 1.5px,
-    linear-gradient(rgba(34, 211, 238, 0.8) 0 0) right bottom / 1.5px 10px;
+    linear-gradient(var(--accent-a80) 0 0) left top / 10px 1.5px,
+    linear-gradient(var(--accent-a80) 0 0) left top / 1.5px 10px,
+    linear-gradient(var(--accent-a80) 0 0) right top / 10px 1.5px,
+    linear-gradient(var(--accent-a80) 0 0) right top / 1.5px 10px,
+    linear-gradient(var(--accent-a80) 0 0) left bottom / 10px 1.5px,
+    linear-gradient(var(--accent-a80) 0 0) left bottom / 1.5px 10px,
+    linear-gradient(var(--accent-a80) 0 0) right bottom / 10px 1.5px,
+    linear-gradient(var(--accent-a80) 0 0) right bottom / 1.5px 10px;
   background-repeat: no-repeat;
 }
 
@@ -206,7 +206,7 @@ function openTimeline(): void {
   text-transform: uppercase;
   color: var(--accent);
   opacity: 0.7;
-  border-bottom: 1px solid rgba(34, 211, 238, 0.2);
+  border-bottom: 1px solid var(--accent-a20);
   padding-bottom: 4px;
   margin-bottom: 4px;
 }
@@ -239,8 +239,8 @@ function openTimeline(): void {
 }
 
 .row:hover {
-  border-left-color: rgba(34, 211, 238, 0.55);
-  background: rgba(34, 211, 238, 0.06);
+  border-left-color: var(--accent-a55);
+  background: var(--accent-a6);
 }
 
 .dot {
@@ -253,7 +253,7 @@ function openTimeline(): void {
 .dot.running,
 .dot.run {
   background: var(--accent);
-  box-shadow: 0 0 8px rgba(34, 211, 238, 0.7);
+  box-shadow: 0 0 8px var(--accent-a70);
   animation: jt-pulse 1.4s ease-in-out infinite;
 }
 
@@ -261,12 +261,12 @@ function openTimeline(): void {
 .dot.question,
 .dot.quota {
   background: var(--warn);
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  box-shadow: 0 0 8px var(--warn-a60);
 }
 
 .dot.error {
   background: var(--fail);
-  box-shadow: 0 0 8px rgba(251, 95, 125, 0.6);
+  box-shadow: 0 0 8px var(--fail-a60);
 }
 
 @keyframes jt-pulse {
@@ -328,12 +328,12 @@ function openTimeline(): void {
 
 .step.done {
   background: var(--ok);
-  box-shadow: 0 0 5px rgba(45, 212, 167, 0.5);
+  box-shadow: 0 0 5px var(--ok-a50);
 }
 
 .step.doing {
   background: var(--run);
-  box-shadow: 0 0 5px rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 5px var(--run-a50);
 }
 
 /* ---- 日志 ticker ---- */
@@ -349,7 +349,7 @@ function openTimeline(): void {
 .log-time {
   font-family: var(--font-hud);
   font-size: 10.5px;
-  color: rgba(34, 211, 238, 0.55);
+  color: var(--accent-a55);
   flex: none;
 }
 
@@ -372,7 +372,7 @@ function openTimeline(): void {
 }
 
 .log-kind.tool {
-  color: #7dd3fc;
+  color: var(--code-inline-fg);
 }
 
 .log-kind.notice {
@@ -390,7 +390,7 @@ function openTimeline(): void {
 /* 窗口少的时候（桌面空）面板就是主角，稍微亮一点 */
 .panel.populated {
   box-shadow:
-    0 0 24px rgba(34, 211, 238, 0.12),
+    0 0 24px var(--accent-a12),
     0 10px 28px rgba(0, 0, 0, 0.4);
 }
 </style>

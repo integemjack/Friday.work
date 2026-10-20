@@ -163,7 +163,7 @@ svg {
   width: min(54vmin, 470px);
   height: auto;
   opacity: 0.55;
-  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.25));
+  filter: drop-shadow(0 0 6px var(--accent-a25));
 }
 
 .hud-data {
@@ -177,7 +177,7 @@ svg {
 
 .d.on {
   color: var(--accent);
-  text-shadow: 0 0 10px rgba(34, 211, 238, 0.5);
+  text-shadow: 0 0 10px var(--accent-a50);
 }
 
 .d.warn {
