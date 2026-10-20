@@ -2,6 +2,7 @@
 // 桌面气泡（2026-10 布局改版）：会话的思考 / 文本输出直接投在桌面随机位置，
 // 随流式增长，5 秒无新内容渐隐消失。数据与定时全在 store（pushBubble / fadeBubble）。
 // 高度规则：底边不出桌面——长到底就整体上移；高到顶就内部滚动，自动滚到最新一条。
+// 面板基础（定位/毛玻璃/标题行渐隐/滚动条/进出场动画）与操作卡共用 styles/cast.css。
 import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { renderMarkdown } from '../lib/markdown.js'
@@ -91,14 +92,14 @@ function titleOf(conversationID: string): string {
         v-for="bubble in store.bubbles"
         :key="bubble.id"
         :ref="(el) => setEl(bubble.id, el)"
-        class="bubble"
+        class="bubble cast"
         :class="[bubble.kind, { fading: bubble.fading }]"
         :style="{ left: `${bubble.x}px`, top: `${bubble.y}px`, zIndex: bubble.z }"
         @click="store.fadeBubble(bubble.id)"
       >
-        <span class="tag">{{ bubble.kind === 'thinking' ? '思考' : '回复' }} · {{ titleOf(bubble.conversationID) }}</span>
+        <span class="tag cast-head">{{ bubble.kind === 'thinking' ? '思考' : '回复' }} · {{ titleOf(bubble.conversationID) }}</span>
         <!-- 思考/回复气泡统一 Markdown 渲染（renderMarkdown 已禁透传 HTML、breaks 保换行） -->
-        <div class="text md" v-html="mdOf(bubble)" />
+        <div class="text cast-scroll md" v-html="mdOf(bubble)" />
       </div>
     </transition-group>
   </div>
@@ -112,9 +113,9 @@ function titleOf(conversationID: string): string {
   pointer-events: none;
 }
 
+/* 面板基础（定位/点击穿透/毛玻璃/点击手型）在公共 .cast（styles/cast.css）；
+   形态差异（全息泡的圆角/描边/双影/内边距/限高根）留在本组件 */
 .bubble {
-  position: absolute;
-  pointer-events: auto;
   max-width: 360px;
   /* 限高 400（单源 lib/cast.ts，经 --cast-max-h 注入）：超长内部滚动、思考/回复一致；
      底边不出桌面：超高先上移，顶到头再内部滚动（maxHeight 由 adjust() 按窗口高度设置，
@@ -131,9 +132,6 @@ function titleOf(conversationID: string): string {
   box-shadow:
     0 0 16px var(--accent-a12),
     0 12px 30px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  cursor: pointer;
 }
 
 .tag {
@@ -144,11 +142,7 @@ function titleOf(conversationID: string): string {
   letter-spacing: 2px;
   color: var(--accent);
   opacity: 0.75;
-  /* 占满整宽，超出的会话名在右缘渐隐，不用 ... 截断 */
-  overflow: hidden;
-  white-space: nowrap;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
-  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  /* 右缘渐隐 mask 在公共 .cast-head */
 }
 
 .bubble.thinking .tag {
@@ -169,25 +163,6 @@ function titleOf(conversationID: string): string {
      离右边框空出一个滚动条宽（实验实测）；代价是滚动条出现时文字窄 6px，可接受 */
   margin-right: -12px;
   padding-right: 12px;
-}
-
-/* 气泡内的滚动条：比全局窄一半，贴着右边框立一道细光条 */
-.text::-webkit-scrollbar {
-  width: 6px;
-}
-
-.text::-webkit-scrollbar-thumb {
-  background: var(--accent-a45);
-  border: none;
-  border-radius: 3px;
-}
-
-.text::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-a70);
-}
-
-.text::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 /* 回复气泡的 Markdown：块级标签之间的源码换行不是文本，必须关掉 .text 的 pre-wrap */
@@ -282,26 +257,5 @@ function titleOf(conversationID: string): string {
   padding: 3px 8px;
 }
 
-/* 渐隐：5 秒计时到 → fadeBubble 加 fading → 动画完从数组里删 */
-.bubble.fading {
-  animation: bubble-out 0.6s ease forwards;
-}
-
-@keyframes bubble-out {
-  to {
-    opacity: 0;
-    transform: translateY(6px) scale(0.97);
-  }
-}
-
-.pop-enter-active {
-  animation: bubble-in 0.22s ease;
-}
-
-@keyframes bubble-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.96);
-  }
-}
+/* 渐隐与进场动画在公共 .cast（.cast.fading / .pop-enter-active，styles/cast.css） */
 </style>
