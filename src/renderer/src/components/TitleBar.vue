@@ -38,15 +38,10 @@ async function pickMachine(id: string) {
 
 const hasNoMachine = computed(() => store.machines.length === 0)
 
-// 窗口启动器（底部任务栏去掉后唯一的窗口入口）：终端/文件/浏览器是桌面面板不在这里；通话是右下角挂件
+// 窗口启动器：只剩子 Agent / 设置两个浮动窗口——
+// 终端/文件/浏览器是桌面面板（会话用到才展开），会话列表/聊天/通话都是常驻面板，不在这里
 const launchers: Array<{ kind: WindowKind; label: string; icon: string }> = [
-  { kind: 'conversation', label: '会话', icon: '💬' },
-  { kind: 'machines', label: '机器与会话', icon: '⛁' },
   { kind: 'agents', label: '子 Agent', icon: '◈' },
-  { kind: 'activity', label: '活动总览', icon: '◎' },
-  { kind: 'timeline', label: '助手时间线', icon: '🗒' },
-  { kind: 'schat', label: '机器人聊天', icon: '🤖' },
-  { kind: 'voice', label: '语音', icon: '🎙' },
   { kind: 'settings', label: '设置', icon: '⚙' }
 ]
 

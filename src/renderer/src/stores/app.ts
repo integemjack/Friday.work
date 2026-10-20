@@ -5,20 +5,22 @@ import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
-import type {
-  ActivityEventParams,
-  AssistantEntry,
-  BlocksPatch,
-  BrowserFrameParams,
-  BrowserTab,
-  ChatMessage,
-  Conversation,
-  ConversationSummary,
-  PendingApproval,
-  Runtime,
-  SessionActivity,
-  TeamRun,
-  TerminalInfo
+import {
+  blockCase,
+  blockPayload,
+  type ActivityEventParams,
+  type BlocksPatch,
+  type BrowserFrameParams,
+  type BrowserTab,
+  type ChatMessage,
+  type Conversation,
+  type ConversationSummary,
+  type PendingApproval,
+  type Runtime,
+  type SessionActivity,
+  type TeamRun,
+  type TerminalInfo,
+  type ToolEvent
 } from '../../../protocol/rpc/protocol.js'
 import type { MachineStateInfo } from '../../../shared/api.js'
 import type { UpdateState } from '../../../shared/update.js'
@@ -70,19 +72,42 @@ export interface ConversationDetail {
   versions: Record<string, number>
 }
 
+/**
+ * 桌面投窗（2026-10 布局改版）：会话不再是浮动窗口——
+ * 思考/文本以「气泡」投在桌面随机处（5 秒渐隐），操作以「极简终端卡」投在桌面（结果后 5 秒渐隐）；
+ * 用到终端/浏览器/文件时对应面板直接展开。
+ */
+export interface DesktopBubble {
+  id: string
+  conversationID: string
+  kind: 'thinking' | 'text'
+  text: string
+  x: number
+  y: number
+  fading: boolean
+  timer: number
+}
+
+export interface DesktopOp {
+  /** 工具事件 id（消息块里）或审批 eventID（activity） */
+  id: string
+  conversationID: string
+  title: string
+  content: string
+  result: string
+  status: 'running' | 'awaitingApproval' | 'succeeded' | 'failed' | 'denied'
+  x: number
+  y: number
+  fading: boolean
+  timer: number
+}
+
 export type WindowKind =
-  | 'conversation'
   | 'terminals'
   | 'files'
   | 'browser'
   | 'agents'
-  | 'activity'
-  | 'machines'
-  | 'voice'
   | 'settings'
-  | 'schat'
-  | 'call'
-  | 'timeline'
 
 export interface DesktopWindow {
   id: string
@@ -96,41 +121,30 @@ export interface DesktopWindow {
   minimized: boolean
   maximized: boolean
   z: number
-  /** conversation 窗口：哪一段会话 */
-  conversationID?: string
   /** 最大化前的几何 */
   restore?: { x: number; y: number; w: number; h: number }
 }
 
-/** 每类窗口的默认大小 */
+/** 每类窗口的默认大小（只剩子 Agent / 设置两个浮动窗口，其余内容常驻桌面） */
 const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH: number }> = {
-  conversation: { w: 760, h: 580, minW: 420, minH: 340 },
   terminals: { w: 820, h: 500, minW: 420, minH: 260 },
   files: { w: 640, h: 540, minW: 360, minH: 300 },
   browser: { w: 820, h: 620, minW: 420, minH: 320 },
   agents: { w: 580, h: 460, minW: 360, minH: 240 },
-  activity: { w: 520, h: 480, minW: 320, minH: 240 },
-  machines: { w: 420, h: 560, minW: 320, minH: 280 },
-  voice: { w: 520, h: 560, minW: 360, minH: 320 },
-  settings: { w: 620, h: 560, minW: 420, minH: 320 },
-  schat: { w: 720, h: 560, minW: 420, minH: 360 },
-  call: { w: 360, h: 480, minW: 300, minH: 380 },
-  timeline: { w: 680, h: 540, minW: 380, minH: 300 }
+  settings: { w: 620, h: 560, minW: 420, minH: 320 }
 }
 
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
-  conversation: { title: '会话', icon: '💬' },
   terminals: { title: '终端', icon: '⌨' },
   files: { title: '文件', icon: '🗂' },
   browser: { title: '浏览器', icon: '🌐' },
   agents: { title: '子 Agent', icon: '◈' },
-  activity: { title: '活动总览', icon: '◎' },
-  machines: { title: '机器与会话', icon: '⛁' },
-  voice: { title: '语音', icon: '🎙' },
-  settings: { title: '设置', icon: '⚙' },
-  schat: { title: '机器人聊天', icon: '🤖' },
-  call: { title: '通话', icon: '📞' },
-  timeline: { title: '助手时间线', icon: '🗒' }
+  settings: { title: '设置', icon: '⚙' }
+}
+
+/** 操作卡是否已到终态（终态才计时渐隐） */
+function terminalStatus(status: DesktopOp['status']): boolean {
+  return status === 'succeeded' || status === 'failed' || status === 'denied'
 }
 
 // MARK: 窗口布局持久化（方案 §2「本地只留：…UI 偏好」；存 localStorage，重启恢复）
@@ -146,20 +160,6 @@ interface SavedWindow {
   minimized: boolean
   maximized: boolean
   z: number
-  restore?: { x: number; y: number; w: number; h: number }
-  conversationID?: string
-  /** 会话窗口记它属于哪台机器（恢复时路由） */
-  machineID?: string
-}
-
-/** 会话窗口补开时要套用的几何（restoreLayout 存下，openConversation 用） */
-export interface WindowGeometry {
-  x: number
-  y: number
-  w: number
-  h: number
-  minimized: boolean
-  maximized: boolean
   restore?: { x: number; y: number; w: number; h: number }
 }
 
@@ -186,8 +186,7 @@ export function saveLayout(store: {
     const windows: SavedWindow[] = []
     const seen = new Set<string>()
     for (const item of store.windows) {
-      if (item.kind === 'call') continue // 通话是一次性的，不恢复
-      const key = item.kind === 'conversation' ? `conversation:${item.conversationID}` : item.kind
+      const key = item.kind
       if (seen.has(key)) continue
       seen.add(key)
       windows.push({
@@ -201,9 +200,7 @@ export function saveLayout(store: {
         minimized: item.minimized,
         maximized: item.maximized,
         z: item.z,
-        restore: item.restore,
-        conversationID: item.conversationID,
-        machineID: item.kind === 'conversation' ? store.currentMachine : ''
+        restore: item.restore
       })
       if (windows.length >= LAYOUT_WINDOW_LIMIT) break
     }
@@ -228,9 +225,9 @@ export const useAppStore = defineStore('app', {
     details: {} as Record<string, ConversationDetail>,
     /** 一段会话的分支信息：消息 id → 同父几个孩子、当前第几个 */
     branchInfo: {} as Record<string, Record<string, BranchInfo>>,
-    /** 当前活动会话（输入框、审批横幅作用在它上面） */
+    /** 当前活动会话（会话列表选中项；右下聊天面板作用在它上面） */
     activeConversationID: '',
-    /** 桌面上打开的窗口 */
+    /** 桌面上打开的窗口（只剩子 Agent / 设置，其余内容常驻桌面） */
     windows: [] as DesktopWindow[],
     /** 下一个窗口的层叠高度 */
     nextZ: 10,
@@ -299,8 +296,16 @@ export const useAppStore = defineStore('app', {
     callSignalCount: 0,
     /** 当前机器全部会话的待确认调用（activity 订阅，REMOTE.md §6） */
     approvals: {} as Record<string, PendingApproval[]>,
-    /** 这台机器全部会话的实时动静（活动总览的数据源，REMOTE.md §6「会话的实时动静」） */
+    /** 当前机器全部会话的实时动静（会话列表状态点、桌面投窗的数据源，REMOTE.md §6「会话的实时动静」） */
     activities: {} as Record<string, SessionActivity>,
+    /** 桌面投窗：思考/文本气泡（随流式更新，5 秒无新内容渐隐） */
+    bubbles: [] as DesktopBubble[],
+    /** 桌面投窗：操作极简终端卡（结果后 5 秒渐隐） */
+    opCards: [] as DesktopOp[],
+    /** 流式标记：messageID → 已投过气泡的 thinking/text 长度（增量从这里算） */
+    streamMarks: {} as Record<string, { thinking: number; text: number }>,
+    /** 投窗位置级联（随机位置基础上错开，避免全叠在一点） */
+    castCascade: 0,
     /** M2 实时卡片：当前机器的终端 / 浏览器 / 子 Agent 状态 */
     terminals: [] as TerminalInfo[],
     terminalsAvailable: false,
@@ -311,22 +316,15 @@ export const useAppStore = defineStore('app', {
     teamRuns: [] as TeamRun[],
     /** 活动的浏览器帧（base64 jpeg）与它的视口 */
     browserFrame: null as { tab: string; data: string; viewport: [number, number] } | null,
-    /** 助手日志（assistant.subscribe；M3-A 语音用它看回复） */
-    assistantEntries: [] as AssistantEntry[],
-    assistantSubscribed: false,
-    /** 远端助手开没开（关着时只记日志、不回复，语音窗口要提示） */
-    assistantEnabled: false,
-    /** 这台机器的引擎（hello 快照 + engines 事件；设置窗口只读展示） */
+    /** 这台机器的引擎（hello 快照 + engines 事件；输入框的模型选择器用） */
     engines: [] as EngineView[],
     /** 新对话默认引擎（liveState；输入框的模型选择器在未选过时显示它） */
     defaultEngineID: '',
-    /** 正在朗读的那条（朗读时界面显示暂停按钮） */
-    speakingEntryID: '',
-    /** 当前在 watch 的标签（关窗口时 unwatch） */
+    /** 当前在 watch 的浏览器标签（不看了就 unwatch） */
     watchedTabID: '',
-    /** 终端窗口里选中的终端 id */
+    /** 终端面板里选中的终端 id */
     activeTerminalID: '',
-    /** 文件卡片里选中的文件（null = 只开目录树） */
+    /** 文件面板里选中的文件（null = 只开目录树） */
     activeFile: null as null | { path: string; name: string },
     /** 全局提示（错误横幅） */
     error: '',
@@ -342,14 +340,7 @@ export const useAppStore = defineStore('app', {
       progress: 0,
       note: '',
       error: ''
-    } as UpdateState,
-    /** 布局恢复：存下来的会话窗口等机器连上后再补开（restoreLayout 填，maybeRestoreConversations 消化） */
-    pendingConversations: [] as Array<{
-      machineID: string
-      conversationID: string
-      title?: string
-      geometry?: WindowGeometry
-    }>
+    } as UpdateState
   }),
 
   getters: {
@@ -388,20 +379,13 @@ export const useAppStore = defineStore('app', {
   actions: {
     // MARK: 桌面窗口
 
-    /** 开一个窗口（同类型已在就置顶；会话窗口按 conversationID 区分） */
-    openWindow(kind: WindowKind, options: { conversationID?: string; title?: string } = {}): string {
-      // 终端/文件/浏览器是桌面直显面板：入口点击=把面板亮出来，不开浮动窗口
+    /** 开一个窗口（同类型已在就置顶；终端/文件/浏览器是桌面面板：点亮面板） */
+    openWindow(kind: WindowKind, options: { title?: string } = {}): string {
       if (kind === 'terminals' || kind === 'files' || kind === 'browser') {
         this.docks[kind] = true
         return ''
       }
-      // 通话不再是窗口：右下角挂件随通话状态自动出现/消失
-      if (kind === 'call') return ''
-      const existing = this.windows.find((item) =>
-        kind === 'conversation'
-          ? item.kind === kind && item.conversationID === options.conversationID
-          : item.kind === kind
-      )
+      const existing = this.windows.find((item) => item.kind === kind)
       if (existing) {
         if (options.title) existing.title = options.title
         existing.minimized = false
@@ -427,8 +411,7 @@ export const useAppStore = defineStore('app', {
         h,
         minimized: false,
         maximized: false,
-        z: ++this.nextZ,
-        conversationID: options.conversationID
+        z: ++this.nextZ
       }
       this.windows.push(item)
       return id
@@ -437,10 +420,7 @@ export const useAppStore = defineStore('app', {
     closeWindow(id: string) {
       const index = this.windows.findIndex((item) => item.id === id)
       if (index < 0) return
-      const item = this.windows[index]!
       this.windows.splice(index, 1)
-      if (item.kind === 'conversation' && item.conversationID) void this.closeConversation(item.conversationID)
-      if (item.kind === 'browser') void this.unwatchBrowser()
     },
 
     focusWindow(id: string) {
@@ -448,7 +428,6 @@ export const useAppStore = defineStore('app', {
       if (!item) return
       item.z = ++this.nextZ
       if (item.minimized) item.minimized = false
-      if (item.kind === 'conversation' && item.conversationID) this.activeConversationID = item.conversationID
     },
 
     minimizeWindow(id: string) {
@@ -510,7 +489,7 @@ export const useAppStore = defineStore('app', {
 
     // MARK: 布局恢复（saveLayout 的另一半；App.vue 启动时调）
 
-    /** 启动时恢复上次的窗口布局：非会话窗口直接摆回去；会话窗口等机器连上后由 maybeRestoreConversations 补开 */
+    /** 启动时恢复上次的窗口布局（只剩子 Agent / 设置两类浮动窗口；旧存档里的其他类型直接丢弃） */
     restoreLayout(): boolean {
       let saved: SavedLayout | null = null
       try {
@@ -522,41 +501,15 @@ export const useAppStore = defineStore('app', {
       if (!Array.isArray(items) || items.length === 0) return false
       const desktopWidth = window.innerWidth
       const desktopHeight = window.innerHeight
-      // 去重（与 saveLayout 同一套规则）：旧存档里可能攒着同类重复窗口，原样恢复会越攒越多
       const seen = new Set<string>()
       for (const item of items) {
-        if (item.kind === 'call' || item.kind === 'terminals' || item.kind === 'files' || item.kind === 'browser' || !WINDOW_SIZE[item.kind]) continue
-        const key = item.kind === 'conversation' ? `conversation:${item.conversationID}` : item.kind
-        if (seen.has(key)) continue
-        seen.add(key)
+        if (item.kind === 'terminals' || item.kind === 'files' || item.kind === 'browser') continue // 这三类是桌面面板，不是窗口
+        if (!WINDOW_SIZE[item.kind]) continue // 旧存档里已移除的类型直接丢
+        if (seen.has(item.kind)) continue
+        seen.add(item.kind)
         // 幂等：恢复只往空桌面加窗口，桌上已有的同类不再叠一份。
-        // 不然 HMR 重挂载 App.vue → onMounted 重跑 restoreLayout 重入，每重入一次多叠一个，
-        // saveLayout 再原样存档 → 滚雪球（实测用户存档里攒了 19 个重复 machines 就是这么来的）
-        const already =
-          item.kind === 'conversation'
-            ? this.windows.some((entry) => entry.kind === 'conversation' && entry.conversationID === item.conversationID) ||
-              this.pendingConversations.some((entry) => entry.conversationID === item.conversationID)
-            : this.windows.some((entry) => entry.kind === item.kind)
-        if (already) continue
-        if (item.kind === 'conversation') {
-          // 会话要重新订阅（机器连上、列表到手才有），先排队
-          if (!item.conversationID || this.pendingConversations.length >= 8) continue
-          this.pendingConversations.push({
-            machineID: item.machineID ?? '',
-            conversationID: item.conversationID,
-            title: item.title,
-            geometry: {
-              x: item.x,
-              y: item.y,
-              w: item.w,
-              h: item.h,
-              minimized: item.minimized,
-              maximized: item.maximized,
-              restore: item.restore
-            }
-          })
-          continue
-        }
+        // 不然 HMR 重挂载 App.vue → onMounted 重跑 restoreLayout 重入，每重入一次多叠一个
+        if (this.windows.some((entry) => entry.kind === item.kind)) continue
         const limits = WINDOW_SIZE[item.kind]!
         const w = Math.min(Math.max(item.w, limits.minW), Math.max(limits.minW, desktopWidth - 16))
         const h = Math.min(Math.max(item.h, limits.minH), Math.max(limits.minH, desktopHeight - 100))
@@ -564,7 +517,7 @@ export const useAppStore = defineStore('app', {
           id: `${item.kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
           kind: item.kind,
           title: item.title || WINDOW_TITLE[item.kind].title,
-          icon: WINDOW_TITLE[item.kind].icon,
+          icon: item.icon || WINDOW_TITLE[item.kind].icon,
           x: Math.max(-w + 120, Math.min(item.x, Math.max(8, desktopWidth - 120))),
           y: Math.max(0, Math.min(item.y, Math.max(8, desktopHeight - 90))),
           w,
@@ -578,18 +531,6 @@ export const useAppStore = defineStore('app', {
       this.nextZ = Math.max(this.nextZ, Number(saved?.nextZ) || 0)
       this.cascade = Math.max(this.cascade, Number(saved?.cascade) || 0)
       return this.windows.length > 0
-    },
-
-    /** 布局恢复第二步：机器连上、会话列表到手后，把存下来的会话窗口重新订阅开出来（会话已删的就丢弃） */
-    async maybeRestoreConversations(): Promise<void> {
-      if (!this.pendingConversations.length || !this.currentMachine) return
-      const queue = this.pendingConversations
-      for (let index = queue.length - 1; index >= 0; index--) {
-        const entry = queue[index]!
-        if (entry.machineID !== this.currentMachine) continue
-        queue.splice(index, 1)
-        await this.openConversation(entry.conversationID, { geometry: entry.geometry, fallbackTitle: entry.title })
-      }
     },
 
     bindHost() {
@@ -630,7 +571,7 @@ export const useAppStore = defineStore('app', {
               .catch(() => activitySubscribed.delete(machine.id))
             if (machine.id === this.currentMachine) {
               void this.refreshLiveState()
-              void this.refreshSummaries().then(() => this.maybeRestoreConversations())
+              void this.refreshSummaries()
             }
           } else if (machine.state !== 'ready') {
             // 掉线：等重连后重新订阅
@@ -698,7 +639,6 @@ export const useAppStore = defineStore('app', {
       if (info?.state === 'ready') {
         await this.refreshSummaries()
         await this.refreshLiveState()
-        await this.maybeRestoreConversations()
       }
     },
 
@@ -793,17 +733,20 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 打开一段会话：订阅拿整段，并在桌面上开一个窗口（已在就置顶）；布局恢复时带原几何与标题 */
-    async openConversation(conversationID: string, options: { geometry?: WindowGeometry; fallbackTitle?: string } = {}) {
-      if (!this.currentMachine) return
-      // 已在就置顶
-      const existing = this.windows.find(
-        (item) => item.kind === 'conversation' && item.conversationID === conversationID
-      )
-      if (existing) {
-        this.activeConversationID = conversationID
-        this.focusWindow(existing.id)
-        return
+    /** 打开一段会话：订阅拿整段并设为活动会话（右下聊天面板切到它）。不再开浮动窗口。 */
+    async openConversation(conversationID: string) {
+      await this.subscribeConversation(conversationID)
+      this.activeConversationID = conversationID
+    },
+
+    /** 订阅一段会话（不改活动会话）：新会话开跑时自动订阅，气泡/操作卡才能收到流式内容 */
+    async subscribeConversation(conversationID: string) {
+      if (!this.currentMachine || this.details[conversationID]) return
+      // 订阅上限：超过就先丢掉最早一段非活动的（退订、清状态）
+      const ids = Object.keys(this.details)
+      if (ids.length >= 10) {
+        const oldest = ids.find((id) => id !== this.activeConversationID)
+        if (oldest) await this.closeConversation(oldest)
       }
       try {
         const payload = (await host.request({
@@ -826,48 +769,28 @@ export const useAppStore = defineStore('app', {
           versions: { ...(payload.versions ?? {}) }
         }
         this.rebuildPath(this.details[conversationID]!)
-        this.activeConversationID = conversationID
-        const summary = this.summaries.find((item) => item.id === conversationID)
-        const windowID = this.openWindow('conversation', {
-          conversationID,
-          title: summary?.title || conversation.title || options.fallbackTitle || '会话'
-        })
-        // 布局恢复：套用上次关掉时的几何（已在的窗口本来就是原位，不走这里）
-        const geometry = options.geometry
-        if (geometry) {
-          const item = this.windows.find((entry) => entry.id === windowID)
-          if (item) {
-            // 与 restoreLayout 同一套边界钳制：存档可能来自更大的窗口/另一块显示器，
-            // 不钳制的话会话窗口恢复出来会掉出桌面（标题栏都可能够不着）
-            const limits = WINDOW_SIZE.conversation
-            const desktopWidth = window.innerWidth
-            const desktopHeight = window.innerHeight
-            item.w = Math.min(Math.max(geometry.w, limits.minW), Math.max(limits.minW, desktopWidth - 16))
-            item.h = Math.min(Math.max(geometry.h, limits.minH), Math.max(limits.minH, desktopHeight - 100))
-            item.x = Math.max(-item.w + 120, Math.min(geometry.x, Math.max(8, desktopWidth - 120)))
-            item.y = Math.max(0, Math.min(geometry.y, Math.max(8, desktopHeight - 90)))
-            item.minimized = geometry.minimized
-            if (geometry.maximized) {
-              item.restore = geometry.restore
-              item.maximized = true
-            }
-          }
-        }
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
       }
     },
 
-    /** 关掉一段会话（窗口关闭时调）：退订、清状态 */
+    /** 关掉一段会话（会话列表 ✕ 或订阅上限淘汰时调）：退订、清状态、清投窗 */
     async closeConversation(conversationID: string) {
       if (this.currentMachine) {
         await host
           .request({ type: 'conversations.unsubscribe', machineID: this.currentMachine, conversationID })
           .catch(() => {})
       }
+      // 清这段会话的流式标记（按 messageID 记的，删会话前先收走它的消息 id）
+      const removed = new Set((this.details[conversationID]?.nodes ?? []).map((node) => node.id))
+      for (const messageID of Object.keys(this.streamMarks)) {
+        if (removed.has(messageID)) delete this.streamMarks[messageID]
+      }
       delete this.details[conversationID]
+      this.bubbles = this.bubbles.filter((item) => item.conversationID !== conversationID)
+      this.opCards = this.opCards.filter((item) => item.conversationID !== conversationID)
       if (this.activeConversationID === conversationID) {
-        this.activeConversationID = this.windows.find((item) => item.kind === 'conversation')?.conversationID ?? ''
+        this.activeConversationID = ''
       }
     },
 
@@ -940,9 +863,13 @@ export const useAppStore = defineStore('app', {
           if (evt.title) next.title = evt.title
           if (evt.workingDirectory) next.workingDirectory = evt.workingDirectory
           switch (evt.kind) {
-            case 'started':
+            case 'started': {
+              // 新会话开跑：自动订阅（不在详情里时），气泡/操作卡才能收到它的流式内容。
+              // 不抢活动会话：右下聊天面板跟的是用户选中的那段
+              if (!this.details[evt.conversationID]) void this.subscribeConversation(evt.conversationID)
               next.status = 'running'
               break
+            }
             case 'step': {
               const goal = typeof evt.goal === 'string' ? evt.goal : (base.task?.goal ?? '')
               const steps = Array.isArray(evt.steps)
@@ -953,7 +880,21 @@ export const useAppStore = defineStore('app', {
             }
             case 'tool': {
               const tool = evt.tool as { tool?: string; title?: string; summary?: string } | undefined
-              if (tool) next.currentTool = { tool: tool.tool ?? '', title: tool.title ?? '', summary: tool.summary ?? '' }
+              if (tool) {
+                next.currentTool = { tool: tool.tool ?? '', title: tool.title ?? '', summary: tool.summary ?? '' }
+                // 会话用到终端/浏览器/文件：对应面板立刻展开（订阅不上时这里也能投出操作卡）
+                this.noteToolUse(tool.tool ?? '')
+                if (!this.details[evt.conversationID]) {
+                  this.pushOp({
+                    id: `act:${evt.conversationID}:${tool.tool ?? ''}`,
+                    conversationID: evt.conversationID,
+                    title: tool.title ?? tool.tool ?? '操作',
+                    content: tool.summary ?? '',
+                    result: '',
+                    status: 'running'
+                  })
+                }
+              }
               break
             }
             case 'approval': {
@@ -961,6 +902,16 @@ export const useAppStore = defineStore('app', {
               next.approvals = list
               this.approvals[evt.conversationID] = list
               next.status = list.length ? 'approval' : 'running'
+              for (const approval of list) {
+                this.pushOp({
+                  id: approval.eventID,
+                  conversationID: evt.conversationID,
+                  title: approval.title || approval.tool,
+                  content: approval.summary,
+                  result: '',
+                  status: 'awaitingApproval'
+                })
+              }
               break
             }
             case 'quota':
@@ -975,6 +926,12 @@ export const useAppStore = defineStore('app', {
               next.status = status === 'question' ? 'question' : status === 'quota' ? 'quota' : status === 'error' ? 'error' : 'idle'
               if (brief) next.lastBrief = brief as Record<string, unknown>
               next.currentTool = undefined
+              // 会话收尾：还没结果的操作卡都收掉（消息补丁那路会带真结果，这里兑底）
+              for (const card of this.opCards) {
+                if (card.conversationID === evt.conversationID && card.status === 'running') {
+                  this.fadeOp(card.id)
+                }
+              }
               break
             }
           }
@@ -1000,9 +957,12 @@ export const useAppStore = defineStore('app', {
         }
         case 'browser': {
           const state = params as { available: boolean; reason?: string; tabs: BrowserTab[] }
+          const before = new Set(this.browserTabs.map((tab) => tab.id))
           this.browserTabs = state.tabs ?? []
           this.browserAvailable = state.available
           this.browserReason = state.reason ?? ''
+          // 会话开新浏览器标签 = 在用浏览器：面板立刻展开
+          if (this.browserTabs.some((tab) => !before.has(tab.id))) this.docks.browser = true
           break
         }
         case 'browser.frame': {
@@ -1023,28 +983,6 @@ export const useAppStore = defineStore('app', {
         case 'engines': {
           const state = params as { engines?: EngineView[] }
           this.engines = state.engines ?? []
-          break
-        }
-        // 助手日志（M3-A 语音）：流式的同一条合并，定稿了新回复念出来
-        case 'assistant.entry': {
-          const entry = (params as { entry?: AssistantEntry }).entry
-          if (!entry) break
-          const index = this.assistantEntries.findIndex((item) => item.id === entry.id)
-          if (index >= 0) this.assistantEntries[index] = entry
-          else this.assistantEntries.push(entry)
-          if (entry.kind === 'assistant' && !entry.streaming && !entry.data?.silent && entry.text.trim()) {
-            this.speakEntry(entry)
-          }
-          break
-        }
-        case 'assistant.reset': {
-          this.assistantEntries = []
-          this.assistantSubscribed = false
-          break
-        }
-        case 'assistant.state': {
-          const state = (params as { state?: { enabled?: boolean } }).state
-          if (state) this.assistantEnabled = state.enabled ?? false
           break
         }
       }
@@ -1070,11 +1008,12 @@ export const useAppStore = defineStore('app', {
       }
       detail.versions = versions
       this.rebuildPath(detail)
-      // 标题跟着更新（会话窗口标题）
-      const window = this.windows.find(
-        (item) => item.kind === 'conversation' && item.conversationID === snapshot.conversation.id
-      )
-      if (window && snapshot.conversation.title) window.title = snapshot.conversation.title
+      // 流式内容可能随快照增量来，投窗钩子补一遍（部分快照只带新的一截）
+      if (snapshot.partial) {
+        for (const node of incoming) {
+          if (node.role === 'assistant') this.noteAssistantStream(snapshot.conversation.id, node)
+        }
+      }
     },
 
     /** 按 parentID + selectedChildren 重建显示路径（分支切换后也调这个） */
@@ -1122,6 +1061,7 @@ export const useAppStore = defineStore('app', {
       else detail.nodes.push(payload.message)
       detail.versions[payload.message.id] = version
       this.rebuildPath(detail)
+      if (payload.message.role === 'assistant') this.noteAssistantStream(payload.conversationID, payload.message)
     },
 
     applyPatch(params: unknown) {
@@ -1156,6 +1096,7 @@ export const useAppStore = defineStore('app', {
       // 块是原地改的，只为触发视图更新重建一次（保留对象引用）
       const entry = detail.messages.find((candidate) => candidate.message.id === patch.messageID)
       if (entry) entry.version = patch.version
+      if (node.role === 'assistant') this.noteAssistantStream(patch.conversationID, node)
     },
 
     /** 补丁打不上：拉整条 */
@@ -1175,6 +1116,7 @@ export const useAppStore = defineStore('app', {
         else detail.nodes.push(result.message)
         detail.versions[messageID] = result.version
         this.rebuildPath(detail)
+        if (result.message.role === 'assistant') this.noteAssistantStream(conversationID, result.message)
       } catch {
         // 拉不到就先不动（下一条补丁/快照会再对齐）
       }
@@ -1237,11 +1179,10 @@ export const useAppStore = defineStore('app', {
 
     // MARK: 登录页 / 工作台
 
-    /** 连接成功，收起登录页进工作台：桌上没窗口时补开「机器与会话」 */
+    /** 连接成功，收起登录页进工作台（会话列表 / 聊天 / 通话都是常驻面板，不用补开窗口） */
     enterWorkbench() {
       this.workbenchReady = true
       this.loginOverlay = false
-      if (!this.windows.length) this.openWindow('machines')
     },
 
     /** 打开登录页（工作台里重新扫码/换账号时盖在桌面上） */
@@ -1254,18 +1195,6 @@ export const useAppStore = defineStore('app', {
     },
 
     // MARK: 通话（M3-D）
-
-    /** 通话结束写一条记录进时间线（方案 M3-D 验收「挂断后时间线出现通话记录」） */
-    logCall(peerName: string, durationSec: number, reason: string) {
-      const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-      this.assistantEntries.push({
-        id: `call-${Date.now()}`,
-        at: stamp,
-        kind: 'notice',
-        text: reason ? `通话 ${peerName}（${durationSec} 秒）：${reason}` : `通话 ${peerName}，${durationSec} 秒`,
-        data: { name: 'call', silent: true, details: reason }
-      })
-    },
 
     async callDial(botID: number, callType: 'audio' | 'video' = 'audio') {
       return host.request({ type: 'schat.call.dial', botID, callType })
@@ -1344,23 +1273,159 @@ export const useAppStore = defineStore('app', {
       await rpc(this.currentMachine, 'runner.stop', { conversationID: target })
     },
 
-    /** 朗读一条助手回复（M3-A，方案 §6.1；用系统语音，打断 = cancel） */
-    speakEntry(entry: AssistantEntry) {
-      if (typeof speechSynthesis === 'undefined' || !entry.text.trim()) return
-      speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(entry.text)
-      utterance.lang = 'zh-CN'
-      utterance.rate = 1.05
-      utterance.onend = () => {
-        if (this.speakingEntryID === entry.id) this.speakingEntryID = ''
+    // ---- 桌面投窗（气泡 / 操作卡）：会话不再是窗口，流式内容从这里上桌面 ----
+
+    /** 桌面主区里的随机落点（避开左侧会话列、右侧面板，留边距） */
+    randomSpot(width: number, height: number): { x: number; y: number } {
+      const leftEdge = 250
+      const rightEdge = Math.max(leftEdge + width + 8, window.innerWidth - 400)
+      const topEdge = 60
+      const bottomEdge = Math.max(topEdge + height + 8, window.innerHeight - 250)
+      const spanX = Math.max(1, rightEdge - leftEdge - width)
+      const spanY = Math.max(1, bottomEdge - topEdge - height)
+      // 随机点 + 小级联错位，避免连续多条全叠在同一个随机点上
+      const jitter = (this.castCascade++ % 5) * 26
+      return {
+        x: Math.min(leftEdge + Math.random() * spanX + jitter, rightEdge - width),
+        y: Math.min(topEdge + Math.random() * spanY + jitter, bottomEdge - height)
       }
-      this.speakingEntryID = entry.id
-      speechSynthesis.speak(utterance)
     },
 
-    stopSpeaking() {
-      if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel()
-      this.speakingEntryID = ''
+    /** 投一条气泡（思考/文本）：同一会话同类内容续在同一条气泡里，5 秒无新内容渐隐 */
+    pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string) {
+      const clean = chunk.replace(/\s+/g, ' ').trim()
+      if (!clean) return
+      const id = `${conversationID}:${kind}`
+      const existing = this.bubbles.find((item) => item.id === id)
+      if (existing) {
+        existing.text = `${existing.text}\n${clean}`.split('\n').slice(-6).join('\n').slice(-600)
+        window.clearTimeout(existing.timer)
+        existing.fading = false
+        existing.timer = window.setTimeout(() => this.fadeBubble(id), 5000)
+        return
+      }
+      const spot = this.randomSpot(340, 120)
+      this.bubbles.push({
+        id,
+        conversationID,
+        kind,
+        text: clean.slice(0, 600),
+        x: spot.x,
+        y: spot.y,
+        fading: false,
+        timer: window.setTimeout(() => this.fadeBubble(id), 5000)
+      })
+    },
+
+    /** 气泡渐隐（先加渐隐类，动画完了再从数组里删） */
+    fadeBubble(id: string) {
+      const bubble = this.bubbles.find((item) => item.id === id)
+      if (!bubble || bubble.fading) return
+      bubble.fading = true
+      window.clearTimeout(bubble.timer)
+      bubble.timer = window.setTimeout(() => {
+        this.bubbles = this.bubbles.filter((item) => item.id !== id)
+      }, 600)
+    },
+
+    /** 投一张操作卡（极简终端样式）：同一 id 续写；终态后 5 秒渐隐 */
+    pushOp(card: {
+      id: string
+      conversationID: string
+      title: string
+      content: string
+      result: string
+      status: DesktopOp['status']
+    }) {
+      const existing = this.opCards.find((item) => item.id === card.id)
+      if (existing) {
+        if (card.title) existing.title = card.title
+        if (card.content) existing.content = card.content
+        if (card.result) existing.result = card.result
+        if (card.status !== 'running' || existing.status === 'running') existing.status = card.status
+        if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
+        return
+      }
+      const spot = this.randomSpot(400, 96)
+      this.opCards.push({
+        ...card,
+        title: card.title || '操作',
+        x: spot.x,
+        y: spot.y,
+        fading: false,
+        timer: 0
+      })
+      if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
+    },
+
+    /** 操作到终态：5 秒后开始渐隐 */
+    scheduleOpFade(id: string) {
+      const card = this.opCards.find((item) => item.id === id)
+      if (!card || card.fading || card.timer) return
+      card.timer = window.setTimeout(() => this.fadeOp(id), 5000)
+    },
+
+    fadeOp(id: string) {
+      const card = this.opCards.find((item) => item.id === id)
+      if (!card || card.fading) return
+      card.fading = true
+      window.clearTimeout(card.timer)
+      card.timer = window.setTimeout(() => {
+        this.opCards = this.opCards.filter((item) => item.id !== id)
+      }, 600)
+    },
+
+    /**
+     * 助手消息的流式钩子：对比上次已投长度，把新增的思考/文本续到气泡上；
+     * 工具块顺手转成操作卡。首次见到整条消息只记下标、不补投历史（历史在聊天面板里看）。
+     */
+    noteAssistantStream(conversationID: string, message: ChatMessage) {
+      let thinkingText = ''
+      let textText = ''
+      for (const block of message.blocks ?? []) {
+        const kind = blockCase(block)
+        if (kind === 'thinking') thinkingText += String(blockPayload<string>(block, 'thinking') ?? '')
+        else if (kind === 'text') textText += String(blockPayload<string>(block, 'text') ?? '')
+        else if (kind === 'tool') this.noteToolBlock(conversationID, blockPayload<ToolEvent>(block, 'tool'))
+      }
+      const seen = this.streamMarks[message.id]
+      const mark = seen ?? { thinking: 0, text: 0 }
+      if (seen) {
+        if (thinkingText.length > mark.thinking) {
+          this.pushBubble(conversationID, 'thinking', thinkingText.slice(mark.thinking))
+          mark.thinking = thinkingText.length
+        }
+        if (textText.length > mark.text) {
+          this.pushBubble(conversationID, 'text', textText.slice(mark.text))
+          mark.text = textText.length
+        }
+      } else {
+        mark.thinking = thinkingText.length
+        mark.text = textText.length
+      }
+      this.streamMarks[message.id] = mark
+    },
+
+    /** 消息里的工具块 → 操作卡（带参数/结果/状态，比 activity 事件全） */
+    noteToolBlock(conversationID: string, event: ToolEvent | undefined) {
+      if (!event?.id) return
+      const status = event.status ?? 'running'
+      const content = event.arguments ?? ''
+      this.pushOp({
+        id: event.id,
+        conversationID,
+        title: event.title || event.name || '操作',
+        content: content.length > 240 ? `${content.slice(0, 240)}…` : content,
+        result: event.result || '',
+        status
+      })
+    },
+
+    /** 会话用到哪类工具，对应面板立刻展开 */
+    noteToolUse(tool: string) {
+      if (/terminal|shell|command|exec|process/i.test(tool)) this.docks.terminals = true
+      if (/browser|navigate|web|http/i.test(tool)) this.docks.browser = true
+      if (/file|read|write|edit|glob|grep|list|dir|path|patch|search|download/i.test(tool)) this.docks.files = true
     },
 
     /** 上传一个主进程背书的文件，返回服务端路径 */

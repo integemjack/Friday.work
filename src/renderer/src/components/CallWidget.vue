@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// 通话挂件（常驻版）：进入工作台（机器连上）就自动与助手 bot 建立实时视频通话，
-// 可以直接开口对话；挂件钉在右下角，随工作台常驻——
-//   通话中：远端画面（视频通话）+ 本端小窗 + 静麦 / 静扬声器 / 摄像头开关 / 挂断
-//   未接通：显示原因 + 「接通」按钮（挂断后不自动重拨，点它重拨）
+// 通话面板（常驻版，右上）：进入工作台（机器连上）就自动与助手 bot 建立实时视频通话，
+// 可以直接开口对话；面板钉在右栏顶部——
+//   通话中：远端画面（视频通话）+ 本端小窗 + 静麦 / 静扬声器 / 摄像头开关（没有挂断：挂断=结束程序）
+//   未接通：显示原因 + 「接通」按钮（结束后不自动重拨，点它重拨）
 // 媒体引擎（WebRTC PC / getUserMedia / 音视频渲染）全在这里；信令在协议进程（schat-ws p2p_*）。
 // 音频口径：Opus 48 kHz 单声道；对方没摄像头时退回头像 + 电平脉冲。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -309,11 +309,6 @@ function teardownMedia(): void {
   cameraOn.value = false
 }
 
-async function hangup(): Promise<void> {
-  await store.callHangup()
-  teardownMedia()
-}
-
 async function accept(): Promise<void> {
   await store.callAccept()
 }
@@ -438,9 +433,6 @@ onBeforeUnmount(() => {
   teardownMedia()
 })
 
-/** 已经为哪一通写过时间线记录 */
-let loggedCall = ''
-
 /** 上次看到的阶段（只在变化时做一次处理） */
 let lastPhase = ''
 
@@ -464,12 +456,6 @@ const unwatch = setInterval(async () => {
   if (phaseNow === 'active') startTicker()
   if (phaseNow === 'ended') {
     teardownMedia()
-    // 挂断后写一条通话记录进时间线（只写一次）
-    if (loggedCall !== state.requestId) {
-      loggedCall = state.requestId ?? ''
-      const info = store.schat.call as { peerName?: string; durationSec?: number; endedReason?: string }
-      store.logCall(info.peerName ?? '', info.durationSec ?? 0, info.endedReason ?? '')
-    }
   }
 }, 200)
 onBeforeUnmount(() => clearInterval(unwatch))
@@ -540,21 +526,16 @@ onBeforeUnmount(() => clearInterval(unwatch))
         >
           📹
         </button>
-        <button class="cbtn hangup" :disabled="phase === 'ended' || phase === 'idle'" title="挂断" @click="hangup">
-          📞
-        </button>
       </template>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* 常驻在右栏顶部（不再是浮动挂件）：App.vue 的右栏容器控制宽度，这里铺满即可 */
 .call-widget {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
-  z-index: 8000;
-  width: 264px;
+  position: relative;
+  flex: none;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--panel);
@@ -726,11 +707,6 @@ onBeforeUnmount(() => clearInterval(unwatch))
 .cbtn.off {
   border-color: color-mix(in srgb, var(--warn) 55%, transparent);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
-}
-
-.cbtn.hangup {
-  background: var(--fail);
-  border-color: var(--fail);
 }
 
 .cbtn.accept,

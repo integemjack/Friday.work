@@ -1,8 +1,10 @@
 <script setup lang="ts">
-// 桌面（2026-10 布局改版）：底部任务栏去掉，
-// 终端 / 文件 / 浏览器连上机器后直接铺在桌面上（左=文件、右=浏览器、底=终端，可折叠）；
-// 其余（会话 / 子 Agent / 活动总览 / 机器 / 设置 / 聊天 …）仍是可拖动窗口，入口在标题栏；
-// 通话是右下角悬浮挂件（视频画面 + 静麦 + 静扬声器）。
+// 桌面（2026-10 布局改版第二期）：不再有会话/语音/机器人聊天/助手时间线/活动总览/机器与会话窗口——
+//   左栏   ：会话列表（常驻）+ 文件面板（会话用到才展开，可折叠）
+//   中间   ：桌面主区（气泡 / 操作卡投在这里的随机位置）+ 底部终端面板
+//   右栏   ：视频通话面板（常驻顶部，没有挂断）+ 浏览器面板（用到才展开）+ 与助手聊天（常驻底部）
+// 会话的思考/文本以气泡投在桌面随机处（5 秒渐隐）；操作以极简终端卡投在桌面（有结果 5 秒后渐隐）。
+// 剩下的浮动窗口只有子 Agent / 设置，入口在标题栏。
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
@@ -10,22 +12,19 @@ import { uiTheme } from './lib/theme.js'
 import { host } from './lib/host.js'
 import { WorkChannelHub, type WorkSignalIn } from './lib/workChannel.js'
 import TitleBar from './components/TitleBar.vue'
-import ConversationView from './components/ConversationView.vue'
 import TerminalCard from './components/TerminalCard.vue'
 import FilesCard from './components/FilesCard.vue'
 import BrowserCard from './components/BrowserCard.vue'
 import AgentsCard from './components/AgentsCard.vue'
-import ActivityOverview from './components/ActivityOverview.vue'
-import VoiceWindow from './components/VoiceWindow.vue'
 import SettingsWindow from './components/SettingsWindow.vue'
-import SchatWindow from './components/SchatWindow.vue'
 import LoginView from './components/LoginView.vue'
 import CallWidget from './components/CallWidget.vue'
-import TimelineWindow from './components/TimelineWindow.vue'
-import MachinesWindow from './desktop/MachinesWindow.vue'
+import SessionList from './components/SessionList.vue'
+import AssistantChat from './components/AssistantChat.vue'
+import DesktopBubbles from './components/DesktopBubbles.vue'
+import DesktopOps from './components/DesktopOps.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
-import JarvisTelemetry from './desktop/JarvisTelemetry.vue'
 
 const store = useAppStore()
 
@@ -54,10 +53,9 @@ const jarvis = computed(() => uiTheme.value === 'jarvis')
 // 已有凭据/机器时协议进程会静默恢复，machines 一到 workbenchReady 就是 true，这个页不出现
 const showLogin = computed(() => !store.workbenchReady || store.loginOverlay)
 
-// 桌面面板的展开/折叠尺寸（折叠成窄轨，留标签可点回来）
+// 面板展开/折叠尺寸：左栏宽度、文件面板高度、终端高度固定档；浏览器在右栏里伸缩
 const dockStyle = computed(() => ({
-  '--dock-files': store.docks.files ? '230px' : '22px',
-  '--dock-browser': store.docks.browser ? '350px' : '22px',
+  '--dock-files': store.docks.files ? '260px' : '22px',
   '--dock-term': store.docks.terminals ? '192px' : '22px'
 }))
 
@@ -88,37 +86,22 @@ onMounted(() => {
   store.restoreLayout()
   store.bindHost()
   store.$subscribe(() => scheduleLayoutSave(), { detached: true })
-  if (!store.windows.length) store.openWindow('machines')
 })
 
 const componentFor: Record<WindowKind, unknown> = {
-  conversation: ConversationView,
   terminals: TerminalCard,
   files: FilesCard,
   browser: BrowserCard,
   agents: AgentsCard,
-  activity: ActivityOverview,
-  machines: MachinesWindow,
-  voice: VoiceWindow,
-  settings: SettingsWindow,
-  schat: SchatWindow,
-  call: CallWidget,
-  timeline: TimelineWindow
+  settings: SettingsWindow
 }
 
 const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = {
-  conversation: { minWidth: 420, minHeight: 340 },
   terminals: { minWidth: 420, minHeight: 260 },
   files: { minWidth: 360, minHeight: 300 },
   browser: { minWidth: 420, minHeight: 320 },
   agents: { minWidth: 360, minHeight: 240 },
-  activity: { minWidth: 320, minHeight: 240 },
-  machines: { minWidth: 320, minHeight: 280 },
-  voice: { minWidth: 360, minHeight: 320 },
-  settings: { minWidth: 420, minHeight: 320 },
-  schat: { minWidth: 420, minHeight: 360 },
-  call: { minWidth: 300, minHeight: 380 },
-  timeline: { minWidth: 380, minHeight: 300 }
+  settings: { minWidth: 420, minHeight: 320 }
 }
 </script>
 
@@ -126,58 +109,76 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   <div class="app">
     <TitleBar />
 
-    <!-- 桌面：连上机器后是「文件 | 浮动窗口区 | 浏览器 / 终端」网格；面板上面浮着窗口和通话挂件 -->
-    <div class="desktop" :class="{ docked: store.connected }" :style="store.connected ? dockStyle : undefined">
-      <!-- 贾维斯 HUD：全息雷达 + 真实状态（机器连接 / 窗口数 / 待确认 / 时钟），窗口盖在上面 -->
+    <!-- 桌面：三栏网格（会话列表 | 主区 | 通话/浏览器/聊天），终端横贯中栏底部；
+         气泡和操作卡投在主区随机位置，浮动窗口（子 Agent / 设置）盖在最上面 -->
+    <div class="desktop" :style="dockStyle">
+      <!-- 贾维斯 HUD：全息雷达 + 真实状态（机器连接 / 窗口数 / 待确认 / 时钟） -->
       <JarvisHUD v-if="jarvis" />
 
-      <!-- 贾维斯桌面遥测：正在跑的会话 / 子 Agent / 系统日志直接投在桌面上，点开才进窗口 -->
-      <JarvisTelemetry v-if="jarvis" />
-
-      <!-- 桌面直显面板（扁平、无窗口样式）：文件（左）/ 浏览器（右）/ 终端（底）。
-           v-show 保内容：终端实例不能重建 -->
-      <template v-if="store.connected">
-        <aside class="dock dock-files" :class="{ collapsed: !store.docks.files }">
+      <!-- 左栏：会话列表（常驻）+ 文件面板 -->
+      <aside class="side side-left">
+        <div class="side-sessions"><SessionList /></div>
+        <div v-if="store.connected" class="dock dock-files" :class="{ collapsed: !store.docks.files }">
           <div class="dock-body"><FilesCard /></div>
           <div class="dock-rail">
             <button class="dock-toggle" :title="store.docks.files ? '折叠文件' : '展开文件'" @click="store.toggleDock('files')">
-              {{ store.docks.files ? '‹' : '›' }}
+              {{ store.docks.files ? '⌄' : '⌃' }}
             </button>
             <span class="dock-label" @click="store.toggleDock('files')">文件</span>
           </div>
-        </aside>
+        </div>
+      </aside>
 
-        <aside class="dock dock-browser" :class="{ collapsed: !store.docks.browser }">
-          <div class="dock-body"><BrowserCard /></div>
-          <div class="dock-rail">
-            <button class="dock-toggle" :title="store.docks.browser ? '折叠浏览器' : '展开浏览器'" @click="store.toggleDock('browser')">
-              {{ store.docks.browser ? '›' : '‹' }}
-            </button>
-            <span class="dock-label" @click="store.toggleDock('browser')">浏览器</span>
-          </div>
-        </aside>
-
-        <section class="dock dock-terminals" :class="{ collapsed: !store.docks.terminals }">
+      <!-- 中间：桌面主区（气泡/操作卡落在几何上的这一块）+ 终端面板 -->
+      <section class="main-area">
+        <div v-if="store.connected" class="dock dock-terminals" :class="{ collapsed: !store.docks.terminals }">
           <div class="dock-body"><TerminalCard /></div>
           <div class="dock-rail">
-            <button class="dock-toggle" :title="store.docks.terminals ? '折叠终端' : '展开终端'" @click="store.toggleDock('terminals')">
-              {{ store.docks.terminals ? '⌄' : '⌃' }}
+            <button
+              class="dock-toggle"
+              :title="store.docks.terminals ? '折叠终端' : '展开终端'"
+              @click="store.toggleDock('terminals')"
+            >
+              {{ store.docks.terminals ? '⌃' : '⌄' }}
             </button>
             <span class="dock-label" @click="store.toggleDock('terminals')">终端</span>
           </div>
-        </section>
-      </template>
+        </div>
+      </section>
+
+      <!-- 右栏：通话面板（常驻顶部）+ 浏览器面板 + 与助手聊天（常驻底部） -->
+      <aside class="side side-right">
+        <CallWidget />
+        <div v-if="store.connected" class="dock dock-browser" :class="{ collapsed: !store.docks.browser }">
+          <div class="dock-body"><BrowserCard /></div>
+          <div class="dock-rail">
+            <button
+              class="dock-toggle"
+              :title="store.docks.browser ? '折叠浏览器' : '展开浏览器'"
+              @click="store.toggleDock('browser')"
+            >
+              {{ store.docks.browser ? '⌃' : '⌄' }}
+            </button>
+            <span class="dock-label" @click="store.toggleDock('browser')">浏览器</span>
+          </div>
+        </div>
+        <div class="side-chat"><AssistantChat /></div>
+      </aside>
+
+      <!-- 桌面投层：思考/文本气泡 + 操作极简终端卡（都在主区随机位置，最上层可点掉） -->
+      <DesktopBubbles />
+      <DesktopOps />
 
       <!-- 没连机器时的桌面提示 -->
       <div v-if="!store.connected" class="desktop-empty">
         <div class="desktop-title">Friday</div>
-        <div class="desktop-sub">连上那台跑着 Friday 的机器，终端 / 文件 / 浏览器直接铺在桌面上</div>
+        <div class="desktop-sub">扫码连上那台跑着 Friday 的机器，直接开工</div>
         <div class="desktop-actions">
-          <button class="btn primary" @click="store.openWindow('machines')">打开机器与会话</button>
+          <button class="btn primary" @click="store.openLogin()">扫码连接机器</button>
         </div>
       </div>
 
-      <!-- 浮动窗口层（会话 / 子 Agent / 活动 / 设置 …）：绝对定位铺在面板上面 -->
+      <!-- 浮动窗口层（只剩子 Agent / 设置） -->
       <div class="windows-layer">
         <WindowFrame
           v-for="item in store.allWindows"
@@ -198,18 +199,12 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
           @move="(rect) => store.moveWindow(item.id, rect)"
           @resize="(rect) => store.resizeWindow(item.id, rect)"
         >
-          <component
-            :is="componentFor[item.kind]"
-            :conversation-id="item.conversationID"
-          />
+          <component :is="componentFor[item.kind]" />
         </WindowFrame>
       </div>
-
-      <!-- 右下角通话挂件：视频画面 + 静麦 + 静扬声器（随通话状态自动出现） -->
-      <CallWidget />
     </div>
 
-    <!-- 登录页：盖在桌面上（窗口不卸载，终端等实例还在），连上后自己收起 -->
+    <!-- 登录页：盖在桌面上（面板不卸载，终端等实例还在），连上后自己收起 -->
     <LoginView v-if="showLogin" />
 
     <!-- 全局错误横幅 -->
@@ -239,42 +234,95 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
   background-size: 22px 22px;
   background-position: -1px -1px;
-}
-
-/* 连上机器：桌面变三栏网格（文件 | 主区 | 浏览器），终端横贯底部 */
-.desktop.docked {
+  /* 三栏两行网格：左=会话列表+文件，中=主区+终端，右=通话+浏览器+聊天（全部常驻面板） */
   display: grid;
-  grid-template-columns: var(--dock-files) minmax(0, 1fr) var(--dock-browser);
+  grid-template-columns: 248px minmax(0, 1fr) 352px;
   grid-template-rows: minmax(0, 1fr) var(--dock-term);
   grid-template-areas:
-    'files main browser'
-    'term term term';
+    'left main right'
+    'left term right';
+  gap: 8px;
+  padding: 8px;
 }
 
-/* 桌面直显面板：扁平、不做窗口样式——没有标题栏/边框盒子/阴影，
-   内容直接铺在桌面上，靠内侧一条发丝线分区；标签浮在边缘、悬停才见控制钮 */
+/* ---- 左栏 ---- */
+.side {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.side-left {
+  grid-area: left;
+}
+
+.side-sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---- 中间 ---- */
+.main-area {
+  grid-area: main;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* 终端面板吃掉主区底部（网格第二行的中栏格），这里只是把它放进中栏流里 */
+.main-area .dock-terminals {
+  flex: none;
+  height: 100%;
+}
+
+/* ---- 右栏 ---- */
+.side-right {
+  grid-area: right;
+}
+
+/* 浏览器面板：展开吃掉右栏中段，折叠成 22px 细轨 */
+.dock-browser {
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+.dock-browser.collapsed {
+  flex: none;
+  min-height: 0;
+  height: 22px;
+}
+
+.side-chat {
+  flex: none;
+  height: 340px;
+}
+
+/* ---- 桌面直显面板（扁平、无窗口样式） ---- */
 .dock {
   position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
   overflow: hidden;
+  background: var(--panel-card-deep-a55, rgba(8, 14, 24, 0.55));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .dock-files {
-  grid-area: files;
-  border-right: 1px solid var(--border);
-}
-
-.dock-browser {
-  grid-area: browser;
-  border-left: 1px solid var(--border);
+  flex: none;
+  height: var(--dock-files);
 }
 
 .dock-terminals {
-  grid-area: term;
   flex-direction: column;
-  border-top: 1px solid var(--border);
 }
 
 .dock-body {
@@ -283,9 +331,11 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   min-width: 0;
   display: flex;
   background: transparent;
+  border-radius: inherit;
+  overflow: hidden;
 }
 
-/* 边缘轨道：展开时是内缘一条悬停可见的细条（只有箭头）；折叠时就是面板本体（22px，标签+箭头） */
+/* 边缘轨道：展开时是内侧一条悬停可见的细条（只有箭头）；折叠时就是面板本体（22px，标签+箭头） */
 .dock-rail {
   position: absolute;
   inset: 0;
@@ -302,46 +352,23 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   display: flex;
 }
 
-/* 展开态：轨道只占内缘 16px，不遮内容 */
-.dock-files:not(.collapsed) .dock-rail {
-  left: auto;
-  width: 16px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bg) 78%, transparent));
-}
-
-.dock-browser:not(.collapsed) .dock-rail {
-  right: auto;
-  width: 16px;
-  background: linear-gradient(270deg, transparent, color-mix(in srgb, var(--bg) 78%, transparent));
-}
-
-.dock-terminals:not(.collapsed) .dock-rail {
+/* 展开态：轨道只占上缘 16px（文件/浏览器/终端的折叠钮都在上缘，横向排） */
+.dock:not(.collapsed) .dock-rail {
   bottom: auto;
   height: 16px;
   flex-direction: row;
-  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg) 78%, transparent));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 72%, transparent), transparent);
 }
 
 .dock:not(.collapsed) .dock-label {
   display: none;
 }
 
-.dock-files .dock-rail,
-.dock-browser .dock-rail {
-  flex-direction: column;
-}
-
 .dock-label {
   font-size: 10px;
   letter-spacing: 3px;
   color: var(--text-3);
-  writing-mode: vertical-rl;
   user-select: none;
-}
-
-.dock-terminals .dock-label {
-  writing-mode: horizontal-tb;
-  letter-spacing: 4px;
 }
 
 .dock-toggle {
@@ -363,12 +390,16 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   color: var(--text);
 }
 
-/* 折叠态：整条就是窄轨（标签 + 展开箭头），内容 v-show 隐藏 */
+/* 折叠态：整条就是细轨（标签 + 展开箭头），内容 v-show 隐藏 */
+.dock.collapsed {
+  height: 22px;
+}
+
 .dock.collapsed .dock-body {
   display: none;
 }
 
-/* 没连机器时提示铺满（网格未启用，走绝对定位居中） */
+/* 没连机器时提示铺满（盖在面板上层） */
 .desktop-empty {
   position: absolute;
   inset: 0;
@@ -379,6 +410,7 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   gap: 8px;
   color: var(--text-2);
   pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 
 .desktop-empty > * {
@@ -401,10 +433,15 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   margin-top: 12px;
 }
 
-/* 浮动窗口层：铺满桌面（坐标与旧版一致），面板、提示、挂件都在它下面/上面各归各 */
+/* 浮动窗口层：铺满桌面（只剩子 Agent / 设置） */
 .windows-layer {
   position: absolute;
   inset: 0;
+  pointer-events: none;
+}
+
+.windows-layer > * {
+  pointer-events: auto;
 }
 
 /* 贾维斯界面：桌面底纹从点阵换成青色全息网格 + 中央辉光，欢迎语带发光 */
