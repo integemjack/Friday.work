@@ -2,7 +2,9 @@
 // 桌面左侧常驻会话列表（2026-10 布局改版）：
 // 全部会话一列，点一下选中（右下聊天面板切到它）；运行中的会话带状态点。
 // 新建 / 添加机器在表头；行尾 ✕ 只关掉本地订阅（不删服务端会话）。
-// 默认只露最近 10 条 + 活动中的（选中的 / 在跑的），末尾「显示更多会话」每次再放 10 条；
+// 排序：在跑的（含等确认/等你答）整体顶到最上面（「在跑」段），手动置顶其次，
+// 其余按更新时间；默认只露最近 10 条 + 活动中的（选中的 / 在跑的），
+// 末尾「显示更多会话」每次再放 10 条；
 // 按更新时间分段插日期标签：置顶 / 最近 / 3天前 / 7天前 / 1个月前。
 import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -16,22 +18,29 @@ const addingMachine = ref(false)
 const PAGE_SIZE = 10
 const visibleCount = ref(PAGE_SIZE)
 
+function statusOf(id: string): string {
+  return store.activities[id]?.status ?? 'idle'
+}
+
+/** 在跑中的会话：running，或跑着等人出手的（等确认/等你答）——整体顶到列表最上面 */
+function isBusy(id: string): boolean {
+  const status = statusOf(id)
+  return status === 'running' || status === 'approval' || status === 'question'
+}
+
 const sessions = computed(() =>
   [...store.summaries].sort((a, b) => {
+    const aBusy = isBusy(a.id)
+    const bBusy = isBusy(b.id)
+    if (aBusy !== bBusy) return aBusy ? -1 : 1
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
     return b.updatedAt.localeCompare(a.updatedAt)
   })
 )
 
-function statusOf(id: string): string {
-  return store.activities[id]?.status ?? 'idle'
-}
-
 /** 活动中的会话：选中的那段，或在跑 / 等确认 / 等你答的——永远展示，不被折叠进「更多」 */
 function isLive(id: string): boolean {
-  if (id === store.activeConversationID) return true
-  const status = statusOf(id)
-  return status === 'running' || status === 'approval' || status === 'question'
+  return id === store.activeConversationID || isBusy(id)
 }
 
 /** 实际展示的：排序后前 visibleCount 条，加上漏在后面但正活动着的（仍按原位插入，不打乱分组） */
@@ -45,10 +54,11 @@ function showMore(): void {
   visibleCount.value += PAGE_SIZE
 }
 
-// —— 日期分段标签：置顶 / 最近 / 3天前 / 7天前 / 1个月前 ——
-type GroupKey = 'pinned' | 'recent' | 'd3' | 'd7' | 'm1'
+// —— 分段标签：在跑 / 置顶 / 最近 / 3天前 / 7天前 / 1个月前 ——
+type GroupKey = 'live' | 'pinned' | 'recent' | 'd3' | 'd7' | 'm1'
 
 const groupLabel: Record<GroupKey, string> = {
+  live: '在跑',
   pinned: '置顶',
   recent: '最近',
   d3: '3天前',
@@ -56,7 +66,8 @@ const groupLabel: Record<GroupKey, string> = {
   m1: '1个月前'
 }
 
-function groupOf(updatedAt: string, pinned: boolean): GroupKey {
+function groupOf(updatedAt: string, pinned: boolean, busy: boolean): GroupKey {
+  if (busy) return 'live'
   if (pinned) return 'pinned'
   const date = new Date(updatedAt)
   if (Number.isNaN(date.getTime())) return 'recent'
@@ -71,7 +82,7 @@ function groupOf(updatedAt: string, pinned: boolean): GroupKey {
 const groups = computed(() => {
   const out: Array<{ key: GroupKey; label: string; items: ConversationSummary[] }> = []
   for (const item of visibleSessions.value) {
-    const key = groupOf(item.updatedAt, item.pinned)
+    const key = groupOf(item.updatedAt, item.pinned, isBusy(item.id))
     const last = out[out.length - 1]
     if (last && last.key === key) last.items.push(item)
     else out.push({ key, label: groupLabel[key], items: [item] })
