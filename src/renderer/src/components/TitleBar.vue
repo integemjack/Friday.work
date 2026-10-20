@@ -325,17 +325,17 @@ const bridge = window.fridayBridge
 
 /* 贾维斯界面：顶部标题栏变成 HUD 主控条——几乎全透（只留 blur 和两端青色辉光），不像一块盖在上面的板 */
 [data-theme='jarvis'] .titlebar {
-  border-bottom-color: rgba(34, 211, 238, 0.28);
+  border-bottom-color: var(--accent-a28);
   background:
-    linear-gradient(90deg, rgba(34, 211, 238, 0.09), transparent 28%, transparent 72%, rgba(34, 211, 238, 0.09)),
-    rgba(9, 21, 38, 0.22);
+    linear-gradient(90deg, var(--accent-a9), transparent 28%, transparent 72%, var(--accent-a9)),
+    var(--panel-a22);
 }
 
 [data-theme='jarvis'] .brand {
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 5px;
-  text-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
+  text-shadow: 0 0 12px var(--accent-a50);
 }
 
 [data-theme='jarvis'] .machine {
@@ -345,7 +345,7 @@ const bridge = window.fridayBridge
 }
 
 [data-theme='jarvis'] .machine:hover {
-  border-color: rgba(34, 211, 238, 0.3);
+  border-color: var(--accent-a30);
 }
 
 [data-theme='jarvis'] .machine-state,

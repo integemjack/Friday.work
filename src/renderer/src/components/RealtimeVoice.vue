@@ -254,12 +254,12 @@ onBeforeUnmount(() => {
 }
 /* 贾维斯界面：实时语音条变通讯链路面板 */
 [data-theme='jarvis'] .rt {
-  border-color: rgba(34, 211, 238, 0.25);
-  background: rgba(10, 25, 45, 0.5);
+  border-color: var(--accent-a25);
+  background: var(--panel-card-deep);
 }
 
 [data-theme='jarvis'] .rt-head {
-  border-bottom-color: rgba(34, 211, 238, 0.2);
+  border-bottom-color: var(--accent-a20);
 }
 
 [data-theme='jarvis'] .rt-title {

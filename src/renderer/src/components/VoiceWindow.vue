@@ -376,24 +376,24 @@ onBeforeUnmount(() => {
 }
 /* 贾维斯界面：麦克风变反应堆按钮，日志条目变通讯记录 */
 [data-theme='jarvis'] .mic {
-  border: 1px solid rgba(34, 211, 238, 0.45);
-  background: radial-gradient(circle at 50% 40%, rgba(34, 211, 238, 0.14), rgba(34, 211, 238, 0.03));
+  border: 1px solid var(--accent-a45);
+  background: radial-gradient(circle at 50% 40%, var(--accent-a14), var(--accent-a3));
   box-shadow:
-    0 0 22px rgba(34, 211, 238, 0.18),
-    inset 0 0 16px rgba(34, 211, 238, 0.1);
+    0 0 22px var(--accent-a18),
+    inset 0 0 16px var(--accent-a10);
 }
 
 [data-theme='jarvis'] .mic:hover:not(:disabled) {
   box-shadow:
-    0 0 30px rgba(34, 211, 238, 0.3),
-    inset 0 0 18px rgba(34, 211, 238, 0.14);
+    0 0 30px var(--accent-a30),
+    inset 0 0 18px var(--accent-a14);
 }
 
 [data-theme='jarvis'] .mic.recording {
-  border-color: rgba(251, 95, 125, 0.7);
+  border-color: var(--fail-a70);
   box-shadow:
-    0 0 28px rgba(251, 95, 125, 0.3),
-    inset 0 0 16px rgba(251, 95, 125, 0.12);
+    0 0 28px var(--fail-a3),
+    inset 0 0 16px var(--fail-a12);
 }
 
 [data-theme='jarvis'] .mic-text,

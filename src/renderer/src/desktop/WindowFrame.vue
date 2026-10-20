@@ -224,13 +224,13 @@ onBeforeUnmount(onUp)
 
 /* 贾维斯界面：窗口像悬浮的全息面板——半透明磨砂玻璃 + 青色描边 + 外发光，打开时全息展开 */
 [data-theme='jarvis'] .win {
-  border-color: rgba(34, 211, 238, 0.32);
+  border-color: var(--accent-a32);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   animation: jarvis-boot 0.26s ease-out;
   box-shadow:
-    0 0 0 1px rgba(34, 211, 238, 0.1),
-    0 0 22px rgba(34, 211, 238, 0.09),
+    0 0 0 1px var(--accent-a10),
+    0 0 22px var(--accent-a9),
     0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
@@ -244,20 +244,20 @@ onBeforeUnmount(onUp)
 
 [data-theme='jarvis'] .win.dragging {
   box-shadow:
-    0 0 0 1px rgba(34, 211, 238, 0.2),
-    0 0 34px rgba(34, 211, 238, 0.16),
+    0 0 0 1px var(--accent-a20),
+    0 0 34px var(--accent-a16),
     0 20px 48px rgba(0, 0, 0, 0.6);
 }
 
 [data-theme='jarvis'] .win-title {
-  border-bottom-color: rgba(34, 211, 238, 0.28);
+  border-bottom-color: var(--accent-a28);
 }
 
 [data-theme='jarvis'] .win-text {
   color: var(--accent);
   letter-spacing: 1.5px;
   text-transform: uppercase;
-  text-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+  text-shadow: 0 0 12px var(--accent-a35);
 }
 
 .win-body {
