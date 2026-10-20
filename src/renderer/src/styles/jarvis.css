@@ -207,11 +207,11 @@ html[data-theme='jarvis'] .avatar.user {
   color: var(--text-2);
 }
 
-/* ---- 用户消息气泡：青色描边全息气泡 ---- */
+/* ---- 用户消息气泡：青色描边全息气泡（描边/辉光与桌面投层气泡同档：a35 / a12） ---- */
 html[data-theme='jarvis'] .message.user .md {
   background: var(--accent-a8);
-  border: 1px solid var(--accent-a32);
-  box-shadow: 0 0 16px var(--accent-a7);
+  border: 1px solid var(--accent-a35);
+  box-shadow: 0 0 16px var(--accent-a12);
 }
 
 /* ---- 思考块：青色引用线 ---- */
