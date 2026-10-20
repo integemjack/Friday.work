@@ -1,13 +1,25 @@
 <script setup lang="ts">
 // 添加机器（0.3）：唯一的方式是 SChat 扫码后的机器人（WebRTC 工作通道）。
 // 没登录：提示去设置扫码；登录了：列出机器人，点一个就连。
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 
 const emit = defineEmits<{ close: [] }>()
 const store = useAppStore()
 const busy = ref('')
 const error = ref('')
+
+/** 已经连成机器人的 bot（work:<id>）：不重复列出（机器列表里已有一份，去那边管理） */
+const addedBotIDs = computed(() => {
+  const ids = new Set<number>()
+  for (const machine of store.machines) {
+    if (machine.targetKind !== 'work') continue
+    const id = Number.parseInt(machine.targetText.slice(5), 10)
+    if (Number.isInteger(id)) ids.add(id)
+  }
+  return ids
+})
+const addableBots = computed(() => store.schat.bots.filter((bot) => !addedBotIDs.value.has(bot.id)))
 
 onMounted(() => {
   if (store.schat.phase !== 'online') void store.schatRefresh()
@@ -34,10 +46,12 @@ async function add(botID: number, name: string) {
       <p class="hint">从 SChat 机器人列表里选一台：扫码连上后走 WebRTC 工作通道，语音 / 视频 / 数据都从这条通道走。</p>
 
       <template v-if="store.schat.phase === 'online'">
-        <div v-if="!store.schat.bots.length" class="empty">好友里还没有机器人（备注带「机器人」的才算）。</div>
+        <div v-if="!addableBots.length" class="empty">
+          {{ store.schat.bots.length ? '机器人都在「机器与会话」里了，没有新的可连。' : '好友里还没有机器人。先在手机上把 Friday 机器人加成好友。' }}
+        </div>
         <div class="bots">
           <button
-            v-for="bot in store.schat.bots"
+            v-for="bot in addableBots"
             :key="bot.id"
             class="bot"
             :disabled="!!busy"

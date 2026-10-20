@@ -18,6 +18,7 @@ import {
   type TerminalsState
 } from '../rpc/protocol.js'
 import type { MachineRuntimeState, ParsedTarget } from '../../shared/api.js'
+import { targetToText } from '../session/TargetParse.js'
 import { WorkSignaling, type WorkSignalingHost, type WorkSignalEvent } from '../work/WorkSignaling.js'
 import { WorkTransport, type WorkPortMessage } from '../work/WorkTransport.js'
 
@@ -388,19 +389,13 @@ export class MachineConnection {
       id: this.id,
       name: this.name,
       targetKind: this.target.kind,
-      targetText: targetText(this.target),
+      targetText: targetToText(this.target),
       state: this.state,
       detail: this.detail,
       serverInfo: this.serverInfo,
       hasPendingApproval: this.hasPendingApproval
     }
   }
-}
-
-function targetText(target: ParsedTarget): string {
-  if (target.kind === 'ws') return target.url ?? ''
-  if (target.kind === 'wsl') return `wsl:${target.distro ?? ''}`
-  return `ssh:${target.host ?? ''}${target.port ? `:${target.port}` : ''}`
 }
 
 export function newMachineID(): string {

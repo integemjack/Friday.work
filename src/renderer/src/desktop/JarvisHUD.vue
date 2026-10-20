@@ -21,14 +21,12 @@ onMounted(() => {
 })
 onBeforeUnmount(() => window.clearInterval(timer))
 
-// 连接状态（和任务栏同一份 state，换成 HUD 味的英文短语）
+// 连接状态（和任务栏同一份 state，换成 HUD 味的英文短语；0.3 起只剩这几种）
 const stateText: Record<string, string> = {
   disconnected: 'OFFLINE',
-  probing: 'SCANNING',
   connecting: 'LINKING',
   ready: 'LINK READY',
   failed: 'LINK FAILED',
-  unpaired: 'NO PAIR',
   versionMismatch: 'VER MISMATCH'
 }
 const linkText = computed(() => {

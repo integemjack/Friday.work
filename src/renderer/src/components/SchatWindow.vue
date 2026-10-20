@@ -18,12 +18,30 @@ const bots = computed(() => state.value.bots)
 const messages = computed(() => state.value.messages[activeBot.value] ?? [])
 const canSend = computed(() => state.value.phase === 'online' && activeBot.value > 0 && draft.value.trim().length > 0)
 
-/** 一键连上这台机器（方案 §4.0 ③）：直接开一个工作连接，不输任何地址/口令 */
+/** 已经连成机器人的 bot（work:<id>）→ 它的连接状态：已连的不显示 ⚡，显示状态，避免和机器列表重复、像没连过 */
+const machineByBot = computed(() => {
+  const map = new Map<number, { state: string; name: string }>()
+  for (const machine of store.machines) {
+    if (machine.targetKind !== 'work') continue
+    const id = Number.parseInt(machine.targetText.slice(5), 10)
+    if (Number.isInteger(id)) map.set(id, { state: machine.state, name: machine.name })
+  }
+  return map
+})
+const linkText: Record<string, string> = {
+  ready: '已连接',
+  connecting: '连接中',
+  failed: '连接失败',
+  versionMismatch: '版本不匹配',
+  disconnected: '已断开'
+}
+
+/** 一键连上这台机器（0.3）：WebRTC 工作通道，不输任何地址/口令 */
 async function connectWork(botID: number): Promise<void> {
   workError.value = ''
   try {
-    const url = await store.connectWork(botID)
-    workResult.value = url ? `已连上 ${url}（设备默认不受信：想用终端/浏览器/文件，在聊天里发 /trust <设备id> on）` : '已连上'
+    await store.connectWork(botID)
+    workResult.value = '已连上，语音 / 视频 / 数据都走这条 WebRTC 通道'
   } catch (err) {
     workError.value = err instanceof Error ? err.message : String(err)
   }
@@ -155,7 +173,18 @@ onMounted(() => {
         >
           <span class="bot-name">{{ bot.name }}</span>
           <span v-if="bot.botCalls" class="bot-call" title="语音通话" @click.stop="store.callDial(bot.id, 'audio')">📞</span>
-          <span class="bot-work" title="一键连上这台机器（不用输地址/口令）" @click.stop="connectWork(bot.id)">⚡</span>
+          <span
+            v-if="machineByBot.has(bot.id)"
+            class="bot-linked"
+            :class="machineByBot.get(bot.id)?.state"
+            title="这台机器已在「机器与会话」里，去那里管理连接"
+          >{{ linkText[machineByBot.get(bot.id)?.state ?? ''] ?? machineByBot.get(bot.id)?.state }}</span>
+          <span
+            v-else
+            class="bot-work"
+            title="连上这台机器（WebRTC 工作通道）"
+            @click.stop="connectWork(bot.id)"
+          >⚡</span>
           <span v-if="bot.botCalls" class="bot-tag">通话</span>
         </button>
         <div v-if="bots.length === 0" class="empty-tip">好友里还没有机器人。先在手机上把这个 Friday 机器人加成好友。</div>
@@ -380,6 +409,19 @@ input:focus {
   cursor: pointer;
   opacity: 0.8;
 }
+
+/* 已连成机器人的 bot：状态小签（和机器列表同一份状态，不再是「可连接」的样子） */
+.bot-linked {
+  font-size: 10.5px;
+  opacity: 0.85;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.bot-linked.ready { color: var(--ok, #7ee787); border-color: color-mix(in srgb, var(--ok, #7ee787) 45%, transparent); }
+.bot-linked.connecting { color: var(--warn, #e3b341); }
+.bot-linked.failed,
+.bot-linked.versionMismatch { color: var(--danger, #ff8a80); }
 
 .work-ok {
   padding: 8px 14px;

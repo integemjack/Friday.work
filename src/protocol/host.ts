@@ -70,6 +70,9 @@ export class ProtocolHost {
     this.port = newPort
     this.listen()
     this.broadcastMachines()
+    // SChat 状态也补推一次：它在端口挂上前就可能已静默恢复在线（load → connectWs），
+    // 那时的推送发给了 null 端口，不补推渲染层会一直显示「未登录」
+    this.port?.postMessage({ type: 'schat', state: this.schat.getState() })
   }
 
   private listen(): void {
@@ -121,10 +124,14 @@ export class ProtocolHost {
     }
     // 上次保存的机器重建连接对象（不自动连；渲染进程决定什么时候连）。
     // 0.3：只认 work（SChat 扫码连入的机器人）；旧版存的 ssh / wsl / wss 条目直接跳过（界面里也建不了了）
+    let pruned = false
     for (const entry of this.entries) {
       if (this.machines.has(entry.id)) continue
       const target = parseTarget(entry.target)
-      if (!target || target.kind !== 'work') continue
+      if (!target || target.kind !== 'work') {
+        pruned = true
+        continue
+      }
       if (entry.identityFile) target.identityFile = entry.identityFile
       const machine = new MachineConnection(
         entry.id,
@@ -134,6 +141,11 @@ export class ProtocolHost {
       )
       this.machines.set(entry.id, machine)
       this.attachWorkRoute(machine, target)
+    }
+    // 跳过了旧条目的：把它们从存档里清掉（不然永远躺在 remotes.json 里）
+    if (pruned) {
+      this.entries = this.entries.filter((entry) => parseTarget(entry.target)?.kind === 'work')
+      void this.saveRemotes()
     }
   }
 
