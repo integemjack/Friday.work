@@ -3,7 +3,7 @@
 
 import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
-import { isMediaTool } from '../lib/mediaTools.js'
+import { isMediaTool, mediaArgSource } from '../lib/mediaTools.js'
 import { castLimitH } from '../lib/cast.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
@@ -17,6 +17,7 @@ import {
   type ChatMessage,
   type Conversation,
   type ConversationSummary,
+  type DirectoriesState,
   type PendingApproval,
   type RunnerState,
   type Runtime,
@@ -41,6 +42,15 @@ export interface EngineView {
   supportsTools?: boolean
   subAgentAllowed?: boolean
   disabled?: boolean
+}
+
+/** fs.list 的回执（REMOTE.md §6「文件」：选工作目录用，只列子目录；不给 path 是主目录） */
+export interface FsListResult {
+  path: string
+  parent?: string
+  entries: Array<{ name: string; path: string }>
+  roots?: Array<{ name: string; path: string }>
+  truncated?: boolean
 }
 
 /** 1:1 通话状态（协议进程 CallService 的结构；渲染层只读） */
@@ -113,6 +123,19 @@ export interface DesktopOp {
   activeAt: number
   fading: boolean
   timer: number
+}
+
+/** 桌面媒体叠里的一条：看图/看视频成功后归档的媒体（图片一叠、视频一叠，压在桌面最底层） */
+export interface StackMediaItem {
+  /** 去重键：会话:类型:媒体源（流式补丁重walk历史块不会重复归档） */
+  id: string
+  /** 相对路径按哪段会话的工作目录解析（拉媒体时用） */
+  conversationID: string
+  kind: 'image' | 'video'
+  /** 工具参数里的原始媒体源（http(s)/data URL 或本地路径） */
+  src: string
+  /** 归档时刻（叠的封面取最新一张） */
+  at: number
 }
 
 export type WindowKind =
@@ -332,6 +355,10 @@ export const useAppStore = defineStore('app', {
     castZAt: 0,
     /** 已渐隐移除的操作卡 id：流式补丁会重walk整条消息的历史块，不拦住就会把终态卡再弹一遍（同一操作反复显示的根源） */
     fadedOps: new Set<string>(),
+    /** 桌面媒体叠：看图/看视频成功后归档的媒体（图片一叠、视频一叠，压在桌面最底层） */
+    stackMedia: [] as StackMediaItem[],
+    /** 正在灯箱里放大查看的媒体（null = 灯箱关着） */
+    zoomMedia: null as StackMediaItem | null,
     /** M2 实时卡片：当前机器的终端 / 浏览器 / 子 Agent 状态 */
     terminals: [] as TerminalInfo[],
     terminalsAvailable: false,
@@ -348,6 +375,9 @@ export const useAppStore = defineStore('app', {
     engines: [] as EngineView[],
     /** 新对话默认引擎（liveState；输入框的模型选择器在未选过时显示它） */
     defaultEngineID: '',
+    /** 当前机器最近选择的工作目录（hello 快照 + directories 事件；输入框的目录选择器用）。
+     *  null = 旧服务端没有 directories：菜单里不列最近、选了也不记（REMOTE.md §5 DirectoriesState） */
+    recentDirectories: null as Array<{ path: string; exists: boolean }> | null,
     /** 当前在 watch 的浏览器标签（不看了就 unwatch） */
     watchedTabID: '',
     /** 终端面板里选中的终端 id */
@@ -692,6 +722,7 @@ export const useAppStore = defineStore('app', {
       this.browserReason = ''
       this.teamRuns = []
       this.runnerState = null
+      this.recentDirectories = null
       this.browserFrame = null
       this.activeTerminalID = ''
       this.activeFile = null
@@ -711,9 +742,11 @@ export const useAppStore = defineStore('app', {
           runner?: RunnerState
           engines?: EngineView[]
           defaultEngineID?: string
+          directories?: DirectoriesState
         }
         this.engines = state.engines ?? []
         this.defaultEngineID = state.defaultEngineID ?? ''
+        this.recentDirectories = state.directories?.recent ?? null
         const hadTerminals = this.terminals.length > 0
         this.terminals = state.terminals?.terminals ?? []
         this.terminalsAvailable = state.terminals?.available ?? false
@@ -849,17 +882,29 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 新建会话并打开。注意：服务端会规范化 id（转大写存储），必须用回执里的 id，后续事件的 id 都以它为准 */
-    async createConversation() {
+    /** 新建会话并打开。注意：服务端会规范化 id（转大写存储），必须用回执里的 id，后续事件的 id 都以它为准。
+     *  options：新建时直接带上工作目录 / 引擎（REMOTE.md conversation.create 支持），不用建完再改一遍。
+     *  返回新会话 id（没连上/出错时 undefined） */
+    async createConversation(options?: { workingDirectory?: string; engineID?: string }): Promise<string | undefined> {
       if (!this.currentMachine) return
       try {
         const id = crypto.randomUUID()
-        const result = (await rpc(this.currentMachine, 'conversation.create', { id })) as { id: string }
+        const result = (await rpc(this.currentMachine, 'conversation.create', {
+          id,
+          ...(options?.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
+          ...(options?.engineID ? { engineID: options.engineID } : {})
+        })) as { id: string }
         const canonicalID = result.id ?? id
+        if (options?.workingDirectory) {
+          // 记进这台机器的最近目录（旧服务端不认，静默忽略）
+          rpc(this.currentMachine, 'directories.push', { path: options.workingDirectory }).catch(() => {})
+        }
         await this.openConversation(canonicalID)
         await this.refreshSummaries()
+        return canonicalID
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
+        return undefined
       }
     },
 
@@ -1045,6 +1090,12 @@ export const useAppStore = defineStore('app', {
         case 'engines': {
           const state = params as { engines?: EngineView[] }
           this.engines = state.engines ?? []
+          break
+        }
+        case 'directories': {
+          // 最近选择的工作目录变了（REMOTE.md §5：每次都整份快照）
+          const state = params as DirectoriesState
+          this.recentDirectories = state.recent ?? []
           break
         }
       }
@@ -1324,6 +1375,51 @@ export const useAppStore = defineStore('app', {
       if (summary) summary.engineID = engineID
     },
 
+    /** 切换这段会话的工作目录（REMOTE.md：runner.setWorkingDirectory {conversationID, path?}；path 不写 = 回默认）。
+     *  同 setEngine：先乐观更新 summaries，服务端确认后 summaries/runtime 事件会盖回来。 */
+    async setWorkingDirectory(conversationID: string, path?: string) {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'runner.setWorkingDirectory', path ? { conversationID, path } : { conversationID })
+      const summary = this.summaries.find((item) => item.id === conversationID)
+      if (summary) {
+        summary.workingDirectory = path || undefined
+        summary.workingDirectoryName = path ? path.split(/[\\/]/).filter(Boolean).pop() : undefined
+      }
+      const detail = this.details[conversationID]
+      if (detail?.runtime) detail.runtime.workingDirectory = path
+      if (path) {
+        rpc(this.currentMachine, 'directories.push', { path }).catch(() => {})
+      }
+    },
+
+    /** 打开目录选择菜单时重新拉一份最近目录（顺带重验还在不在；REMOTE.md directories.get） */
+    async refreshDirectories() {
+      if (!this.currentMachine) return
+      try {
+        const state = (await rpc(this.currentMachine, 'directories.get', {})) as DirectoriesState
+        this.recentDirectories = state.recent ?? []
+      } catch {
+        this.recentDirectories = null // 旧服务端：菜单里不列
+      }
+    },
+
+    /** 从最近目录里去掉一条（REMOTE.md directories.remove） */
+    async removeRecentDirectory(path: string) {
+      if (!this.currentMachine) return
+      this.recentDirectories = (this.recentDirectories ?? []).filter((item) => item.path !== path)
+      try {
+        await rpc(this.currentMachine, 'directories.remove', { path })
+      } catch {
+        // 旧服务端删不掉：本地也不留
+      }
+    },
+
+    /** 浏览这台机器的目录（REMOTE.md fs.list：不选工作目录用，只列子目录；不给 path 是主目录） */
+    async browseDirectory(path?: string): Promise<FsListResult | undefined> {
+      if (!this.currentMachine) return
+      return (await rpc(this.currentMachine, 'fs.list', path ? { path } : {})) as FsListResult
+    },
+
     async resolveApproval(eventID: string, approved: boolean) {
       if (!this.currentMachine) return
       await rpc(this.currentMachine, 'runner.resolveApproval', { eventID, approved })
@@ -1531,6 +1627,30 @@ export const useAppStore = defineStore('app', {
       }, 600)
     },
 
+    /** 看图/看视频成功：把媒体归进桌面的图片叠/视频叠（压在桌面最底层那两叠）。
+     *  同一会话同一路径只归档一次——流式补丁重walk历史块不会把同一张图堆进叠里 */
+    addStackMedia(conversationID: string, toolName: string, args: string) {
+      const source = mediaArgSource(toolName, args)
+      if (!source) return
+      const id = `${conversationID}:${source.kind}:${source.src}`
+      if (this.stackMedia.some((item) => item.id === id)) return
+      this.stackMedia.push({ id, conversationID, kind: source.kind, src: source.src, at: Date.now() })
+    },
+
+    /** 灯箱放大：叠里点单张媒体时调（图片看大图、视频大窗播放） */
+    openMediaZoom(item: StackMediaItem) {
+      this.zoomMedia = item
+    },
+
+    closeMediaZoom() {
+      this.zoomMedia = null
+    },
+
+    /** 清空一叠（展开面板里的「清空」按钮） */
+    clearStack(kind: 'image' | 'video') {
+      this.stackMedia = this.stackMedia.filter((item) => item.kind !== kind)
+    },
+
     /** 置顶 tick（每秒跑一次）：5 秒窗口到期时，把这个窗口内真正有内容更新的投出物里
      *  「当前最活跃」的（activeAt 最大 = 最近还在更新的）抬到最前 */
     castTick() {
@@ -1583,7 +1703,8 @@ export const useAppStore = defineStore('app', {
     },
 
     /** 消息里的工具块 → 操作卡（带参数/结果/状态，比 activity 事件全）。
-     *  与所有卡一套：内容不截断，限高 lib/cast.ts 内部滚动看全文 */
+     *  与所有卡一套：内容不截断，限高 lib/cast.ts 内部滚动看全文。
+     *  看图/看视频到成功态：媒体同时归进桌面的图片叠/视频叠 */
     noteToolBlock(conversationID: string, event: ToolEvent | undefined) {
       if (!event?.id) return
       this.pushOp({
@@ -1595,6 +1716,9 @@ export const useAppStore = defineStore('app', {
         status: event.status ?? 'running',
         toolName: event.name ?? ''
       })
+      if (event.status === 'succeeded' && isMediaTool(event.name ?? '')) {
+        this.addStackMedia(conversationID, event.name ?? '', event.arguments ?? '')
+      }
     },
 
     /** 会话用到哪类工具，对应窗口立即在桌面打开（已有就置顶）。

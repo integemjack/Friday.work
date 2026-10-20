@@ -68,6 +68,9 @@ const REJECT_TEXT: Record<string, string> = {
   timeout: '没有接听'
 }
 
+/** 机器人端多设备「新拨顶旧」的挂断原因（与 WorkSignaling 的口径一致） */
+const REPLACED_REASONS = ['新的连接来了', 'replaced']
+
 export class CallService {
   state: CallState = emptyState()
 
@@ -191,6 +194,13 @@ export class CallService {
     switch (envelope.e) {
       case 'p2p_response': {
         if (d.requestId !== this.state.requestId) return
+        // 同账号多设备：回执扇出到所有设备。还在振铃（没接）说明接的是另一台
+        //（自己接会先把 phase 切成 connecting 再发回执）；已接/已挂后到的都是迟到重发，忽略
+        if (this.state.phase === 'incoming') {
+          this.end(d.accepted === true ? '已在其他设备接听' : '已在其他设备挂断')
+          return
+        }
+        if (this.state.phase !== 'outgoing') return
         if (d.accepted === true) {
           this.setState({ ...this.state, phase: 'connecting' })
         } else {
@@ -206,9 +216,24 @@ export class CallService {
         if (from && from !== this.state.peerID) return
         const type = String(d.type ?? '')
         if (type === 'hangup' || type === 'request_cancel') {
-          this.end(type === 'request_cancel' ? '对方取消了' : '对方挂断了')
+          const reason = typeof d.reason === 'string' ? d.reason : ''
+          if (REPLACED_REASONS.includes(reason)) {
+            // 机器人端「新拨顶旧」：同一账号另一台设备拨号，这通被顶掉。不自动重拨——
+            // 重拨会把对方顶掉、来回互踢（和 work 通道被顶同一个处理）
+            this.end('同一账号的另一台设备把这条通话顶掉了', 'replaced')
+          } else {
+            this.end(type === 'request_cancel' ? '对方取消了' : '对方挂断了')
+          }
           return
         }
+        // 扇出防串台：还在振铃（没接）就收到 offer/ice = 另一台在处理这通，别抢答
+        if (this.state.phase === 'incoming') {
+          this.end('已在其他设备接听')
+          return
+        }
+        // 方向校验：主叫只收 answer/ice，被叫只收 offer/ice，串了就是扇出串台
+        if (type === 'offer' && !this.state.incoming) return
+        if (type === 'answer' && this.state.incoming) return
         // 其余（offer/answer/ice_candidate/media_state）交给渲染进程
         this.host.onSignal({
           requestId: this.state.requestId,

@@ -7,7 +7,7 @@ import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { FsReadResult, ToolEvent } from '../../../protocol/rpc/protocol.js'
 import { rpc } from './host.js'
 import { useAppStore } from '../stores/app.js'
-import { TOOL_MEDIA_ARG } from './mediaTools.js'
+import { mediaArgSource } from './mediaTools.js'
 
 type MediaKind = 'image' | 'video'
 
@@ -89,18 +89,7 @@ export function useToolMedia(
 
   const source = computed<{ kind: MediaKind; src: string } | null>(() => {
     const event = typeof tool === 'function' ? tool() : tool.value
-    const rule = TOOL_MEDIA_ARG[(event.name ?? '').toLowerCase()]
-    if (!rule) return null
-    const raw = event.arguments?.trim()
-    if (!raw) return null
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>
-      const src = typeof parsed[rule.field] === 'string' ? (parsed[rule.field] as string).trim() : ''
-      if (!src) return null
-      return { kind: rule.kind, src }
-    } catch {
-      return null // 参数 JSON 还没流完整，等下一块补丁
-    }
+    return mediaArgSource(event.name ?? '', event.arguments)
   })
 
   const url = ref('')

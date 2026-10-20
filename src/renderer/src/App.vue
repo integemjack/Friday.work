@@ -21,8 +21,11 @@ import LoginView from './components/LoginView.vue'
 import CallWidget from './components/CallWidget.vue'
 import SessionList from './components/SessionList.vue'
 import AssistantChat from './components/AssistantChat.vue'
+import Composer from './components/Composer.vue'
 import DesktopBubbles from './components/DesktopBubbles.vue'
 import DesktopOps from './components/DesktopOps.vue'
+import DesktopMediaStacks from './components/DesktopMediaStacks.vue'
+import MediaLightbox from './components/MediaLightbox.vue'
 import CenterScene from './components/CenterScene.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
@@ -128,6 +131,12 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   agents: { minWidth: 360, minHeight: 240 },
   settings: { minWidth: 420, minHeight: 320 }
 }
+
+// 中间桌面底部的输入台：提交仍作用在当前选中会话上（和原来右栏聊天里的那一个一样）
+const conversationID = computed(() => store.activeConversationID)
+async function onComposerSubmit(text: string, attachments: Array<{ path: string; name: string }>) {
+  await store.submitText(text, attachments)
+}
 </script>
 
 <template>
@@ -148,9 +157,15 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
         <SessionList />
       </aside>
 
-      <!-- 中间：3D 场景铺在背景上（网格地面 + 自转陀螺环，纯 CSS 不挡交互），气泡/操作卡投在它上面 -->
+      <!-- 中间：3D 场景铺在背景上（网格地面 + 自转陀螺环，纯 CSS 不挡交互），气泡/操作卡投在它上面；
+           媒体叠（看图/看视频成功归档，图片一叠视频一叠）压在最底层，被气泡/卡/窗口盖住就点不到；
+           底部居中悬浮输入台（盖过投层气泡，别被随机投下的气泡挡住打字） -->
       <section class="main-area">
         <CenterScene />
+        <DesktopMediaStacks />
+        <div class="composer-dock">
+          <Composer :conversation-id="conversationID" @submit="onComposerSubmit" />
+        </div>
       </section>
 
       <!-- 右栏：视频通话铺满整栏 + 聊天叠在下半段（顶端顶到视频中点、向上渐隐），不放别的 -->
@@ -203,6 +218,9 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 
     <!-- 登录页：盖在桌面上（面板不卸载，终端等实例还在），连上后自己收起 -->
     <LoginView v-if="showLogin" />
+
+    <!-- 媒体灯箱：叠里点单张图片放大 / 视频大窗播放（盖过登录页，Esc/点背景关） -->
+    <MediaLightbox />
 
     <!-- 全局错误横幅 -->
     <div v-if="store.error" class="error-toast" @click="store.error = ''">
@@ -259,6 +277,23 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   position: relative;
   min-width: 0;
   min-height: 0;
+}
+
+/* 输入台：悬浮在主区底部居中，浮在 3D 场景和媒体叠之上。
+   z-index 45：盖过投层气泡（cast-layer z-40，别被随机投下的气泡挡住打字）；
+   浮动窗口 z 从 10 起随交互递增，压过它就盖住它，符合「窗口在最上层」的直觉 */
+.composer-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  width: min(720px, calc(100% - 32px));
+  z-index: 45;
+  pointer-events: none; /* 停在透明空白上时让点击穿过到桌面；卡片自己再开回 */
+}
+
+.composer-dock > :deep(.composer) {
+  pointer-events: auto;
 }
 
 /* ---- 右栏 ---- */

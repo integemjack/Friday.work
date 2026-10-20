@@ -627,6 +627,8 @@ export interface MachineLiveState {
   /** 引擎（设置窗口用；字段与 EnginesState.engines 一致） */
   engines: EngineConfigView[]
   defaultEngineID: string
+  /** 最近选择的工作目录（输入框的目录选择器用；旧服务端没有） */
+  directories?: DirectoriesState
 }
 
 /** EnginesState 里的引擎条目（REMOTE.md §5；只有密钥名，没有值） */

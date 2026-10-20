@@ -1,11 +1,10 @@
 <script setup lang="ts">
 // 右栏下半段常驻的「与助手聊天」面板：叠在视频上面，顶端顶到视频中点、向上渐隐。
 // 作用在当前选中的会话上（左侧会话列表切换），流式输出同时以气泡投到桌面。
-// 消息流（顶端渐隐）/ 审批横幅 / 信息行 / 输入框，比会话窗口紧凑，去掉了分支切换器。
+// 消息流（顶端渐隐）/ 审批横幅 / 信息行；输入框已挪到中间桌面底部（App.vue 挂 Composer）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import MessageItem from './MessageItem.vue'
-import Composer from './Composer.vue'
 
 const store = useAppStore()
 const scrollEl = ref<HTMLDivElement | null>(null)
@@ -62,11 +61,16 @@ async function scrollToBottom(immediate = false) {
 
 watch(messages, () => void scrollToBottom(), { deep: false })
 
-async function submit(text: string, attachments: Array<{ path: string; name: string }>) {
-  await store.submitText(text, attachments)
-  stickToBottom.value = true
-  await scrollToBottom(true)
-}
+// 输入框已挪到中间桌面底部（App.vue），提交不经过本组件；
+// 追加进来的是自己发的消息（user）时强制贴底——不管刚才滚到了哪里，都跟着回到底部。
+// 助手回复的流式增长不强制（上滚读历史时不被拽下去，仍走 stickToBottom 开关）。
+watch(allMessages, (next, prev) => {
+  const from = prev?.length ?? 0
+  if (next.length > from && next[from]?.message.role === 'user') {
+    stickToBottom.value = true
+    void scrollToBottom(true)
+  }
+})
 
 const statusLine = computed(() => {
   const current = runtime.value
@@ -109,8 +113,6 @@ const statusLine = computed(() => {
       <span class="spacer" />
       <button v-if="runtime?.generating" class="stop-btn" @click="store.stopRunner(conversationID)">停止</button>
     </header>
-
-    <Composer :conversation-id="conversationID" @submit="submit" />
   </section>
 </template>
 
@@ -235,7 +237,7 @@ const statusLine = computed(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px 8px;
+  padding: 6px 8px 12px;
   /* 顶端渐隐：向上滚进视频区的消息淡出，视频从聊天底下透出来 */
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
   mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
@@ -255,11 +257,5 @@ const statusLine = computed(() => {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
-}
-
-/* 输入框贴底、收紧 */
-.assistant-chat :deep(.composer) {
-  border-top: 1px solid var(--line);
-  border-bottom: none;
 }
 </style>

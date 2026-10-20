@@ -50,24 +50,105 @@ const currentEngineTitle = computed(
 
 function toggleModelMenu() {
   modelOpen.value = !modelOpen.value
-  if (!modelOpen.value) switchError.value = ''
+  if (modelOpen.value) {
+    dirOpen.value = false
+    switchError.value = ''
+  }
 }
 
 async function chooseEngine(engine: EngineView) {
   modelOpen.value = false
   switchError.value = ''
-  if (!props.conversationId || engine.id === currentEngineID.value) return
+  if (engine.id === currentEngineID.value) return
   try {
+    // 没打开会话（空着重升新对话）：直接建一段新的，建的时候就带上引擎（REMOTE.md conversation.create engineID）
+    if (!props.conversationId) {
+      await store.createConversation({ engineID: engine.id })
+      return
+    }
     await store.setEngine(props.conversationId, engine.id)
   } catch (error) {
     switchError.value = error instanceof Error ? error.message : String(error)
   }
 }
 
-function onDocClick(event: MouseEvent) {
-  if (modelOpen.value && modelWrap.value && !modelWrap.value.contains(event.target as Node)) {
+// MARK: 工作目录选择（方案 §5.3：runner.setWorkingDirectory；最近目录 directories.*，浏览 fs.list）
+const dirOpen = ref(false)
+const dirWrap = ref<HTMLDivElement | null>(null)
+const dirError = ref('')
+const browsing = ref(false)
+const browseLoading = ref(false)
+const browseError = ref('')
+const browsePath = ref('')
+const browseParent = ref<string | undefined>(undefined)
+const browseEntries = ref<Array<{ name: string; path: string }>>([])
+const browseRoots = ref<Array<{ name: string; path: string }>>([])
+
+/** 这台机器的新对话默认工作目录（server.defaultWorkingDirectory） */
+const defaultWorkdir = computed(() => store.currentMachineInfo?.serverInfo?.defaultWorkingDirectory ?? '')
+
+function dirBasename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path
+}
+
+const currentSummary = computed(() => store.summaries.find((summary) => summary.id === props.conversationId))
+const currentWorkdir = computed(
+  () => currentSummary.value?.workingDirectory ?? store.details[props.conversationId ?? '']?.runtime?.workingDirectory ?? ''
+)
+const currentWorkdirLabel = computed(() => {
+  if (currentWorkdir.value) return currentSummary.value?.workingDirectoryName || dirBasename(currentWorkdir.value)
+  return defaultWorkdir.value ? dirBasename(defaultWorkdir.value) : '默认目录'
+})
+
+function toggleDirMenu() {
+  dirOpen.value = !dirOpen.value
+  if (dirOpen.value) {
     modelOpen.value = false
+    dirError.value = ''
+    browsing.value = false
+    void store.refreshDirectories() // 打开时重拉：顺带重验最近目录还在不在（REMOTE.md）
   }
+}
+
+/** 选定工作目录（path 不给 = 回这台机器的默认）；没打开会话就建一段新的并直接带上目录 */
+async function chooseWorkdir(path?: string) {
+  dirOpen.value = false
+  dirError.value = ''
+  if (path && path === currentWorkdir.value) return
+  try {
+    if (!props.conversationId) {
+      await store.createConversation(path ? { workingDirectory: path } : {})
+      return
+    }
+    await store.setWorkingDirectory(props.conversationId, path)
+  } catch (error) {
+    dirError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** 打开目录浏览（REMOTE.md fs.list：不给 path 是主目录；roots 是主目录和各盘） */
+async function openBrowse(path?: string) {
+  browsing.value = true
+  browseLoading.value = true
+  browseError.value = ''
+  try {
+    const result = await store.browseDirectory(path)
+    if (!result) return
+    browsePath.value = result.path
+    browseParent.value = result.parent
+    browseEntries.value = result.entries ?? []
+    browseRoots.value = result.roots ?? []
+  } catch (error) {
+    browseError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    browseLoading.value = false
+  }
+}
+
+function onDocClick(event: MouseEvent) {
+  const target = event.target as Node
+  if (modelOpen.value && modelWrap.value && !modelWrap.value.contains(target)) modelOpen.value = false
+  if (dirOpen.value && dirWrap.value && !dirWrap.value.contains(target)) dirOpen.value = false
 }
 onMounted(() => document.addEventListener('click', onDocClick))
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
@@ -207,8 +288,102 @@ function stop() {
           </div>
         </div>
 
+        <!-- 工作目录选择（方案 §5.3）：作用在当前会话；没打开会话就新建一段把目录带上 -->
+        <div ref="dirWrap" class="model-wrap dir-wrap">
+          <button
+            class="model-chip"
+            :class="{ open: dirOpen }"
+            :title="dirError || `工作目录：${currentWorkdir || defaultWorkdir || '这台机器的默认目录'}`"
+            @click="toggleDirMenu"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            </svg>
+            <span class="model-name">{{ currentWorkdirLabel }}</span>
+            <span class="model-caret">▾</span>
+          </button>
+          <div v-if="dirOpen" class="model-menu dir-menu">
+            <!-- 列表模式：默认目录 + 最近目录 + 浏览入口 -->
+            <template v-if="!browsing">
+              <button class="model-item" :class="{ current: !currentWorkdir }" @click="chooseWorkdir()">
+                <span class="model-item-main">
+                  <span class="model-item-title">默认目录</span>
+                  <span v-if="defaultWorkdir" class="model-item-model">{{ defaultWorkdir }}</span>
+                </span>
+                <span v-if="!currentWorkdir" class="model-check">✓</span>
+              </button>
+              <div v-if="store.recentDirectories && store.recentDirectories.length > 0" class="dir-sep">最近选择</div>
+              <div
+                v-for="entry in store.recentDirectories ?? []"
+                :key="entry.path"
+                class="model-item dir-recent"
+                :class="{ current: entry.path === currentWorkdir, missing: !entry.exists }"
+                :title="entry.path"
+                @click="entry.exists && chooseWorkdir(entry.path)"
+              >
+                <span class="model-item-main">
+                  <span class="model-item-title">{{ dirBasename(entry.path) }}</span>
+                  <span class="model-item-model">{{ entry.path }}</span>
+                </span>
+                <button class="dir-remove" title="从最近里去掉" @click.stop="store.removeRecentDirectory(entry.path)">×</button>
+              </div>
+              <button class="dir-browse-btn" @click="openBrowse()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <path d="M9 14l2-2 2 2" transform="translate(1,-1)" />
+                </svg>
+                浏览这台机器的目录…
+              </button>
+            </template>
+            <!-- 浏览模式（fs.list）：逐层下钻，「选定此目录」收尾 -->
+            <template v-else>
+              <div class="dir-browse-bar">
+                <button v-if="browseParent" class="dir-up" title="上一级" @click="openBrowse(browseParent)">↑</button>
+                <span class="dir-browse-path" :title="browsePath">{{ browsePath || '主目录' }}</span>
+                <button class="dir-back" @click="browsing = false">返回</button>
+              </div>
+              <div v-if="browseLoading" class="model-empty">正在读目录…</div>
+              <div v-else-if="browseError" class="model-empty">{{ browseError }}</div>
+              <div v-else class="dir-browse-list">
+                <template v-if="browseRoots.length > 0 && !browseParent">
+                  <div class="dir-browse-sep">这台机器的盘 / 主目录</div>
+                  <button
+                    v-for="root in browseRoots"
+                    :key="root.path"
+                    class="model-item"
+                    :title="root.path"
+                    @click="openBrowse(root.path)"
+                  >
+                    <span class="model-item-main">
+                      <span class="model-item-title">{{ root.name }}</span>
+                    </span>
+                  </button>
+                </template>
+                <button
+                  v-for="entry in browseEntries"
+                  :key="entry.path"
+                  class="model-item"
+                  :title="entry.path"
+                  @click="openBrowse(entry.path)"
+                >
+                  <span class="model-item-main">
+                    <span class="model-item-title">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="opacity: .7; vertical-align: -1px; margin-right: 3px">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                      </svg>{{ entry.name }}
+                    </span>
+                  </span>
+                </button>
+                <div v-if="browseEntries.length === 0 && !(browseRoots.length > 0 && !browseParent)" class="model-empty">这里面没有子目录</div>
+              </div>
+              <button class="dir-pick" :disabled="!browsePath" @click="chooseWorkdir(browsePath)">选定此目录</button>
+            </template>
+          </div>
+        </div>
+
         <span v-if="switchError" class="error">{{ switchError }}</span>
         <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
+        <span v-else-if="dirError" class="error">{{ dirError }}</span>
         <span class="hint">Enter 发送 · Shift+Enter 换行</span>
         <span class="spacer" />
         <button v-if="sending" class="round-btn stop" title="停止生成" @click="stop">
@@ -237,33 +412,40 @@ function stop() {
 <style scoped>
 .composer {
   flex: none;
-  padding: 6px 10px 9px;
-  background: var(--panel);
+  padding: 4px 6px 6px;
+  /* 悬浮在中间桌面底部（App.vue 的 composer-dock）：不再做面板底色，透出 3D 场景 */
+  background: transparent;
 }
 
 .composer-card {
   max-width: 760px;
   margin: 0 auto;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 18px;
+  /* 悬浮输入台：磨砂玻璃卡（透出底下场景）+ 顶部内高光 + 柔和落影 */
   background: var(--panel-2);
-  padding: 3px 7px 6px;
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 10px 30px rgba(0, 0, 0, 0.16);
+  padding: 4px 8px 7px;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s;
 }
 
-/* 贾维斯界面：输入卡和背景融合——更透的底、柔和发光描边（不是锐利实线） */
-[data-theme='jarvis'] .composer-card {
-  background: var(--panel-input);
-  border-color: var(--accent-a20);
-  box-shadow: 0 0 18px var(--accent-a6);
-}
+/* 贾维斯主题的输入台样式在文件末尾的「全息指令台」段（四角括号/能量线/聚焦辉光，特异性更高会盖掉上面） */
 
+/* 聚焦：卡片轻轻上浮、边框亮半档（全亮太硬）、外圈光环 + 落影加深 */
 .composer-card.focused {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-weak);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0 0 3px var(--accent-weak),
+    0 16px 36px rgba(0, 0, 0, 0.18);
+  transform: translateY(-2px);
 }
 
 .attachments {
@@ -311,11 +493,11 @@ textarea {
   resize: none;
   border: none;
   outline: none;
-  padding: 7px 9px 2px;
+  padding: 9px 10px 3px;
   background: transparent;
   color: var(--text);
   line-height: 1.55;
-  min-height: 34px;
+  min-height: 36px;
   max-height: 200px;
 }
 
@@ -388,15 +570,150 @@ textarea::placeholder {
   min-width: 240px;
   max-height: 300px;
   overflow-y: auto;
+  /* 弹出菜单：磨砂玻璃（半透底 + 模糊背景），和悬浮输入台同一质感 */
   background: var(--panel);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
   padding: 5px;
   z-index: 30;
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/* ---- 工作目录选择 ---- */
+.dir-menu {
+  min-width: 300px;
+  max-height: 360px;
+}
+
+.dir-sep,
+.dir-browse-sep {
+  flex: none;
+  padding: 7px 9px 3px;
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  color: var(--text-3);
+}
+
+.dir-recent.missing {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dir-recent .model-item-model {
+  direction: rtl; /* 路径太长时留下尾巴（盘符/深层目录名）而不是开头 */
+  text-align: left;
+}
+
+.dir-remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.dir-remove:hover {
+  background: var(--hover);
+  color: var(--fail);
+}
+
+.dir-browse-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 3px;
+  padding: 7px 9px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.dir-browse-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.dir-browse-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px 7px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dir-up,
+.dir-back {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.dir-up:hover,
+.dir-back:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.dir-browse-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.dir-browse-list {
+  min-height: 120px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -5px;
+  padding: 0 5px;
+}
+
+.dir-pick {
+  flex: none;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12.5px;
+}
+
+.dir-pick:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.dir-pick:disabled {
+  background: var(--chip);
+  color: var(--text-3);
+  cursor: default;
 }
 
 .model-empty {
@@ -493,11 +810,18 @@ textarea::placeholder {
 .round-btn.send {
   background: var(--accent);
   color: #fff;
-  transition: filter 0.12s, opacity 0.12s;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: filter 0.12s, opacity 0.12s, transform 0.12s, box-shadow 0.12s;
 }
 
 .round-btn.send:hover:not(:disabled) {
   filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.round-btn.send:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .round-btn.send:disabled {
@@ -531,9 +855,6 @@ textarea::placeholder {
 }
 
 /* 贾维斯界面：输入台 = 全息指令台。真四角括号（伪元素画，不被圆角裁掉）、顶部能量线、聚焦辉光 */
-[data-theme='jarvis'] .composer {
-  background: transparent;
-}
 
 [data-theme='jarvis'] .composer-card {
   position: relative;
@@ -586,7 +907,9 @@ textarea::placeholder {
   border-color: var(--accent-a60);
   box-shadow:
     0 0 0 1px var(--accent-a20),
-    0 0 28px var(--accent-a16);
+    0 0 28px var(--accent-a16),
+    0 14px 32px rgba(0, 0, 0, 0.5);
+  transform: translateY(-2px);
 }
 
 [data-theme='jarvis'] .composer-card.focused::before,
@@ -635,6 +958,51 @@ textarea::placeholder {
   color: #c9f2ff;
 }
 
+[data-theme='jarvis'] .model-menu {
+  /* 全息面板：深色玻璃 + 青色描边（模糊背景照加，透出底下网格） */
+  background: var(--panel-glass-deep);
+  border-color: var(--accent-a30);
+  box-shadow:
+    0 0 18px var(--accent-a10),
+    0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme='jarvis'] .dir-sep,
+[data-theme='jarvis'] .dir-browse-sep {
+  font-family: var(--font-hud);
+  color: var(--accent-a65);
+}
+
+[data-theme='jarvis'] .dir-up,
+[data-theme='jarvis'] .dir-back {
+  border-color: var(--accent-a30);
+  color: var(--text-2);
+}
+
+[data-theme='jarvis'] .dir-pick {
+  background: var(--accent-a20);
+  border: 1px solid var(--accent-a55);
+  color: #bdf3ff;
+  box-shadow: 0 0 12px var(--accent-a25);
+}
+
+[data-theme='jarvis'] .dir-pick:disabled {
+  background: transparent;
+  border-color: var(--accent-a20);
+  color: var(--text-3);
+  box-shadow: none;
+}
+
+[data-theme='jarvis'] .dir-browse-btn {
+  border-top-color: var(--accent-a20);
+  color: var(--accent-a65);
+}
+
+[data-theme='jarvis'] .dir-browse-btn:hover {
+  color: var(--accent);
+  background: var(--hover);
+}
+
 /* 发送 / 停止钮：圆环辉光；生成中停止键红色脉冲 */
 [data-theme='jarvis'] .round-btn {
   border: 1px solid var(--accent-a55);
@@ -643,12 +1011,14 @@ textarea::placeholder {
   box-shadow:
     0 0 12px var(--accent-a25),
     inset 0 0 8px var(--accent-a12);
+  transition: box-shadow 0.15s, transform 0.15s, filter 0.15s;
 }
 
 [data-theme='jarvis'] .round-btn.send:hover:not(:disabled) {
   box-shadow:
     0 0 20px var(--accent-a50),
     inset 0 0 10px var(--accent-a20);
+  transform: translateY(-1px);
 }
 
 [data-theme='jarvis'] .round-btn.send:disabled {

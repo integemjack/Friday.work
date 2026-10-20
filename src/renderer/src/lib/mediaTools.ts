@@ -10,3 +10,19 @@ export const TOOL_MEDIA_ARG: Record<string, { field: string; kind: 'image' | 'vi
 export function isMediaTool(name: string): boolean {
   return Boolean(TOOL_MEDIA_ARG[name.toLowerCase()])
 }
+
+/** 从工具参数 JSON 里取媒体源（字段名/类型按工具查表）：
+ *  不是看图/看视频、参数没流完整或没填媒体路径时返回 null。
+ *  toolMedia.ts（渲染内嵌媒体）与 stores/app.ts（成功后归进桌面叠）共用 */
+export function mediaArgSource(name: string, args: string | undefined): { kind: 'image' | 'video'; src: string } | null {
+  const rule = TOOL_MEDIA_ARG[(name ?? '').toLowerCase()]
+  const raw = args?.trim()
+  if (!rule || !raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const src = typeof parsed[rule.field] === 'string' ? (parsed[rule.field] as string).trim() : ''
+    return src ? { kind: rule.kind, src } : null
+  } catch {
+    return null // 参数 JSON 还没流完整，等下一块补丁
+  }
+}

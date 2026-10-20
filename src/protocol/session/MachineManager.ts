@@ -10,6 +10,7 @@ import {
   RpcErrors,
   type BrowserState,
   type ConversationSummary,
+  type DirectoriesState,
   type EngineConfigView,
   type HelloResult,
   type MachineLiveState,
@@ -55,6 +56,8 @@ export class MachineConnection {
   engines: EngineConfigView[] = []
   /** 新对话默认引擎 */
   defaultEngineID = ''
+  /** 最近选择的工作目录（hello 快照 + directories 事件维护；输入框的目录选择器用；旧服务端 null） */
+  directories: DirectoriesState | null = null
   /** 运行状态（hello 快照 + runner 事件维护；标题栏的实时智能体数 / token 速度用） */
   runner?: RunnerState
 
@@ -65,7 +68,8 @@ export class MachineConnection {
       team: this.team,
       runner: this.runner,
       engines: this.engines,
-      defaultEngineID: this.defaultEngineID
+      defaultEngineID: this.defaultEngineID,
+      directories: this.directories ?? undefined
     }
   }
 
@@ -171,6 +175,9 @@ export class MachineConnection {
         const state = params as { engines?: EngineConfigView[]; defaultEngineID?: string }
         this.engines = state.engines ?? []
         this.defaultEngineID = state.defaultEngineID ?? ''
+      }
+      if (method === 'directories') {
+        this.directories = params as DirectoriesState
       }
       if (method === 'runner') {
         const runner = params as RunnerState | undefined
@@ -328,6 +335,7 @@ export class MachineConnection {
       this.defaultEngineID = engines.defaultEngineID ?? ''
     }
     if (state.runner) this.runner = state.runner
+    if (state.directories) this.directories = state.directories
   }
 
   private onTransportDown(reason?: string): void {
