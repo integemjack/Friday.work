@@ -67,6 +67,13 @@ const DUMP_JS = `(() => {
     return chain.join('>')
   }
   const out = []
+  // 颜色语义归一：color(srgb r g b / a) → rgba(r*255, g*255, b*255, a)。
+  // Chromium 对 color-mix 的 computed 序列化是 color(srgb) 格式，与字面 rgba 视觉等价但字符串不同；
+  // 对拍比的是视觉零差异，所以先归一再比。
+  const norm = (v) => String(v).replace(
+    /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)/g,
+    (_m, r, g, b, a) => 'rgba(' + Math.round(parseFloat(r) * 255) + ', ' + Math.round(parseFloat(g) * 255) + ', ' + Math.round(parseFloat(b) * 255) + ', ' + (a === undefined ? '1' : a) + ')'
+  )
   for (const el of document.querySelectorAll('*')) {
     if (SKIP.has(el.tagName)) continue
     const cs = getComputedStyle(el)
@@ -74,7 +81,7 @@ const DUMP_JS = `(() => {
     const parts = []
     for (const p of PROPS) {
       if (anim && ANIMATED.has(p)) continue
-      const v = cs[p]
+      const v = norm(cs[p])
       if (v && v !== 'none' && v !== '' && v !== 'auto' && v !== 'normal') parts.push(p + ':' + v)
     }
     if (anim) parts.push('anim:' + anim)
@@ -96,7 +103,11 @@ const VARS_JS = `(() => {
     }
   }
   const cs = getComputedStyle(document.documentElement)
-  return [...names].sort().map(n => n + ' = ' + cs.getPropertyValue(n).trim()).join('\\n')
+  const norm = (v) => String(v).replace(
+    /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)/g,
+    (_m, r, g, b, a) => 'rgba(' + Math.round(parseFloat(r) * 255) + ', ' + Math.round(parseFloat(g) * 255) + ', ' + Math.round(parseFloat(b) * 255) + ', ' + (a === undefined ? '1' : a) + ')'
+  )
+  return [...names].sort().map(n => n + ' = ' + norm(cs.getPropertyValue(n).trim())).join('\\n')
 })()`
 
 function httpJSON(pathname) {
