@@ -2,6 +2,7 @@
 // 3D 星空（登录页背景）：每颗星是空间里的点 (x, y, z)，z 递减 → 透视投影到屏幕，
 // 越近越大越亮，带一点拖尾，像缓慢的曲速飞行。纯 canvas，无依赖。
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { ACCENT_FALLBACK_RGB } from '../../../shared/theme-tokens.js'
 
 const props = withDefaults(defineProps<{ count?: number; speed?: number }>(), {
   count: 150,
@@ -24,7 +25,7 @@ let running = true
 let width = 0
 let height = 0
 let last = 0
-let accentRgb = '34, 211, 238'
+let accentRgb = ACCENT_FALLBACK_RGB
 const starRgb = '198, 224, 255'
 
 function reset(star: Star): void {

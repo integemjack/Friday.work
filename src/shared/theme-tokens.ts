@@ -11,6 +11,9 @@ export const THEME_BG = {
   jarvis: '#060b14'
 } as const
 
+/** Starfield 等小组件在拿到 CSS 变量前的兜底强调色（= tokens.css jarvis --accent #22d3ee 的 RGB） */
+export const ACCENT_FALLBACK_RGB = '34, 211, 238'
+
 /** xterm 色板（值与贾维斯 CSS 令牌同源：accent #22d3ee 等，见 tokens.css） */
 export const XTERM_THEMES = {
   system: {
