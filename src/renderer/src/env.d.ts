@@ -12,6 +12,13 @@ declare global {
       registerDrop(file: File): Promise<PickedFile | null>
       /** 一段录音交给主进程落盘（M3-A） */
       saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
+      /** 媒体叠本地缓存：媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack，
+       *  文件名按「会话:类型:媒体源」确定性算出，供 friday-media:// 协议加载 */
+      saveStackMedia(payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null>
+      /** 删掉一批缓存文件（清空一叠时连本地文件一起删） */
+      deleteStackMedia(names: string[]): Promise<number>
+      /** 列出已缓存的文件名（启动时回填注册表） */
+      listStackMedia(): Promise<string[]>
       /** 系统通知 */
       notify(payload: { title: string; body?: string; conversationID?: string }): void
       /** 界面主题底色（贾维斯深空蓝 / 跟随系统深浅） */

@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, Notification, type FileFilter, typ
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { deleteStackMediaFiles, isValidStackMediaName, listStackMediaFiles, saveStackMediaFile } from '../MediaStack.js'
 
 export interface PickedFile {
   handle: string
@@ -79,6 +80,24 @@ export class IpcBridge {
       await writeFile(path, bytes)
       return this.registerPath(path)
     })
+
+    // 媒体叠本地缓存（看图/看视频归档时把文件落一份在本机，会话结束/重启后仍能看）：
+    //   save   渲染层传字节（远端 fs.read / data: URL 解出来的），或给 URL 主进程代下（渲染层有 CORS）
+    //   list   启动时回填「已缓存文件名」注册表
+    //   delete 清空一叠时把缓存文件一起删掉
+    // 文件名由渲染层确定性算出，MediaStack 里按白名单校验，不认任何路径
+    ipcMain.handle('media-stack:save', async (_event, payload: unknown): Promise<{ name: string } | null> => {
+      const input = payload as { name?: string; bytes?: Uint8Array | ArrayBuffer; url?: string } | null
+      if (!input || !isValidStackMediaName(input.name)) return null
+      const saved = await saveStackMediaFile(input.name, { bytes: input.bytes, url: input.url })
+      return saved ? { name: saved } : null
+    })
+
+    ipcMain.handle('media-stack:delete', async (_event, payload: unknown): Promise<number> => {
+      return deleteStackMediaFiles((payload as { names?: unknown } | null)?.names)
+    })
+
+    ipcMain.handle('media-stack:list', async (): Promise<string[]> => listStackMediaFiles())
 
     // 系统通知（attention、任务跑完这类）：点通知回到对应会话
     ipcMain.on('notify:show', (_event, payload: unknown) => {

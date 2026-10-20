@@ -2,12 +2,19 @@
 // 主进程 = 窗口、凭据、安全边界；网络 I/O 全在协议进程（utilityProcess）。
 // 数据面端口由渲染进程加载完成后主动请求（preload: friday-request-port）。
 
-import { app, BrowserWindow, Menu, nativeTheme, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, protocol, session, shell } from 'electron'
 import { join } from 'node:path'
 import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
+import { handleMediaStackRequest } from './MediaStack.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
 import { IpcBridge } from './ipc/bridge.js'
+
+// 媒体叠本地缓存的供文件协议（friday-media://stack/<name>，只出 MediaStack 目录里的文件）：
+// 必须在 app ready 前注册为特权 scheme，<img>/<video> 才能直接引
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'friday-media', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
 
 // 单实例：第二个实例把参数交给开着的那个后退出
 if (!app.requestSingleInstanceLock()) {
@@ -73,6 +80,10 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media')
   })
+
+  // 媒体叠本地缓存：看图/看视频归档的文件落在本机，这个协议供 <img>/<video> 直接加载
+  // （支持 Range，视频可拖进度）；必须在建窗口前接好
+  protocol.handle('friday-media', (request) => handleMediaStackRequest(request))
 
   protocolProcessHost.start()
   bridge = new IpcBridge(protocolProcessHost, () => mainWindow)

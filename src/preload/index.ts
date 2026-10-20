@@ -27,6 +27,13 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   /** 一段录音（M3-A）：字节交给主进程落成临时文件、领句柄 */
   saveVoiceClip: (bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null> =>
     ipcRenderer.invoke('voice:save-clip', { bytes, mimeType }),
+  /** 媒体叠本地缓存：把一份媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack */
+  saveStackMedia: (payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null> =>
+    ipcRenderer.invoke('media-stack:save', payload),
+  /** 删掉一批缓存文件（清空一叠时连本地文件一起删） */
+  deleteStackMedia: (names: string[]): Promise<number> => ipcRenderer.invoke('media-stack:delete', { names }),
+  /** 列出已缓存的文件名（启动时回填注册表） */
+  listStackMedia: (): Promise<string[]> => ipcRenderer.invoke('media-stack:list'),
   /** 系统通知（attention / 任务跑完） */
   notify: (payload: { title: string; body?: string; conversationID?: string }): void => {
     ipcRenderer.send('notify:show', payload)

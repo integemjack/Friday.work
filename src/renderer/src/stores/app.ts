@@ -5,6 +5,13 @@ import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
 import { isMediaTool, mediaArgSource } from '../lib/mediaTools.js'
 import { castLimitH } from '../lib/cast.js'
+import {
+  deleteStackCaches,
+  ensureStackMediaCached,
+  initStackCache,
+  stackCacheName,
+  stackCacheUrl
+} from '../lib/stackMediaCache.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
 import {
@@ -132,10 +139,13 @@ export interface StackMediaItem {
   /** 相对路径按哪段会话的工作目录解析（拉媒体时用） */
   conversationID: string
   kind: 'image' | 'video'
-  /** 工具参数里的原始媒体源（http(s)/data URL 或本地路径） */
+  /** 工具参数里的原始媒体源（http(s)/data URL 或本地路径）
+   *  重启恢复的条目源会换成 friday-media:// 本地缓存地址（当时的原始源可能已随会话清理） */
   src: string
   /** 归档时刻（叠的封面取最新一张） */
   at: number
+  /** 本地缓存文件名（归档时下载完成才有；清空一叠时按它删盘上的文件） */
+  cache?: string
 }
 
 export type WindowKind =
@@ -209,20 +219,37 @@ interface SavedWindow {
 
 const LAYOUT_KEY = 'friday.work.layout.v1'
 const LAYOUT_WINDOW_LIMIT = 20
+/** 媒体叠持久化上限：叠太多时只留最新的这些（再老的远端文件多半也已清理，本地缓存文件留着、由清空按钮连坐删） */
+const STACK_MEDIA_LIMIT = 300
 
 /** localStorage 里存的那份布局（restoreLayout 读，saveLayout 写） */
 interface SavedLayout {
   nextZ?: number
   cascade?: number
   windows?: SavedWindow[]
+  /** 媒体叠（没清空的重启后自动加载回来；2026-10 媒体叠本地缓存） */
+  stackMedia?: SavedStackItem[]
 }
 
-/** 把当前桌面布局写进 localStorage（App.vue 订阅状态、防抖后调；恢复在 store.restoreLayout） */
+/** 媒体叠里一条的持久化形式（StackMediaItem 的可 JSON 化子集） */
+interface SavedStackItem {
+  id: string
+  conversationID: string
+  kind: 'image' | 'video'
+  src: string
+  at: number
+  cache?: string
+}
+
+/** 把当前桌面布局写进 localStorage（App.vue 订阅状态、防抖后调；恢复在 store.restoreLayout）。
+ *  媒体叠一起存：没清空的重启后自动加载回来（src 换成 friday-media:// 本地缓存地址，
+ *  当时的原始源可能已随会话结束被清理） */
 export function saveLayout(store: {
   windows: DesktopWindow[]
   currentMachine: string
   nextZ: number
   cascade: number
+  stackMedia: StackMediaItem[]
 }): void {
   try {
     // 同类窗口只存一份（会话按 conversationID 区分）：不去重的话，历史存档里攒下的
@@ -248,7 +275,20 @@ export function saveLayout(store: {
       })
       if (windows.length >= LAYOUT_WINDOW_LIMIT) break
     }
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ nextZ: store.nextZ, cascade: store.cascade, windows }))
+    // 媒体叠：只存最新 STACK_MEDIA_LIMIT 条；data: URL 的源可能好几 MB，不能整条塞 localStorage——
+    // 缓存文件在就只存 friday-media:// 缓存地址（文件在本地，照样能加载）
+    const stackMedia: SavedStackItem[] = store.stackMedia.slice(-STACK_MEDIA_LIMIT).map((item) => {
+      const cache = item.cache ?? stackCacheName(item.conversationID, item.kind, item.src)
+      if (/^data:/i.test(item.src)) {
+        const cachedSrc = stackCacheUrl(cache)
+        return { id: `${item.conversationID}:${item.kind}:${cachedSrc}`, conversationID: item.conversationID, kind: item.kind, src: cachedSrc, at: item.at, cache }
+      }
+      return { id: item.id, conversationID: item.conversationID, kind: item.kind, src: item.src, at: item.at, cache }
+    })
+    localStorage.setItem(
+      LAYOUT_KEY,
+      JSON.stringify({ nextZ: store.nextZ, cascade: store.cascade, windows, stackMedia })
+    )
   } catch {
     // 存不下就算了（隐私模式 / 超配额）
   }
@@ -544,14 +584,18 @@ export const useAppStore = defineStore('app', {
 
     // MARK: 布局恢复（saveLayout 的另一半；App.vue 启动时调）
 
-    /** 启动时恢复上次的窗口布局（只剩子 Agent / 设置两类浮动窗口；旧存档里的其他类型直接丢弃） */
+    /** 启动时恢复上次的窗口布局（只剩子 Agent / 设置两类浮动窗口；旧存档里的其他类型直接丢弃）。
+     *  媒体叠一起恢复：没清空的重启后自动加载回来；本地缓存注册表也在这里回填 */
     restoreLayout(): boolean {
+      // 缓存注册表先回填（消息内嵌媒体/叠/灯箱都看它决定走本地还是在线；拿到前先按在线路径走，回填后自动切）
+      void initStackCache()
       let saved: SavedLayout | null = null
       try {
         saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? 'null') as SavedLayout | null
       } catch {
         return false
       }
+      this.restoreStackMedia(saved)
       const items = saved?.windows
       if (!Array.isArray(items) || items.length === 0) return false
       const desktopWidth = window.innerWidth
@@ -585,6 +629,27 @@ export const useAppStore = defineStore('app', {
       this.nextZ = Math.max(this.nextZ, Number(saved?.nextZ) || 0)
       this.cascade = Math.max(this.cascade, Number(saved?.cascade) || 0)
       return this.windows.length > 0
+    },
+
+    /** 媒体叠恢复（saveLayout 存的那份）：幂等，重启/HMR 重入只往空叠里加，不重复 */
+    restoreStackMedia(saved: SavedLayout | null) {
+      const items = saved?.stackMedia
+      if (!Array.isArray(items)) return
+      for (const raw of items) {
+        if (!raw || typeof raw !== 'object') continue
+        if (typeof raw.id !== 'string' || !raw.id) continue
+        if (raw.kind !== 'image' && raw.kind !== 'video') continue
+        if (typeof raw.src !== 'string' || !raw.src) continue
+        if (this.stackMedia.some((item) => item.id === raw.id)) continue
+        this.stackMedia.push({
+          id: raw.id,
+          conversationID: typeof raw.conversationID === 'string' ? raw.conversationID : '',
+          kind: raw.kind,
+          src: raw.src,
+          at: Number(raw.at) > 0 ? Number(raw.at) : Date.now(),
+          cache: typeof raw.cache === 'string' && raw.cache ? raw.cache : undefined
+        })
+      }
     },
 
     bindHost() {
@@ -1640,13 +1705,29 @@ export const useAppStore = defineStore('app', {
     },
 
     /** 看图/看视频成功：把媒体归进桌面的图片叠/视频叠（压在桌面最底层那两叠）。
-     *  同一会话同一路径只归档一次——流式补丁重walk历史块不会把同一张图堆进叠里 */
+     *  同一会话同一路径只归档一次——流式补丁重walk历史块不会把同一张图堆进叠里。
+     *  归档回时顺手把文件下载到本地（userData/MediaStack）：会话结束、远端文件被清理、
+     *  重启软件后叠里和消息里仍能加载（fire-and-forget，失败不影响会话还在时的在线查看） */
     addStackMedia(conversationID: string, toolName: string, args: string) {
       const source = mediaArgSource(toolName, args)
       if (!source) return
       const id = `${conversationID}:${source.kind}:${source.src}`
       if (this.stackMedia.some((item) => item.id === id)) return
-      this.stackMedia.push({ id, conversationID, kind: source.kind, src: source.src, at: Date.now() })
+      const item: StackMediaItem = { id, conversationID, kind: source.kind, src: source.src, at: Date.now() }
+      this.stackMedia.push(item)
+      void this.cacheStackMedia(item)
+    },
+
+    /** 把叠里的一条媒体下载到本地缓存；成功后记下文件名（清空时按它删） */
+    async cacheStackMedia(item: StackMediaItem) {
+      const name = await ensureStackMediaCached(item, {
+        machineID: this.currentMachine,
+        workingDirectory: this.summaries.find((s) => s.id === item.conversationID)?.workingDirectory
+      })
+      if (!name) return
+      // 拿到名字前这一条可能已被清空：只更新还在叠里的那条
+      const live = this.stackMedia.find((entry) => entry.id === item.id)
+      if (live) live.cache = name
     },
 
     /** 灯箱放大：叠里点单张媒体时调（图片看大图、视频大窗播放） */
@@ -1658,9 +1739,17 @@ export const useAppStore = defineStore('app', {
       this.zoomMedia = null
     },
 
-    /** 清空一叠（展开面板里的「清空」按钮） */
+    /** 清空一叠（展开面板里的「清空」按钮）：叠里的条目和对应的本地缓存文件一起删 */
     clearStack(kind: 'image' | 'video') {
+      const names = [
+        ...new Set(
+          this.stackMedia
+            .filter((item) => item.kind === kind)
+            .map((item) => item.cache ?? stackCacheName(item.conversationID, item.kind, item.src))
+        )
+      ]
       this.stackMedia = this.stackMedia.filter((item) => item.kind !== kind)
+      if (names.length) void deleteStackCaches(names)
     },
 
     /** 置顶 tick（每秒跑一次）：5 秒窗口到期时，把这个窗口内真正有内容更新的投出物里

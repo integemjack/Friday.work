@@ -88,7 +88,8 @@ const showLogin = computed(() => !store.workbenchReady || store.loginOverlay)
 let saveTimer = 0
 let lastSignature = ''
 function layoutSignature(): string {
-  return JSON.stringify([store.windows, store.nextZ, store.cascade, store.currentMachine])
+  // 媒体叠也在存档里：只看图不动窗口时叠的变化也要落盘（不然重启后丢叠）
+  return JSON.stringify([store.windows, store.nextZ, store.cascade, store.currentMachine, store.stackMedia])
 }
 function scheduleLayoutSave(): void {
   window.clearTimeout(saveTimer)
