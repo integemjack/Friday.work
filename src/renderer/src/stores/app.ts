@@ -1411,9 +1411,11 @@ export const useAppStore = defineStore('app', {
       })
     },
 
-    /** 会话用到哪类工具，对应窗口立即在桌面打开（已有就置顶） */
+    /** 会话用到哪类工具，对应窗口立即在桌面打开（已有就置顶）。
+     *  只认真正「用」某面板的工具：run_in_terminal / read_terminal 才展开终端面板；
+     *  run_shell 这类执行命令拿结果的操作只投操作卡，不弹终端面板 */
     noteToolUse(tool: string) {
-      if (/terminal|shell|command|exec|process/i.test(tool)) this.openWindow('terminals')
+      if (/terminal/i.test(tool)) this.openWindow('terminals')
       if (/browser|navigate|web|http/i.test(tool)) this.openWindow('browser')
       if (/file|read|write|edit|glob|grep|list|dir|path|patch|search|download/i.test(tool)) this.openWindow('files')
     },
