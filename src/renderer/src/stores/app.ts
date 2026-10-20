@@ -1412,12 +1412,14 @@ export const useAppStore = defineStore('app', {
     },
 
     /** 会话用到哪类工具，对应窗口立即在桌面打开（已有就置顶）。
-     *  只认真正「用」某面板的工具：run_in_terminal / read_terminal 才展开终端面板；
-     *  run_shell 这类执行命令拿结果的操作只投操作卡，不弹终端面板 */
+ *  只认真正「用」某面板的工具：run_in_terminal / read_terminal 用终端，browse / browser_*
+ *  用浏览器，read_file / write_file / edit_file / find_files / search_files / list_directory
+ *  这类在文件系统上干活的开文件面板；run_shell、web_search、search_memory、read_agent_log
+ *  这些只是拿结果的操作不动文件系统/终端/浏览器，投操作卡即可，不弹面板 */
     noteToolUse(tool: string) {
       if (/terminal/i.test(tool)) this.openWindow('terminals')
-      if (/browser|navigate|web|http/i.test(tool)) this.openWindow('browser')
-      if (/file|read|write|edit|glob|grep|list|dir|path|patch|search|download/i.test(tool)) this.openWindow('files')
+      if (/browse/i.test(tool)) this.openWindow('browser')
+      if (/file|directory/i.test(tool)) this.openWindow('files')
     },
 
     /** 上传一个主进程背书的文件，返回服务端路径 */
