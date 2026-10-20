@@ -8,7 +8,7 @@ import { renderMarkdown } from '../lib/markdown.js'
 
 const store = useAppStore()
 
-/** 回复气泡的 Markdown 缓存：流式每续一片都会重渲染整条，按 text 是否变化免重复解析 */
+/** 气泡的 Markdown 缓存：流式每续一片都会重渲染整条，按 text 是否变化免重复解析 */
 const mdHtml = new Map<string, { text: string; html: string }>()
 function mdOf(bubble: { id: string; text: string }): string {
   const cached = mdHtml.get(bubble.id)
@@ -95,9 +95,8 @@ function titleOf(conversationID: string): string {
         @click="store.fadeBubble(bubble.id)"
       >
         <span class="tag">{{ bubble.kind === 'thinking' ? '思考' : '回复' }} · {{ titleOf(bubble.conversationID) }}</span>
-        <!-- 思考气泡：纯文本预折行；回复气泡：Markdown 渲染（renderMarkdown 已禁透传 HTML） -->
-        <span v-if="bubble.kind === 'thinking'" class="text">{{ bubble.text }}</span>
-        <div v-else class="text md" v-html="mdOf(bubble)" />
+        <!-- 思考/回复气泡统一 Markdown 渲染（renderMarkdown 已禁透传 HTML、breaks 保换行） -->
+        <div class="text md" v-html="mdOf(bubble)" />
       </div>
     </transition-group>
   </div>
@@ -135,6 +134,8 @@ function titleOf(conversationID: string): string {
 }
 
 .tag {
+  /* 标题行不参与收缩：气泡限高、内容超高时 .text 内部滚动，标题不能被压扁遮挡 */
+  flex-shrink: 0;
   font-family: var(--font-hud);
   font-size: 9.5px;
   letter-spacing: 2px;
