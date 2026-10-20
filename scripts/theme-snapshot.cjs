@@ -71,7 +71,7 @@ const DUMP_JS = `(() => {
   // Chromium 对 color-mix 的 computed 序列化是 color(srgb) 格式，与字面 rgba 视觉等价但字符串不同；
   // 对拍比的是视觉零差异，所以先归一再比。
   const norm = (v) => String(v).replace(
-    /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)/g,
+    /color\\(srgb ([\\d.]+) ([\\d.]+) ([\\d.]+)(?: \\/ ([\\d.]+))?\\)/g,
     (_m, r, g, b, a) => 'rgba(' + Math.round(parseFloat(r) * 255) + ', ' + Math.round(parseFloat(g) * 255) + ', ' + Math.round(parseFloat(b) * 255) + ', ' + (a === undefined ? '1' : a) + ')'
   )
   for (const el of document.querySelectorAll('*')) {
@@ -104,7 +104,7 @@ const VARS_JS = `(() => {
   }
   const cs = getComputedStyle(document.documentElement)
   const norm = (v) => String(v).replace(
-    /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)/g,
+    /color\\(srgb ([\\d.]+) ([\\d.]+) ([\\d.]+)(?: \\/ ([\\d.]+))?\\)/g,
     (_m, r, g, b, a) => 'rgba(' + Math.round(parseFloat(r) * 255) + ', ' + Math.round(parseFloat(g) * 255) + ', ' + Math.round(parseFloat(b) * 255) + ', ' + (a === undefined ? '1' : a) + ')'
   )
   return [...names].sort().map(n => n + ' = ' + norm(cs.getPropertyValue(n).trim())).join('\\n')
