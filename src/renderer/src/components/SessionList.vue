@@ -81,7 +81,8 @@ const groups = computed(() => {
 
 const statusLabel: Record<string, string> = {
   idle: '',
-  running: '在跑',
+  // 在跑不给文字（状态点在闪就够了）；要用户出手的（等确认/等你答等）才给字
+  running: '',
   approval: '等确认',
   question: '等你答',
   quota: '等额度',
@@ -242,8 +243,8 @@ onMounted(() => {
 }
 
 .row {
-  display: grid;
-  grid-template-columns: auto 1fr auto auto auto;
+  position: relative;
+  display: flex;
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
@@ -295,9 +296,13 @@ onMounted(() => {
 }
 
 .title {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 占满剩余宽度、超出的部分向右渐隐，不用省略号占位（min-width:0 允许收缩） */
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 24px), transparent);
 }
 
 .status {
@@ -317,11 +322,18 @@ onMounted(() => {
 }
 
 .time {
+  flex: 0 0 auto;
   font-size: 10.5px;
   color: var(--muted);
+  /* 悬停时 ✕ 顶上来，时间让位避免叠字 */
+  transition: opacity 0.12s ease;
 }
 
 .x {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
   border: none;
   background: transparent;
   color: var(--muted);
@@ -329,6 +341,10 @@ onMounted(() => {
   font-size: 10px;
   padding: 1px 4px;
   border-radius: 4px;
+  opacity: 0;
+}
+
+.row:hover .time {
   opacity: 0;
 }
 
