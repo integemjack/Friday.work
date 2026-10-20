@@ -188,6 +188,7 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
           :maximized="item.maximized"
           :min-width="sizeLimits[item.kind].minWidth"
           :min-height="sizeLimits[item.kind].minHeight"
+          :clear-body="item.kind === 'terminals'"
           @focus="store.focusWindow(item.id)"
           @close="store.closeWindow(item.id)"
           @minimize="store.minimizeWindow(item.id)"

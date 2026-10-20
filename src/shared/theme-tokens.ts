@@ -14,14 +14,24 @@ export const THEME_BG = {
 /** Starfield 等小组件在拿到 CSS 变量前的兜底强调色（= tokens.css jarvis --accent #22d3ee 的 RGB） */
 export const ACCENT_FALLBACK_RGB = '34, 211, 238'
 
-/** xterm 色板（值与贾维斯 CSS 令牌同源：accent #22d3ee 等，见 tokens.css） */
+/** xterm 色板（值与贾维斯 CSS 令牌同源：accent #22d3ee 等，见 tokens.css）
+ *  底色一律「全透明」：终端文字直接浮在窗口/桌面背景上，不留黑底方块——
+ *  xterm 自己的 CSS 把 .xterm-viewport 写死成 #000，TerminalCard 里用 !important 覆盖（需要 allowTransparency）。 */
 export const XTERM_THEMES = {
+  /* 跟随系统：按当前深浅档取一套（浅色配深字、深色配浅字），底都透 */
   system: {
-    /* 半透明深底：融合（需要 allowTransparency，见 new Terminal） */
-    background: 'rgba(20, 21, 26, 0.55)',
-    foreground: '#e6e6e8',
-    cursor: '#8ab4f8',
-    selectionBackground: '#3a4a6b'
+    light: {
+      background: 'rgba(255, 255, 255, 0)',
+      foreground: '#27272a',
+      cursor: '#4f46e5',
+      selectionBackground: 'rgba(79, 70, 229, 0.22)'
+    },
+    dark: {
+      background: 'rgba(20, 21, 26, 0)',
+      foreground: '#e6e6e8',
+      cursor: '#8ab4f8',
+      selectionBackground: 'rgba(120, 150, 200, 0.35)'
+    }
   },
   jarvis: {
     // 透明底：终端文字直接浮在全息网格背景上（需要 allowTransparency，见 new Terminal）
