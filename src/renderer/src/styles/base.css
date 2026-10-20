@@ -1,91 +1,4 @@
-/* Friday Work —— 简洁大气：纯色底、1px 分隔、圆角卡片；深浅色跟随系统 */
-
-:root {
-  /* 面板半透明：桌面内容与背景融合（磨砂玻璃），浅色 = 白玻璃 */
-  --panel: rgba(255, 255, 255, 0.62);
-  --panel-2: rgba(255, 255, 255, 0.45);
-  --border: #e4e4e7;
-  --text: #18181b;
-  --text-2: #71717a;
-  --text-3: #a1a1aa;
-  --accent: #4f46e5;
-  --accent-weak: #eef2ff;
-  --ok: #16a34a;
-  --run: #2563eb;
-  --warn: #ea580c;
-  --fail: #dc2626;
-  --code-bg: #f4f4f5;
-  --radius: 10px;
-
-  /* 语义别名（M2 卡片组件用）：都指向上面同一套色板，改颜色只改上面 */
-  --line: var(--border);
-  --fg: var(--text);
-  --muted: var(--text-2);
-  --hover: rgba(120, 120, 130, 0.1);
-  --selected: var(--accent-weak);
-  --chip: rgba(120, 120, 130, 0.14);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e1f22;
-    /* 深色 = 烟熏玻璃 */
-    --panel: rgba(38, 39, 43, 0.55);
-    --panel-2: rgba(43, 44, 49, 0.5);
-    --border: #3a3b3f;
-    --text: #e4e4e7;
-    --text-2: #a1a1aa;
-    --text-3: #71717a;
-    --accent: #818cf8;
-    --accent-weak: #312e5f;
-    --ok: #4ade80;
-    --run: #60a5fa;
-    --warn: #fb923c;
-    --fail: #f87171;
-    --code-bg: #1b1c1f;
-
-    --line: var(--border);
-    --fg: var(--text);
-    --muted: var(--text-2);
-    --hover: rgba(160, 160, 170, 0.12);
-    --selected: var(--accent-weak);
-    --chip: rgba(160, 160, 170, 0.16);
-  }
-}
-
-/* MARK: 贾维斯界面（设置页「界面 › 贾维斯」开关；<html data-theme="jarvis"> 时生效）
-   深空黑底 + 电光青发光，照钢铁侠 J.A.R.V.I.S. 的全息 HUD 风。
-   specificity 是 0,2,0，压过上面浅/深两套 :root（0,1,0），不管系统偏好固定走这套。 */
-:root[data-theme='jarvis'] {
-  --bg: #060b14;
-  /* 面板半透明：桌面上的内容（窗口/挂件/工具栏）和全息网格背景融为一体，
-     配合各容器的 backdrop blur 成磨砂全息玻璃；文本对比靠深底色保住 */
-  --panel: rgba(9, 21, 38, 0.45);
-  --panel-2: rgba(13, 30, 52, 0.5);
-  --border: rgba(34, 211, 238, 0.22);
-  --text: #d7f2ff;
-  --text-2: #82b9d6;
-  --text-3: #4d7d99;
-  --accent: #22d3ee;
-  --accent-weak: rgba(34, 211, 238, 0.12);
-  --ok: #2dd4a7;
-  --run: #38bdf8;
-  --warn: #fbbf24;
-  --fail: #fb5f7d;
-  --code-bg: #0a1a2e;
-  --radius: 10px;
-
-  --line: var(--border);
-  --fg: var(--text);
-  --muted: var(--text-2);
-  --hover: rgba(34, 211, 238, 0.08);
-  --selected: rgba(34, 211, 238, 0.14);
-  --chip: rgba(34, 211, 238, 0.12);
-
-  /* HUD 文案（状态行、时间戳、提示）用的等宽字体 */
-  --font-hud: 'Cascadia Code', Consolas, monospace;
-}
-
+/* Friday Work —— 元素基础样式与通用小件（主题无关：颜色全部走 tokens.css 的变量） */
 /* 深空底：中心一圈青色辉光 + 暗角，窗口浮在上面像全息投影 */
 html[data-theme='jarvis'] body {
   background:
@@ -271,3 +184,4 @@ pre {
   white-space: pre-wrap;
   word-break: break-word;
 }
+

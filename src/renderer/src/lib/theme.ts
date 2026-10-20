@@ -1,5 +1,5 @@
 // 界面主题（本机 UI 偏好，方案 §2 允许的 localStorage 范畴，和远程机器无关）：
-// 默认「贾维斯」——应用一开就是深空青色全息风（<html> 带 data-theme="jarvis"，样式见 style.css [data-theme='jarvis']）；
+// 默认「贾维斯」——应用一开就是深空青色全息风（<html> 带 data-theme="jarvis"，变量见 styles/tokens.css [data-theme='jarvis']）；
 // 在设置里点「跟随系统」后回到原来的浅/深自适应，选择会落盘记住。
 import { ref } from 'vue'
 

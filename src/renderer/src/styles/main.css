@@ -1,0 +1,5 @@
+/* 主题样式入口：main.ts 只引这一个。
+   顺序固定：令牌（变量）→ 基础（主题无关规则）→ 贾维斯（结构装饰层）。 */
+@import './tokens.css';
+@import './base.css';
+@import './jarvis.css';
