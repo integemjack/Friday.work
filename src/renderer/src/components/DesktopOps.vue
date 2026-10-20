@@ -26,7 +26,7 @@ const statusMark: Record<string, string> = {
         v-for="card in store.opCards"
         :key="card.id"
         class="op"
-        :class="[card.status, { fading: card.fading }]"
+        :class="[card.status, { fading: card.fading, tall: card.tall }]"
         :style="{ left: `${card.x}px`, top: `${card.y}px`, zIndex: card.z }"
         @click="card.status !== 'awaitingApproval' && card.status !== 'running' && store.fadeOp(card.id)"
       >
@@ -135,6 +135,37 @@ const statusMark: Record<string, string> = {
   word-break: break-all;
   max-height: 72px;
   overflow: hidden;
+}
+
+/* 全量内容的卡（执行命令/写入文件/看图/看视频）：内容与结果不截断，
+   各自限高与思考气泡一致（400，窗口矮时按窗口收紧），内部滚动看全文 */
+.op.tall .content,
+.op.tall .result {
+  max-height: min(400px, calc(100vh - 116px));
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.op.tall .content::-webkit-scrollbar,
+.op.tall .result::-webkit-scrollbar {
+  width: 6px;
+}
+
+.op.tall .content::-webkit-scrollbar-thumb,
+.op.tall .result::-webkit-scrollbar-thumb {
+  background: var(--accent-a45);
+  border: none;
+  border-radius: 3px;
+}
+
+.op.tall .content::-webkit-scrollbar-thumb:hover,
+.op.tall .result::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-a70);
+}
+
+.op.tall .content::-webkit-scrollbar-track,
+.op.tall .result::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .result {

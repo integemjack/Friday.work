@@ -101,6 +101,9 @@ export interface DesktopOp {
   content: string
   result: string
   status: 'running' | 'awaitingApproval' | 'succeeded' | 'failed' | 'denied'
+  /** 全量内容的卡：内容/结果不截断（240 字/96px 那套裁剪不适用），各自限高 400（与思考气泡
+ *  一致）内部滚动看全文。执行命令 / 写入文件 / 看图片 / 看视频——这些卡的内容就是要看的主体 */
+  tall?: boolean
   x: number
   y: number
   /** 活动置顶层级：由置顶 tick 每 5 秒抬「当前最活跃」的投出物（与气泡共用计数器） */
@@ -163,6 +166,19 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
 function terminalStatus(status: DesktopOp['status']): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'denied'
 }
+
+/** 全量内容操作卡对应的具体工具：执行命令（run_shell / run_cmd / run_in_terminal）、
+ *  写入文件（write_file / edit_file）、看图片（analyze_image）、看视频（analyze_video）。
+ *  这些卡的内容/结果不截断，限高 400 内部滚动；其余操作仍是极简卡（240 字 / 96px 截断） */
+const TALL_OPS = new Set([
+  'run_shell',
+  'run_cmd',
+  'run_in_terminal',
+  'write_file',
+  'edit_file',
+  'analyze_image',
+  'analyze_video'
+])
 
 // MARK: 窗口布局持久化（方案 §2「本地只留：…UI 偏好」；存 localStorage，重启恢复）
 
@@ -919,7 +935,8 @@ export const useAppStore = defineStore('app', {
                     title: tool.title ?? tool.tool ?? '操作',
                     content: tool.summary ?? '',
                     result: '',
-                    status: 'running'
+                    status: 'running',
+                    tall: TALL_OPS.has(tool.tool ?? '')
                   })
                 }
               }
@@ -937,7 +954,8 @@ export const useAppStore = defineStore('app', {
                   title: approval.title || approval.tool,
                   content: approval.summary,
                   result: '',
-                  status: 'awaitingApproval'
+                  status: 'awaitingApproval',
+                  tall: TALL_OPS.has(approval.tool)
                 })
               }
               break
@@ -1319,6 +1337,14 @@ export const useAppStore = defineStore('app', {
       return { w: 360, h: Math.min(400, maxH) }
     },
 
+    /** 全量内容卡的避让尺寸：内容+结果各限 400，总高可到 800+，避让取气泡同款妥协值
+     *  （400）——再大会把采样空间挤到退让；宽用操作卡自己的 400 */
+    castOpMaxSize(tall: boolean): { w: number; h: number } {
+      if (!tall) return this.castMaxSize('op')
+      const maxH = Math.max(120, window.innerHeight - 116)
+      return { w: 400, h: Math.min(400, maxH) }
+    },
+
     /** 桌面主区里的随机落点（避开左侧会话列、右侧面板，留边距）：
      *  传入的 width/height 必须是增长上限（castMaxSize）；在已有气泡/操作卡的「长满」矩形之外
      *  找空闲处；实在没有整块空地就退到重叠最小的点（此时仍可能后活动者盖住先前的） */
@@ -1332,10 +1358,13 @@ export const useAppStore = defineStore('app', {
       const GAP = 8 // 投出物之间留的空隙
       // 已占用的矩形：气泡 + 操作卡，都按增长上限算（当前尺寸会变，只有长满的矩形才保证不重叠）
       const bubbleMax = this.castMaxSize('bubble')
-      const opMax = this.castMaxSize('op')
       const taken = [
         ...this.bubbles.map((b) => ({ x: b.x, y: b.y, w: bubbleMax.w, h: bubbleMax.h })),
-        ...this.opCards.map((c) => ({ x: c.x, y: c.y, w: opMax.w, h: opMax.h }))
+        // 不限高的卡能长高，避让矩形按大卡算（castOpMaxSize）
+        ...this.opCards.map((c) => {
+          const m = this.castOpMaxSize(!!c.tall)
+          return { x: c.x, y: c.y, w: m.w, h: m.h }
+        })
       ]
       const overlapOf = (x: number, y: number) => {
         let sum = 0
@@ -1442,6 +1471,7 @@ export const useAppStore = defineStore('app', {
       content: string
       result: string
       status: DesktopOp['status']
+      tall?: boolean
     }) {
       // 已渐隐移除的卡不复活：后续补丁重walk到同一历史块时若重建，就会同一操作反复弹出
       if (this.fadedOps.has(card.id)) {
@@ -1461,11 +1491,12 @@ export const useAppStore = defineStore('app', {
         if (card.title) existing.title = card.title
         if (card.content) existing.content = card.content
         if (card.result) existing.result = card.result
+        if (card.tall) existing.tall = true
         if (card.status !== 'running' || existing.status === 'running') existing.status = card.status
         if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
         return
       }
-      const size = this.castMaxSize('op')
+      const size = card.tall ? this.castOpMaxSize(true) : this.castMaxSize('op')
       const spot = this.randomSpot(size.w, size.h)
       this.opCards.push({
         ...card,
@@ -1554,18 +1585,21 @@ export const useAppStore = defineStore('app', {
       this.streamMarks[message.id] = mark
     },
 
-    /** 消息里的工具块 → 操作卡（带参数/结果/状态，比 activity 事件全） */
+    /** 消息里的工具块 → 操作卡（带参数/结果/状态，比 activity 事件全）。
+     *  执行命令/写入文件/看图/看视频的卡不截断内容：全量进卡，限高 400 内部滚动 */
     noteToolBlock(conversationID: string, event: ToolEvent | undefined) {
       if (!event?.id) return
       const status = event.status ?? 'running'
       const content = event.arguments ?? ''
+      const tall = TALL_OPS.has(event.name ?? '')
       this.pushOp({
         id: event.id,
         conversationID,
         title: event.title || event.name || '操作',
-        content: content.length > 240 ? `${content.slice(0, 240)}…` : content,
+        content: tall ? content : content.length > 240 ? `${content.slice(0, 240)}…` : content,
         result: event.result || '',
-        status
+        status,
+        tall
       })
     },
 

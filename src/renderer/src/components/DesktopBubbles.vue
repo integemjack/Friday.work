@@ -44,8 +44,8 @@ async function adjust() {
   for (const bubble of store.bubbles) {
     const el = elOf.get(bubble.id)
     if (!el) continue
-    // 思考气泡限高 400px（超长内部滚动、自动滚到最新）；回复气泡只按窗口高度限（底边不出桌面）
-    el.style.maxHeight = `${bubble.kind === 'thinking' ? Math.min(400, maxH) : maxH}px`
+    // 思考与回复气泡都限高 400px（超长内部滚动、自动滚到最新）；窗口矮时再按窗口高收紧
+    el.style.maxHeight = `${Math.min(400, maxH)}px`
     if (el.offsetTop + el.offsetHeight > limit) {
       store.shiftBubbleY(bubble.id, limit - el.offsetTop - el.offsetHeight)
     }
@@ -151,8 +151,8 @@ function titleOf(conversationID: string): string {
   color: var(--warn);
 }
 
-/* 思考气泡限高 400px：超长内部滚动（adjust() 会再按窗口高度收紧）；回复气泡不限 */
-.bubble.thinking {
+/* 气泡限高 400px：超长内部滚动（adjust() 会再按窗口高度收紧）；思考/回复一致 */
+.bubble {
   max-height: 400px;
 }
 
