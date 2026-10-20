@@ -2,12 +2,19 @@
 // 桌面左侧常驻会话列表（2026-10 布局改版）：
 // 全部会话一列，点一下选中（右下聊天面板切到它）；运行中的会话带状态点。
 // 新建 / 添加机器在表头；行尾 ✕ 只关掉本地订阅（不删服务端会话）。
+// 默认只露最近 10 条 + 活动中的（选中的 / 在跑的），末尾「显示更多会话」每次再放 10 条；
+// 按更新时间分段插日期标签：置顶 / 最近 / 3天前 / 7天前 / 1个月前。
 import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import type { ConversationSummary } from '../../../protocol/rpc/protocol.js'
 import AddMachineDialog from './AddMachineDialog.vue'
 
 const store = useAppStore()
 const addingMachine = ref(false)
+
+/** 一页放几条（默认 10，点「显示更多」再放 10） */
+const PAGE_SIZE = 10
+const visibleCount = ref(PAGE_SIZE)
 
 const sessions = computed(() =>
   [...store.summaries].sort((a, b) => {
@@ -19,6 +26,58 @@ const sessions = computed(() =>
 function statusOf(id: string): string {
   return store.activities[id]?.status ?? 'idle'
 }
+
+/** 活动中的会话：选中的那段，或在跑 / 等确认 / 等你答的——永远展示，不被折叠进「更多」 */
+function isLive(id: string): boolean {
+  if (id === store.activeConversationID) return true
+  const status = statusOf(id)
+  return status === 'running' || status === 'approval' || status === 'question'
+}
+
+/** 实际展示的：排序后前 visibleCount 条，加上漏在后面但正活动着的（仍按原位插入，不打乱分组） */
+const visibleSessions = computed(() =>
+  sessions.value.filter((item, index) => index < visibleCount.value || isLive(item.id))
+)
+
+const hiddenCount = computed(() => sessions.value.length - visibleSessions.value.length)
+
+function showMore(): void {
+  visibleCount.value += PAGE_SIZE
+}
+
+// —— 日期分段标签：置顶 / 最近 / 3天前 / 7天前 / 1个月前 ——
+type GroupKey = 'pinned' | 'recent' | 'd3' | 'd7' | 'm1'
+
+const groupLabel: Record<GroupKey, string> = {
+  pinned: '置顶',
+  recent: '最近',
+  d3: '3天前',
+  d7: '7天前',
+  m1: '1个月前'
+}
+
+function groupOf(updatedAt: string, pinned: boolean): GroupKey {
+  if (pinned) return 'pinned'
+  const date = new Date(updatedAt)
+  if (Number.isNaN(date.getTime())) return 'recent'
+  const age = Date.now() - date.getTime()
+  if (age < 3 * 86400000) return 'recent'
+  if (age < 7 * 86400000) return 'd3'
+  if (age < 30 * 86400000) return 'd7'
+  return 'm1'
+}
+
+/** 展示的行按日期分段：标签只在每段第一行前出现一次 */
+const groups = computed(() => {
+  const out: Array<{ key: GroupKey; label: string; items: ConversationSummary[] }> = []
+  for (const item of visibleSessions.value) {
+    const key = groupOf(item.updatedAt, item.pinned)
+    const last = out[out.length - 1]
+    if (last && last.key === key) last.items.push(item)
+    else out.push({ key, label: groupLabel[key], items: [item] })
+  }
+  return out
+})
 
 const statusLabel: Record<string, string> = {
   idle: '',
@@ -68,24 +127,30 @@ onMounted(() => {
     </header>
 
     <div class="rows">
-      <div
-        v-for="item in sessions"
-        :key="item.id"
-        class="row"
-        :class="{ active: item.id === store.activeConversationID, idle: statusOf(item.id) === 'idle' }"
-        @click="open(item.id)"
-      >
-        <span class="dot" :class="statusOf(item.id)" />
-        <span class="title" :title="item.title">{{ item.title || '（无标题）' }}</span>
-        <span v-if="statusLabel[statusOf(item.id)]" class="status" :class="statusOf(item.id)">
-          {{ statusLabel[statusOf(item.id)] }}
-        </span>
-        <span class="time">{{ timeOf(item.updatedAt) }}</span>
-        <button class="x" title="关掉这个会话的本地订阅" @click="close($event, item.id)">✕</button>
-      </div>
+      <template v-for="group in groups" :key="group.key">
+        <div class="group-label">{{ group.label }}</div>
+        <div
+          v-for="item in group.items"
+          :key="item.id"
+          class="row"
+          :class="{ active: item.id === store.activeConversationID, idle: statusOf(item.id) === 'idle' }"
+          @click="open(item.id)"
+        >
+          <span class="dot" :class="statusOf(item.id)" />
+          <span class="title" :title="item.title">{{ item.title || '（无标题）' }}</span>
+          <span v-if="statusLabel[statusOf(item.id)]" class="status" :class="statusOf(item.id)">
+            {{ statusLabel[statusOf(item.id)] }}
+          </span>
+          <span class="time">{{ timeOf(item.updatedAt) }}</span>
+          <button class="x" title="关掉这个会话的本地订阅" @click="close($event, item.id)">✕</button>
+        </div>
+      </template>
       <div v-if="!sessions.length" class="empty">
         {{ store.connected ? '还没有会话，点上面「＋ 新建」开一段' : '先连上机器' }}
       </div>
+      <button v-if="hiddenCount > 0" class="more" title="再显示 10 条" @click="showMore">
+        显示更多会话（{{ hiddenCount }}）
+      </button>
     </div>
 
     <AddMachineDialog v-if="addingMachine" @close="addingMachine = false" />
@@ -143,6 +208,37 @@ onMounted(() => {
   min-height: 0;
   overflow-y: auto;
   padding: 4px;
+}
+
+.group-label {
+  margin: 10px 6px 3px;
+  font-family: var(--font-hud);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--muted);
+}
+
+.group-label:first-child {
+  margin-top: 2px;
+}
+
+.more {
+  display: block;
+  width: calc(100% - 8px);
+  margin: 8px 4px 2px;
+  padding: 6px 0;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.more:hover {
+  background: var(--hover);
+  color: var(--fg-2, var(--fg));
+  border-color: var(--accent-a35);
 }
 
 .row {
