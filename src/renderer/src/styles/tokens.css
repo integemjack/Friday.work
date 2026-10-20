@@ -65,7 +65,7 @@
    深空黑底 + 电光青发光，照钢铁侠 J.A.R.V.I.S. 的全息 HUD 风。
    specificity 是 0,2,0，压过上面浅/深两套 :root（0,1,0），不管系统偏好固定走这套。 */
 :root[data-theme='jarvis'] {
-  --bg: #060b14;
+  --bg: #060b14; /* = shared/theme-tokens.ts 的 THEME_BG.jarvis（窗口底色单源锚点） */
   /* 面板半透明：桌面上的内容（窗口/挂件/工具栏）和全息网格背景融为一体，
      配合各容器的 backdrop blur 成磨砂全息玻璃；文本对比靠深底色保住 */
   --panel: rgba(9, 21, 38, 0.45);

@@ -2,6 +2,7 @@
 // 默认「贾维斯」——应用一开就是深空青色全息风（<html> 带 data-theme="jarvis"，变量见 styles/tokens.css [data-theme='jarvis']）；
 // 在设置里点「跟随系统」后回到原来的浅/深自适应，选择会落盘记住。
 import { ref } from 'vue'
+import { THEME_BG } from '../../../shared/theme-tokens.js'
 
 const KEY = 'ui.theme'
 
@@ -26,9 +27,10 @@ export function applyTheme(theme: UITheme): void {
   if (theme === 'jarvis') document.documentElement.dataset.theme = 'jarvis'
   else delete document.documentElement.dataset.theme
   uiTheme.value = theme
-  // 窗口底色跟主题走（主进程 BrowserWindow 的底色 CSS 管不到，启动闪色就是它）
+  // 窗口底色跟主题走（主进程 BrowserWindow 的底色 CSS 管不到，启动闪色就是它）；
+  // 底色单源在 shared/theme-tokens.ts（与 styles/tokens.css 的 --bg 互为锚点）
   const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true
-  window.fridayBridge?.setWindowBackground(theme === 'jarvis' ? '#071018' : dark ? '#1e1f22' : '#f6f6f7')
+  window.fridayBridge?.setWindowBackground(theme === 'jarvis' ? THEME_BG.jarvis : dark ? THEME_BG.system.dark : THEME_BG.system.light)
 }
 
 /** 切换主题：落盘 + 立即生效（设置页用）。两个选项都要落盘，否则「跟随系统」会被默认值盖回去 */

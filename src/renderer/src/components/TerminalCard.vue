@@ -8,6 +8,7 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TermAttachResult } from '../../../protocol/rpc/protocol.js'
+import { XTERM_THEMES } from '../../../shared/theme-tokens.js'
 import { host, rpc } from '../lib/host.js'
 import { uiTheme } from '../lib/theme.js'
 import { useAppStore } from '../stores/app.js'
@@ -19,41 +20,6 @@ const unavailable = computed(() => !store.terminalsAvailable && !!store.terminal
 
 let term: Terminal | null = null
 let fitAddon: FitAddon | null = null
-
-// xterm 的配色是 JS 层主题（CSS 盖不到）：贾维斯下换深空蓝底 + 青色光标/选区 + 调过的 ANSI 色板
-const XTERM_THEMES = {
-  system: {
-    /* 半透明深底：融合（需要 allowTransparency，见 new Terminal） */
-    background: 'rgba(20, 21, 26, 0.55)',
-    foreground: '#e6e6e8',
-    cursor: '#8ab4f8',
-    selectionBackground: '#3a4a6b'
-  },
-  jarvis: {
-    // 透明底：终端文字直接浮在全息网格背景上（需要 allowTransparency，见 new Terminal）
-    background: 'rgba(6, 11, 20, 0)',
-    foreground: '#c9e7f2',
-    cursor: '#22d3ee',
-    cursorAccent: '#071018',
-    selectionBackground: 'rgba(34, 211, 238, 0.28)',
-    black: '#0c1a2a',
-    red: '#ff6b81',
-    green: '#3ddc97',
-    yellow: '#ffd166',
-    blue: '#6bb8ff',
-    magenta: '#c792ea',
-    cyan: '#4dd9e8',
-    white: '#c9d6e3',
-    brightBlack: '#4a6a80',
-    brightRed: '#ff8fa0',
-    brightGreen: '#6fe7b4',
-    brightYellow: '#ffe08a',
-    brightBlue: '#93ccff',
-    brightMagenta: '#dcb3f5',
-    brightCyan: '#7ce6f2',
-    brightWhite: '#eef8fc'
-  }
-} as const
 
 function xtermTheme() {
   return XTERM_THEMES[uiTheme.value === 'jarvis' ? 'jarvis' : 'system']
