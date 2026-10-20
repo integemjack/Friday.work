@@ -260,6 +260,44 @@ onBeforeUnmount(onUp)
   text-shadow: 0 0 12px var(--accent-a35);
 }
 
+/* 窗体四角 HUD 括号 + 顶缘中央光线：全息面板的锁定框感（不拦鼠标）
+   注意：background-repeat 必须写在每条 background 简写之后——
+   简写会把 repeat 重置回初始值，漏写会让 15px 小条平铺满整个窗口（就出过这个事故） */
+[data-theme='jarvis'] .win::before,
+[data-theme='jarvis'] .win::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+[data-theme='jarvis'] .win::before {
+  background:
+    linear-gradient(var(--accent) 0 0) left top / 15px 1.5px,
+    linear-gradient(var(--accent) 0 0) left top / 1.5px 15px,
+    linear-gradient(var(--accent) 0 0) right bottom / 15px 1.5px,
+    linear-gradient(var(--accent) 0 0) right bottom / 1.5px 15px;
+  background-repeat: no-repeat;
+  opacity: 0.75;
+}
+
+[data-theme='jarvis'] .win::after {
+  background:
+    linear-gradient(var(--accent) 0 0) right top / 15px 1.5px,
+    linear-gradient(var(--accent) 0 0) right top / 1.5px 15px,
+    linear-gradient(var(--accent) 0 0) left bottom / 15px 1.5px,
+    linear-gradient(var(--accent) 0 0) left bottom / 1.5px 15px,
+    linear-gradient(90deg, transparent, var(--accent-a55), transparent) center top / 42% 1px;
+  background-repeat: no-repeat;
+  opacity: 0.75;
+}
+
+[data-theme='jarvis'] .win.maximized::before,
+[data-theme='jarvis'] .win.maximized::after {
+  display: none;
+}
+
 .win-body {
   flex: 1;
   min-height: 0;

@@ -237,7 +237,7 @@ function stop() {
 <style scoped>
 .composer {
   flex: none;
-  padding: 8px 14px 12px;
+  padding: 6px 10px 9px;
   background: var(--panel);
 }
 
@@ -247,10 +247,10 @@ function stop() {
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--panel-2);
-  padding: 4px 8px 8px;
+  padding: 3px 7px 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -311,11 +311,11 @@ textarea {
   resize: none;
   border: none;
   outline: none;
-  padding: 10px 10px 2px;
+  padding: 7px 9px 2px;
   background: transparent;
   color: var(--text);
-  line-height: 1.6;
-  min-height: 40px;
+  line-height: 1.55;
+  min-height: 34px;
   max-height: 200px;
 }
 
@@ -326,8 +326,8 @@ textarea::placeholder {
 .row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 4px 0;
+  gap: 6px;
+  padding: 1px 3px 0;
 }
 
 .icon-btn {
@@ -462,12 +462,14 @@ textarea::placeholder {
 }
 
 .hint {
-  font-size: 11.5px;
+  font-size: 10.5px;
   color: var(--text-3);
   white-space: nowrap;
 }
 
-@media (max-width: 560px) {
+/* 面板窄时提示行没地方放：按容器宽（.assistant-chat 设了 container-type）而不是视口宽判断，
+   视口媒体查询在 1920px 桌面上永远不命中，提示行在 352px 面板里会被挤断 */
+@container (max-width: 420px) {
   .hint {
     display: none;
   }

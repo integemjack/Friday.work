@@ -78,28 +78,30 @@ function md(blockID: string, caseName: string): string {
 
 <style scoped>
 .message {
-  padding: 4px 0 12px;
-  max-width: 760px;
-  margin: 0 auto;
+  /* 窄栏（约 352px）密度优先：上下呼吸距收紧，让一行多容几个字 */
+  padding: 2px 0 9px;
+  /* 撑满聊天面板宽度：窄栏里 margin:auto 会把消息收缩成内容宽，宽度跟面板对不上 */
+  max-width: 100%;
+  margin: 0;
 }
 
 .meta {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin-bottom: 6px;
-  font-size: 12.5px;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
 }
 
 .avatar {
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #fff;
   background: var(--accent);
@@ -132,7 +134,7 @@ function md(blockID: string, caseName: string): string {
 }
 
 .block {
-  margin: 4px 0;
+  margin: 2px 0;
 }
 
 /* 用户消息：右侧气泡；助手消息：通栏无底色 */
@@ -155,9 +157,10 @@ function md(blockID: string, caseName: string): string {
 
 .message.user .md {
   background: var(--accent-weak);
-  border-radius: 12px;
-  padding: 9px 13px;
-  max-width: 85%;
+  border-radius: 10px;
+  padding: 7px 11px;
+  /* 窄栏里 85% 太浪费：同一段话会多出一两行 */
+  max-width: 92%;
 }
 
 .message.user .md :deep(p) {
@@ -169,14 +172,19 @@ function md(blockID: string, caseName: string): string {
 }
 
 .stats {
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: 4px;
+  font-size: 11px;
   color: var(--text-3);
 }
 
 .media-name {
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 12px;
+  /* 长文件名一行截断，不把气泡撑高 */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thinking-head {
@@ -184,8 +192,8 @@ function md(blockID: string, caseName: string): string {
   align-items: center;
   gap: 6px;
   color: var(--text-2);
-  font-size: 12.5px;
-  padding: 3px 0;
+  font-size: 12px;
+  padding: 2px 0;
 }
 
 .thinking-caret {
@@ -198,9 +206,9 @@ function md(blockID: string, caseName: string): string {
 }
 
 .thinking-body {
-  margin: 4px 0 0;
-  padding: 10px 12px;
-  font-size: 13px;
+  margin: 3px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
   color: var(--text-2);
   font-style: italic;
   background: var(--panel-2);
@@ -209,10 +217,11 @@ function md(blockID: string, caseName: string): string {
   word-break: break-word;
 }
 
-/* markdown-it 输出的富文本样式（v-html 内容不带 scoped 标记，用 :deep） */
+/* markdown-it 输出的富文本样式（v-html 内容不带 scoped 标记，用 :deep）。
+   窄栏里 13px/1.6 每行多容 1-2 字，长回复整体高度降一成多 */
 .md {
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.6;
   word-break: break-word;
 }
 
@@ -230,7 +239,7 @@ function md(blockID: string, caseName: string): string {
 .md :deep(h4),
 .md :deep(h5),
 .md :deep(h6) {
-  margin: 16px 0 8px;
+  margin: 12px 0 6px;
   line-height: 1.4;
   font-weight: 650;
 }
@@ -274,7 +283,7 @@ function md(blockID: string, caseName: string): string {
 
 .md :deep(code) {
   font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 12.5px;
+  font-size: 12px;
   background: var(--code-bg);
   border-radius: 4px;
   padding: 1px 5px;
@@ -282,13 +291,13 @@ function md(blockID: string, caseName: string): string {
 
 .md :deep(pre) {
   font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 12.5px;
+  font-size: 12px;
   background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   overflow: auto;
-  margin: 8px 0;
+  margin: 6px 0;
   white-space: pre;
 }
 
@@ -300,8 +309,8 @@ function md(blockID: string, caseName: string): string {
 
 .md :deep(table) {
   border-collapse: collapse;
-  margin: 8px 0;
-  font-size: 13px;
+  margin: 6px 0;
+  font-size: 12px;
   display: block;
   overflow-x: auto;
   max-width: 100%;
@@ -310,7 +319,7 @@ function md(blockID: string, caseName: string): string {
 .md :deep(th),
 .md :deep(td) {
   border: 1px solid var(--border);
-  padding: 5px 10px;
+  padding: 3px 8px;
   text-align: left;
 }
 

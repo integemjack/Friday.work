@@ -16,6 +16,7 @@ import {
   type Conversation,
   type ConversationSummary,
   type PendingApproval,
+  type RunnerState,
   type Runtime,
   type SessionActivity,
   type TeamRun,
@@ -84,6 +85,10 @@ export interface DesktopBubble {
   text: string
   x: number
   y: number
+  /** 活动置顶层级：由置顶 tick（castTick）每 5 秒抬「当前最活跃」的投出物 */
+  z: number
+  /** 最近一次内容更新/出现的时刻：「最活跃」= activeAt 最新（最近还在更新的） */
+  activeAt: number
   fading: boolean
   timer: number
 }
@@ -98,6 +103,10 @@ export interface DesktopOp {
   status: 'running' | 'awaitingApproval' | 'succeeded' | 'failed' | 'denied'
   x: number
   y: number
+  /** 活动置顶层级：由置顶 tick 每 5 秒抬「当前最活跃」的投出物（与气泡共用计数器） */
+  z: number
+  /** 最近一次内容更新/出现的时刻：「最活跃」= activeAt 最新 */
+  activeAt: number
   fading: boolean
   timer: number
 }
@@ -133,6 +142,14 @@ const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH
   agents: { w: 580, h: 460, minW: 360, minH: 240 },
   settings: { w: 620, h: 560, minW: 420, minH: 320 }
 }
+
+/** 置顶节流：两次抬 z 的最小间隔，全局一个窗口（castZAt）。窗口到期时由 castTick 抬
+ *  「当前最活跃」（activeAt 最大）的投出物——不按气泡各自计时（窗口重叠交错依然争抢），
+ *  也不是到期后碰巧先来更新的那个先抬 */
+const CAST_Z_INTERVAL = 5000
+
+/** 置顶 tick 的 interval id（非响应式，模块级） */
+let castTimer = -1
 
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   terminals: { title: '终端', icon: '⌨' },
@@ -302,8 +319,12 @@ export const useAppStore = defineStore('app', {
     opCards: [] as DesktopOp[],
     /** 流式标记：messageID → 已投过气泡的 thinking/text 长度（增量从这里算） */
     streamMarks: {} as Record<string, { thinking: number; text: number }>,
-    /** 投窗位置级联（随机位置基础上错开，避免全叠在一点） */
-    castCascade: 0,
+    /** 投出物置顶层级：气泡与操作卡共用，有新活动的递增抬到最前（同一投层里跨气泡/卡可比） */
+    castZTop: 10,
+    /** 全局置顶节流：上次抬 z 的时刻（整个投层一个窗口；castTick 每秒检查，到期抬最活跃的） */
+    castZAt: 0,
+    /** 已渐隐移除的操作卡 id：流式补丁会重walk整条消息的历史块，不拦住就会把终态卡再弹一遍（同一操作反复显示的根源） */
+    fadedOps: new Set<string>(),
     /** M2 实时卡片：当前机器的终端 / 浏览器 / 子 Agent 状态 */
     terminals: [] as TerminalInfo[],
     terminalsAvailable: false,
@@ -312,6 +333,8 @@ export const useAppStore = defineStore('app', {
     browserAvailable: false,
     browserReason: '',
     teamRuns: [] as TeamRun[],
+    /** 当前机器的运行状态（runner 事件 + hello 快照；标题栏右上角实时指示用） */
+    runnerState: null as RunnerState | null,
     /** 活动的浏览器帧（base64 jpeg）与它的视口 */
     browserFrame: null as { tab: string; data: string; viewport: [number, number] } | null,
     /** 这台机器的引擎（hello 快照 + engines 事件；输入框的模型选择器用） */
@@ -557,6 +580,15 @@ export const useAppStore = defineStore('app', {
                   this.activities[session.id] = session
                   this.approvals[session.id] = session.approvals ?? []
                 }
+                // 跑着/等审批的会话自动订阅（气泡/操作卡的数据源）：不订阅就只有手动选中会话才有流——
+                // 客户端晚于会话启动（或重连）时错过 started 事件，桌面上气泡就全不显示
+                if (machine.id === this.currentMachine) {
+                  for (const session of sessions) {
+                    if (session.status === 'running' || session.status === 'approval') {
+                      void this.subscribeConversation(session.id)
+                    }
+                  }
+                }
               })
               .catch(() => activitySubscribed.delete(machine.id))
             if (machine.id === this.currentMachine) {
@@ -642,6 +674,7 @@ export const useAppStore = defineStore('app', {
       this.browserAvailable = false
       this.browserReason = ''
       this.teamRuns = []
+      this.runnerState = null
       this.browserFrame = null
       this.activeTerminalID = ''
       this.activeFile = null
@@ -657,6 +690,7 @@ export const useAppStore = defineStore('app', {
           terminals: { terminals: TerminalInfo[]; available: boolean; reason?: string }
           browser: { tabs: BrowserTab[]; available: boolean; reason?: string }
           team: { runs: TeamRun[] }
+          runner?: RunnerState
           engines?: EngineView[]
           defaultEngineID?: string
         }
@@ -669,6 +703,7 @@ export const useAppStore = defineStore('app', {
         this.browserAvailable = state.browser?.available ?? false
         this.browserReason = state.browser?.reason ?? ''
         this.teamRuns = state.team?.runs ?? []
+        this.runnerState = state.runner ?? null
         if (!this.activeTerminalID && this.terminals.length > 0) {
           this.activeTerminalID = this.terminals[0]!.id
         }
@@ -970,6 +1005,11 @@ export const useAppStore = defineStore('app', {
           this.teamRuns = (params as { runs: TeamRun[] }).runs ?? []
           break
         }
+        case 'runner': {
+          // 实时运行状态：标题栏右上角的智能体数 / token 速度
+          this.runnerState = (params as RunnerState) ?? null
+          break
+        }
         case 'engines': {
           const state = params as { engines?: EngineView[] }
           this.engines = state.engines ?? []
@@ -1265,7 +1305,20 @@ export const useAppStore = defineStore('app', {
 
     // ---- 桌面投窗（气泡 / 操作卡）：会话不再是窗口，流式内容从这里上桌面 ----
 
-    /** 桌面主区里的随机落点（避开左侧会话列、右侧面板，留边距） */
+    /** 投出物的避让尺寸（增长上限）：投出后会随流式内容长高，落点选取与已占矩形部必须按
+     *  「长满」算——只按投出时刻的估计尺寸避让，增长后重叠会直接盖住彼此（曾致操作卡
+     *  长到 220px 后压住思考气泡顶部：标签行 + 正文开头全被盖）。回复气泡实际可长到窗口高，
+     *  避让值妥协取 400（与思考一致）：再大会把采样空间挤到退让。 */
+    castMaxSize(kind: 'bubble' | 'op'): { w: number; h: number } {
+      if (kind === 'op') return { w: 400, h: 240 } // 卡内容截断在 content 72 + result 96，总高封顶约 240
+      // 与 DesktopBubbles.adjust 的限高同源：窗口高 - 标题栏 44 - 顶安全 60 - 底安全 12
+      const maxH = Math.max(120, window.innerHeight - 116)
+      return { w: 360, h: Math.min(400, maxH) }
+    },
+
+    /** 桌面主区里的随机落点（避开左侧会话列、右侧面板，留边距）：
+     *  传入的 width/height 必须是增长上限（castMaxSize）；在已有气泡/操作卡的「长满」矩形之外
+     *  找空闲处；实在没有整块空地就退到重叠最小的点（此时仍可能后活动者盖住先前的） */
     randomSpot(width: number, height: number): { x: number; y: number } {
       const leftEdge = 250
       const rightEdge = Math.max(leftEdge + width + 8, window.innerWidth - 400)
@@ -1273,38 +1326,92 @@ export const useAppStore = defineStore('app', {
       const bottomEdge = Math.max(topEdge + height + 8, window.innerHeight - 250)
       const spanX = Math.max(1, rightEdge - leftEdge - width)
       const spanY = Math.max(1, bottomEdge - topEdge - height)
-      // 随机点 + 小级联错位，避免连续多条全叠在同一个随机点上
-      const jitter = (this.castCascade++ % 5) * 26
-      return {
-        x: Math.min(leftEdge + Math.random() * spanX + jitter, rightEdge - width),
-        y: Math.min(topEdge + Math.random() * spanY + jitter, bottomEdge - height)
+      const GAP = 8 // 投出物之间留的空隙
+      // 已占用的矩形：气泡 + 操作卡，都按增长上限算（当前尺寸会变，只有长满的矩形才保证不重叠）
+      const bubbleMax = this.castMaxSize('bubble')
+      const opMax = this.castMaxSize('op')
+      const taken = [
+        ...this.bubbles.map((b) => ({ x: b.x, y: b.y, w: bubbleMax.w, h: bubbleMax.h })),
+        ...this.opCards.map((c) => ({ x: c.x, y: c.y, w: opMax.w, h: opMax.h }))
+      ]
+      const overlapOf = (x: number, y: number) => {
+        let sum = 0
+        for (const r of taken) {
+          const ow = Math.min(x + width + GAP, r.x + r.w) - Math.max(x - GAP, r.x)
+          const oh = Math.min(y + height + GAP, r.y + r.h) - Math.max(y - GAP, r.y)
+          if (ow > 0 && oh > 0) {
+            // 与已有物顶部带（标签行 + 开头内容，约 60px）的交叠高：盖住这里 = 遮住它的身份标识，
+            // 罚 10 倍——密度高不得不重叠时，退让采样宁可盖已有物的下部（滚走的旧内容）也不盖顶部。
+            // 没有这条罚分时「取重叠最小」会把后来者系统性叠到同一个牺牲者的顶部（实测 30+ 张卡
+            // 轮番压住同一条思考气泡的顶部 60px），标签行长期不可读
+            const topBand = Math.min(y + height + GAP, r.y + 60) - Math.max(y - GAP, r.y)
+            sum += ow * oh * (topBand > 0 ? 10 : 1)
+          }
+        }
+        return sum
       }
+      let best = { x: leftEdge, y: topEdge }
+      let bestOverlap = Infinity
+      for (let i = 0; i < 24 && bestOverlap > 0; i++) {
+        const cand = {
+          x: Math.min(leftEdge + Math.random() * spanX, rightEdge - width),
+          // y 夹在 [topEdge, bottomEdge - height]：矮窗口里长满矩形超出可用高时贴顶投，
+          // 不能把 y 采到负数/越顶（顶部会被标题栏裁掉）
+          y: Math.max(topEdge, Math.min(topEdge + Math.random() * spanY, bottomEdge - height))
+        }
+        const overlap = overlapOf(cand.x, cand.y)
+        if (overlap < bestOverlap) {
+          best = cand
+          bestOverlap = overlap
+        }
+      }
+      return best
     },
 
     /** 投一条气泡（思考/文本）：同一会话同类内容续在同一条气泡里，5 秒无新内容渐隐 */
     pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string) {
-      const clean = chunk.replace(/\s+/g, ' ').trim()
-      if (!clean) return
+      if (!chunk.trim()) return
+      // 空白归一但保留换行：行内空白压成单个空格、连续换行压成单个换行（全压成空格会把整段思考挤成一行）。
+      // 流式切片的分隔空白可能落在上一片尾部或本片开头，trim 掉再硬拼会粘连，所以不 trim——
+      // 追加时接在已有内容后面，只在两边都无空白时补一个空格，不强制加换行
+      const add = chunk
+        .replace(/\r\n?/g, '\n')
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/\n{2,}/g, '\n')
       const id = `${conversationID}:${kind}`
       const existing = this.bubbles.find((item) => item.id === id)
       if (existing) {
-        existing.text = `${existing.text}\n${clean}`.split('\n').slice(-6).join('\n').slice(-600)
+        // 全量内容不截断（气泡不限高）。内容更新只记活跃时刻（activeAt），不当场抬 z——
+        // 由 castTick 在 5 秒窗口到期时抬「当前最活跃」的；窗口内更新照常续文本、刷新渐隐计时
+        const gap = existing.text && !/\s$/.test(existing.text) && !/^\s/.test(add) ? ' ' : ''
+        existing.text = existing.text + gap + add
+        existing.activeAt = Date.now()
         window.clearTimeout(existing.timer)
         existing.fading = false
         existing.timer = window.setTimeout(() => this.fadeBubble(id), 5000)
         return
       }
-      const spot = this.randomSpot(340, 120)
+      const size = this.castMaxSize('bubble')
+      const spot = this.randomSpot(size.w, size.h)
       this.bubbles.push({
         id,
         conversationID,
         kind,
-        text: clean.slice(0, 600),
+        text: add.trim(),
         x: spot.x,
         y: spot.y,
+        z: ++this.castZTop,
+        activeAt: Date.now(),
         fading: false,
         timer: window.setTimeout(() => this.fadeBubble(id), 5000)
       })
+    },
+
+    /** 气泡越界修正：整体上移（dy 为负数），底边贴住桌面底、不越过窗口底 */
+    shiftBubbleY(id: string, dy: number) {
+      const bubble = this.bubbles.find((item) => item.id === id)
+      if (!bubble || !dy) return
+      bubble.y += dy
     },
 
     /** 气泡渐隐（先加渐隐类，动画完了再从数组里删） */
@@ -1327,8 +1434,21 @@ export const useAppStore = defineStore('app', {
       result: string
       status: DesktopOp['status']
     }) {
+      // 已渐隐移除的卡不复活：后续补丁重walk到同一历史块时若重建，就会同一操作反复弹出
+      if (this.fadedOps.has(card.id)) {
+        if (terminalStatus(card.status)) return
+        this.fadedOps.delete(card.id) // 有新动态（重新运行）才允许重新出现
+      }
       const existing = this.opCards.find((item) => item.id === card.id)
       if (existing) {
+        // 内容更新只记活跃时刻，由 castTick 在窗口到期时抬「当前最活跃」；
+        // 状态变化（审批弹出、出结果）不是内容更新，立即置顶让用户看见（并重置窗口）
+        const statusChanged = card.status !== existing.status
+        if (statusChanged) {
+          existing.z = ++this.castZTop
+          this.castZAt = Date.now()
+        }
+        existing.activeAt = Date.now()
         if (card.title) existing.title = card.title
         if (card.content) existing.content = card.content
         if (card.result) existing.result = card.result
@@ -1336,12 +1456,15 @@ export const useAppStore = defineStore('app', {
         if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
         return
       }
-      const spot = this.randomSpot(400, 96)
+      const size = this.castMaxSize('op')
+      const spot = this.randomSpot(size.w, size.h)
       this.opCards.push({
         ...card,
         title: card.title || '操作',
         x: spot.x,
         y: spot.y,
+        z: ++this.castZTop,
+        activeAt: Date.now(),
         fading: false,
         timer: 0
       })
@@ -1362,7 +1485,33 @@ export const useAppStore = defineStore('app', {
       window.clearTimeout(card.timer)
       card.timer = window.setTimeout(() => {
         this.opCards = this.opCards.filter((item) => item.id !== id)
+        this.fadedOps.add(id)
       }, 600)
+    },
+
+    /** 置顶 tick（每秒跑一次）：5 秒窗口到期时，把这个窗口内真正有内容更新的投出物里
+     *  「当前最活跃」的（activeAt 最大 = 最近还在更新的）抬到最前 */
+    castTick() {
+      const now = Date.now()
+      const since = this.castZAt
+      if (now - since < CAST_Z_INTERVAL) return
+      this.castZAt = now
+      const pool = [...this.bubbles, ...this.opCards].filter((item) => item.activeAt > since)
+      if (!pool.length) return
+      const top = pool.reduce((best, item) => (item.activeAt > best.activeAt ? item : best))
+      if (top.z >= this.castZTop) return // 已在最前（刚出现/刚被状态变化置顶），层级已正确
+      top.z = ++this.castZTop
+    },
+
+    /** 启动 / 停止置顶 tick（App 挂载时启动，跟界面同生命周期） */
+    startCastTicker() {
+      if (castTimer >= 0) return
+      castTimer = window.setInterval(() => this.castTick(), 1000)
+    },
+    stopCastTicker() {
+      if (castTimer < 0) return
+      window.clearInterval(castTimer)
+      castTimer = -1
     },
 
     /**

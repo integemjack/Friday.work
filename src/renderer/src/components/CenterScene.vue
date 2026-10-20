@@ -6,6 +6,12 @@
 
 <template>
   <div class="center-scene" aria-hidden="true">
+    <!-- 地平线辉光：网格地面远端边缘的一条能量线 + 升腾的大气光 -->
+    <div class="horizon">
+      <div class="horizon-line" />
+      <div class="horizon-glow" />
+    </div>
+
     <!-- 透视网格地面 -->
     <div class="floor">
       <div class="floor-grid" />
@@ -36,6 +42,55 @@
   perspective: 760px;
   perspective-origin: 50% 40%;
   z-index: 0;
+  /* 鼠标视差：3D 场景顺向小幅移动（深空层反向，拉开景深）；
+     独立 translate 属性，不跟 perspective 冲突 */
+  translate: calc(var(--par-x, 0) * 11px) calc(var(--par-y, 0) * 8px);
+}
+
+/* ---- 地平线：一条呼吸的能量线 + 往上升的大气辉光，
+        位置对齐网格地面投影后的远端边缘（约场景 72% 高处，截图校准） ---- */
+.horizon {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 68%;
+  height: 130px;
+}
+
+.horizon-line {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  top: 0;
+  height: 1.5px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-a45) 16%,
+    var(--accent-a70) 50%,
+    var(--accent-a45) 84%,
+    transparent
+  );
+  box-shadow:
+    0 0 14px var(--accent-a30),
+    0 0 44px var(--accent-a14);
+  animation: horizon-breathe 6s ease-in-out infinite;
+}
+
+.horizon-glow {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 0;
+  height: 116px;
+  background: radial-gradient(ellipse 62% 100% at 50% 0%, var(--accent-a12), transparent 72%);
+  filter: blur(6px);
+}
+
+@keyframes horizon-breathe {
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* ---- 地面：rotateX 压平成地面，网格线沿 Z 轴向观察者流动，远处淡出 ---- */
@@ -175,13 +230,7 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .floor-grid,
-  .core,
-  .d1,
-  .d2,
-  .d3 {
-    animation: none;
-  }
-}
+/* 注：贾维斯装饰层动画不随系统 prefers-reduced-motion 关闭——
+   动效是这个主题的核心体验，且本机 Windows 关了「动画效果」（性能模式），
+   跟随系统 hint 会让整套主题静默变成纯静态（实测 matchMedia 报 reduce）。 */
 </style>

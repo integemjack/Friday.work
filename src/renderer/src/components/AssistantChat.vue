@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// 右下角常驻的「与助手聊天」面板（2026-10 布局改版）：
+// 右栏下半段常驻的「与助手聊天」面板：叠在视频上面，顶端顶到视频中点、向上渐隐。
 // 作用在当前选中的会话上（左侧会话列表切换），流式输出同时以气泡投到桌面。
-// 状态条 / 审批横幅 / 消息流 / 输入框，比会话窗口紧凑，去掉了分支切换器。
+// 消息流（顶端渐隐）/ 审批横幅 / 信息行 / 输入框，比会话窗口紧凑，去掉了分支切换器。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import MessageItem from './MessageItem.vue'
@@ -30,7 +30,9 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
     if (stickToBottom.value) void scrollToBottom()
   })
+  // 消息变高、或面板本身变矮（审批横幅/状态行/窗口改变）时，只要贴底开关开着就跟随到底
   if (messagesEl.value) resizeObserver.observe(messagesEl.value)
+  if (scrollEl.value) resizeObserver.observe(scrollEl.value)
   void scrollToBottom(true)
 })
 
@@ -79,14 +81,16 @@ const statusLine = computed(() => {
 
 <template>
   <section class="assistant-chat" data-testid="assistant-chat">
-    <header class="head">
-      <span class="head-title">助手</span>
-      <span v-if="summary" class="session-name" :title="summary.title">{{ summary.title || '（无标题）' }}</span>
-      <span v-if="statusLine" class="status-line">{{ statusLine }}</span>
-      <span class="spacer" />
-      <button v-if="runtime?.generating" class="stop-btn" @click="store.stopRunner(conversationID)">停止</button>
-    </header>
+    <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
+      <div ref="messagesEl" class="messages">
+        <MessageItem v-for="entry in messages" :key="entry.message.id" :message="entry.message" />
+        <div v-if="!conversationID" class="hint">
+          {{ store.connected ? '选一段会话，或直接说话（会自动开一段新的）' : '先连上机器' }}
+        </div>
+      </div>
+    </div>
 
+    <!-- 审批横幅 / 信息行挪到底部（消息流顶端直通视频中点、渐隐，顶部不再压文字） -->
     <div v-if="approvals.length > 0" class="approval-bar">
       <div v-for="approval in approvals" :key="approval.eventID" class="approval-item">
         <span class="approval-tool">{{ approval.title || approval.tool }}</span>
@@ -98,14 +102,13 @@ const statusLine = computed(() => {
       </div>
     </div>
 
-    <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
-      <div ref="messagesEl" class="messages">
-        <MessageItem v-for="entry in messages" :key="entry.message.id" :message="entry.message" />
-        <div v-if="!conversationID" class="hint">
-          {{ store.connected ? '选一段会话，或直接说话（会自动开一段新的）' : '先连上机器' }}
-        </div>
-      </div>
-    </div>
+    <header class="head">
+      <span class="head-title">助手</span>
+      <span v-if="summary" class="session-name" :title="summary.title">{{ summary.title || '（无标题）' }}</span>
+      <span v-if="statusLine" class="status-line">{{ statusLine }}</span>
+      <span class="spacer" />
+      <button v-if="runtime?.generating" class="stop-btn" @click="store.stopRunner(conversationID)">停止</button>
+    </header>
 
     <Composer :conversation-id="conversationID" @submit="submit" />
   </section>
@@ -118,16 +121,19 @@ const statusLine = computed(() => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  /* 面板宽度作容器查询尺寸：面板窄时输入框等子组件按容器宽自适应（视口媒体查询在这里不生效） */
+  container-type: inline-size;
   /* 常驻元素融在桌面上：无卡片壳（透明、无边框、无阴影） */
   background: transparent;
   border: none;
 }
 
+/* 信息行贴在输入框上方（原来在顶部，现在顶部让给视频渐隐） */
 .head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 4px 6px;
+  padding: 6px 14px 0;
 }
 
 .head-title {
@@ -173,7 +179,7 @@ const statusLine = computed(() => {
 
 .approval-bar {
   flex: none;
-  border-bottom: 1px solid var(--warn);
+  border-top: 1px solid var(--warn);
   background: var(--warn);
 }
 
@@ -230,12 +236,18 @@ const statusLine = computed(() => {
   min-height: 0;
   overflow-y: auto;
   padding: 6px 8px;
+  /* 顶端渐隐：向上滚进视频区的消息淡出，视频从聊天底下透出来 */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
 }
 
 .messages {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  /* 消息少时贴底（锚在输入框上方），多时正常滚动 */
+  min-height: 100%;
+  justify-content: flex-end;
 }
 
 .hint {

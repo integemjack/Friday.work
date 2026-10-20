@@ -622,6 +622,8 @@ export interface MachineLiveState {
   terminals: TerminalsState
   browser: BrowserState
   team: TeamState
+  /** 运行状态（liveAgents / liveSpeed；标题栏实时指示用；旧服务端没有） */
+  runner?: RunnerState
   /** 引擎（设置窗口用；字段与 EnginesState.engines 一致） */
   engines: EngineConfigView[]
   defaultEngineID: string

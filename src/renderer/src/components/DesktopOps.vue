@@ -27,7 +27,7 @@ const statusMark: Record<string, string> = {
         :key="card.id"
         class="op"
         :class="[card.status, { fading: card.fading }]"
-        :style="{ left: `${card.x}px`, top: `${card.y}px` }"
+        :style="{ left: `${card.x}px`, top: `${card.y}px`, zIndex: card.z }"
         @click="card.status !== 'awaitingApproval' && card.status !== 'running' && store.fadeOp(card.id)"
       >
         <div class="from">来自 {{ titleOf(card.conversationID) }}</div>
@@ -50,10 +50,10 @@ const statusMark: Record<string, string> = {
 
 <style scoped>
 .ops-layer {
+  /* 不设 z-index（auto 不建层叠上下文）：与气泡层同在投层里，卡/气泡的 z 才能跨类比较（最近活动的置顶） */
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 41;
 }
 
 .op {
@@ -77,9 +77,11 @@ const statusMark: Record<string, string> = {
   letter-spacing: 1px;
   color: var(--text-3);
   margin-bottom: 3px;
+  /* 占满整宽，超出的会话名在右缘渐隐，不用 ... 截断 */
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
 }
 
 .line {

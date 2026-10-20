@@ -5,7 +5,7 @@
 //   右栏   ：视频通话面板（常驻顶部，没有挂断）+ 浏览器面板（用到才展开）+ 与助手聊天（常驻底部）
 // 会话的思考/文本以气泡投在桌面随机处（5 秒渐隐）；操作以极简终端卡投在桌面（有结果 5 秒后渐隐）。
 // 剩下的浮动窗口只有子 Agent / 设置，入口在标题栏。
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
 import { uiTheme } from './lib/theme.js'
@@ -26,6 +26,7 @@ import DesktopOps from './components/DesktopOps.vue'
 import CenterScene from './components/CenterScene.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
+import SpaceVeil from './components/SpaceVeil.vue'
 
 const store = useAppStore()
 
@@ -47,8 +48,34 @@ const offWork = host.onWork((message) => {
   }
 })
 
-// 贾维斯界面开着才挂桌面 HUD（雷达/时钟/连接状态）
+// 贾维斯界面开着才挂桌面 HUD（雷达/时钟/连接状态）和深空层（星野/流星）
 const jarvis = computed(() => uiTheme.value === 'jarvis')
+
+// 贾维斯：鼠标视差——鼠标在桌面上的位置归一化成 --par-x/--par-y（-1..1），
+// rAF 里插值逼近后写回 CSS 变量；深空层 / 3D 场景 / HUD 各自按变量反向/正向小幅偏移。
+// 不随系统 prefers-reduced-motion 关闭（本机系统动画效果是关的，跟随会静默失效）。
+const desktopEl = ref<HTMLElement | null>(null)
+let parRaf = 0
+let parTarget = { x: 0, y: 0 }
+let parNow = { x: 0, y: 0 }
+function parTick(): void {
+  parRaf = 0
+  const el = desktopEl.value
+  if (!el) return
+  parNow.x += (parTarget.x - parNow.x) * 0.07
+  parNow.y += (parTarget.y - parNow.y) * 0.07
+  el.style.setProperty('--par-x', parNow.x.toFixed(4))
+  el.style.setProperty('--par-y', parNow.y.toFixed(4))
+  if (Math.abs(parTarget.x - parNow.x) > 0.002 || Math.abs(parTarget.y - parNow.y) > 0.002) {
+    parRaf = requestAnimationFrame(parTick)
+  }
+}
+function onDesktopMove(event: MouseEvent): void {
+  if (!jarvis.value) return
+  parTarget.x = (event.clientX / window.innerWidth) * 2 - 1
+  parTarget.y = (event.clientY / window.innerHeight) * 2 - 1
+  if (!parRaf) parRaf = requestAnimationFrame(parTick)
+}
 
 // 登录页：还没进过工作台（没连过机器）或手动打开时盖在桌面上。
 // 已有凭据/机器时协议进程会静默恢复，machines 一到 workbenchReady 就是 true，这个页不出现
@@ -72,6 +99,8 @@ function scheduleLayoutSave(): void {
 
 onBeforeUnmount(() => {
   window.clearTimeout(saveTimer)
+  cancelAnimationFrame(parRaf)
+  store.stopCastTicker()
   offWork()
   workHub.disposeAll()
 })
@@ -80,6 +109,7 @@ onMounted(() => {
   // 界面主题已在 main.ts 挂载前应用（避免首帧闪系统样式）；这里只恢复布局、接协议事件
   store.restoreLayout()
   store.bindHost()
+  store.startCastTicker() // 投层置顶 tick：窗口到期时抬「当前最活跃」的气泡/卡
   store.$subscribe(() => scheduleLayoutSave(), { detached: true })
 })
 
@@ -106,7 +136,10 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 
     <!-- 桌面：三栏（会话列表 | 留白主区 | 通话+聊天）。
          气泡和操作卡投在主区随机位置；终端/文件/浏览器/子 Agent/设置都是用到时才开的浮动窗口 -->
-    <div class="desktop">
+    <div class="desktop" ref="desktopEl" @mousemove="onDesktopMove">
+      <!-- 贾维斯深空层：漂移星野 + 流星 + 星云（最底层，面板全是玻璃能透出来） -->
+      <SpaceVeil v-if="jarvis" />
+
       <!-- 贾维斯 HUD：全息雷达 + 真实状态（机器连接 / 窗口数 / 待确认 / 时钟） -->
       <JarvisHUD v-if="jarvis" />
 
@@ -120,15 +153,17 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
         <CenterScene />
       </section>
 
-      <!-- 右栏：通话面板（常驻顶部）+ 与助手聊天（常驻底部），不放别的 -->
+      <!-- 右栏：视频通话铺满整栏 + 聊天叠在下半段（顶端顶到视频中点、向上渐隐），不放别的 -->
       <aside class="side side-right">
         <CallWidget />
         <div class="side-chat"><AssistantChat /></div>
       </aside>
 
-      <!-- 桌面投层：思考/文本气泡 + 操作极简终端卡（都在主区随机位置，最上层可点掉） -->
-      <DesktopBubbles />
-      <DesktopOps />
+      <!-- 桌面投层：思考/文本气泡 + 操作极简终端卡（同一层里按最近活动置顶，可点掉） -->
+      <div class="cast-layer">
+        <DesktopBubbles />
+        <DesktopOps />
+      </div>
 
       <!-- 没连机器时的桌面提示 -->
       <div v-if="!store.connected" class="desktop-empty">
@@ -228,13 +263,19 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 /* ---- 右栏 ---- */
 .side-right {
   grid-area: right;
+  /* 聊天是覆盖层：叠在视频下半段上面，右栏自身只留视频在流内 */
+  position: relative;
 }
 
 .side-chat {
-  flex: none;
-  height: 340px;
-  /* 贴住右栏底部：上面是通话，中间留空给桌面 */
-  margin-top: auto;
+  /* 聊天叠在右栏下半段：顶端从视频中点起、向上渐隐，视频从聊天底下透出来；
+     栏太矮时保住 280px 最低高度（顶端略微上探越过中点） */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: min(50%, calc(100% - 280px));
+  z-index: 2;
 }
 
 /* 没连机器时提示铺满（盖在面板上层） */
@@ -269,6 +310,14 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 
 .desktop-actions {
   margin-top: 12px;
+}
+
+/* 桌面投层：气泡与操作卡同层（z 在层内跨气泡/卡比较，最近活动的置顶） */
+.cast-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
 }
 
 /* 浮动窗口层：铺满桌面（只剩子 Agent / 设置） */

@@ -12,6 +12,14 @@ body,
   margin: 0;
 }
 
+/* 视口永不滚动（桌面应用布局自带 overflow 管理）：3D 场景（CenterScene .floor 的
+   rotateX 投影边界超出视口）在重排瞬间会污染文档 scrollWidth，闪出双向文档滚动条
+   → 视口缩 10px → 重排 → 滚动条件消失 → 再重排…无限循环即窗口抖动。clip 连
+   编程滚动一起禁掉，比 hidden 更彻底；内部面板滚动不受影响（各自容器管理）。 */
+html {
+  overflow: clip;
+}
+
 body {
   font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
   font-size: 14px;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 通话面板（常驻版，右上）：进入工作台（机器连上）就自动与助手 bot 建立实时视频通话，
-// 可以直接开口对话；面板钉在右栏顶部——
+// 通话面板（常驻版，右栏）：进入工作台（机器连上）就自动与助手 bot 建立实时视频通话，
+// 可以直接开口对话；视频从右栏顶部按比例自适应显示、下半段被聊天覆盖层（顶端渐隐）叠盖——
 //   通话中：远端画面（视频通话）+ 本端小窗 + 静麦 / 静扬声器 / 摄像头开关（没有挂断：挂断=结束程序）
 //   未接通：显示原因 + 「接通」按钮（结束后不自动重拨，点它重拨）
 // 媒体引擎（WebRTC PC / getUserMedia / 音视频渲染）全在这里；信令在协议进程（schat-ws p2p_*）。
@@ -60,6 +60,31 @@ let rafID = 0
 let builtFor = ''
 /** 麦克风/摄像头不可用（没设备 / 被拒）：退回只收，通话照样能听 */
 const receiveOnly = ref(false)
+
+/** 线性图标（Feather 风、24 viewBox stroke）：所有按钮统一 16px 渲染，大小一致 */
+const ICONS = {
+  mic: '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
+  micOff: '<line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
+  volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>',
+  volumeOff: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>',
+  cam: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
+  camOff: '<path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+} as const
+
+/** 悬停提示（文字不常驻显示）：对方 · 阶段/时长 · 对方静音 · 连接异常 · 错误 */
+const stateTip = computed(() =>
+  [
+    peerName.value,
+    phaseText(),
+    remoteMuted.value ? '对方静音了' : '',
+    iceState.value === 'failed' ? 'NAT 穿透失败' : '',
+    error.value
+  ]
+    .filter(Boolean)
+    .join(' · ')
+)
 
 function startTicker(): void {
   stopTicker()
@@ -462,8 +487,15 @@ onBeforeUnmount(() => clearInterval(unwatch))
 </script>
 
 <template>
-  <div v-if="visible" class="call-widget" data-testid="call-widget" @click="void remoteVideoEl?.play().catch(() => {}); audioEl?.play().catch(() => {})">
-    <!-- 画面区：视频通话显示远端画面（+本端小窗）；语音/未接通显示头像电平 -->
+  <div
+    v-if="visible"
+    class="call-widget"
+    data-testid="call-widget"
+    :title="stateTip"
+    @click="void remoteVideoEl?.play().catch(() => {}); audioEl?.play().catch(() => {})"
+  >
+    <!-- 画面区：视频通话显示远端画面（+本端小窗）；语音/未接通显示头像电平；
+         控制按钮直接盖在画面上，文字一律不常驻（状态放悬停提示） -->
     <div class="media">
       <video v-show="remoteVideoLive" ref="remoteVideoEl" class="remote-video" autoplay playsinline />
       <div v-if="!remoteVideoLive" class="avatar" :class="{ live: phase === 'active' }">
@@ -471,71 +503,66 @@ onBeforeUnmount(() => clearInterval(unwatch))
         <span class="pulse" :style="{ transform: `scale(${1 + level * 0.5})`, opacity: 0.25 + level * 0.6 }" />
       </div>
       <video v-show="remoteVideoLive && localVideoLive && cameraOn" ref="localVideoEl" class="local-video" autoplay playsinline muted />
-      <div v-if="remoteVideoLive" class="video-tag">{{ peerName }}</div>
-      <!-- 摄像头关着（本端不发送）时的小角标 -->
-      <div v-if="inCall && !cameraOn && callType === 'video'" class="cam-off-tag">摄像头已关</div>
-    </div>
 
-    <!-- 信息行：对方 + 实时状态 -->
-    <div class="info">
-      <span class="name" :title="peerName">{{ peerName }}</span>
-      <span class="phase" :class="phase === 'active' ? 'active' : phase === 'ended' ? 'ended' : ''">{{ phaseText() }}</span>
-    </div>
-    <div v-if="error || remoteMuted" class="hints">
-      <span v-if="error">{{ error }}</span>
-      <span v-if="remoteMuted">对方静音了</span>
-      <span v-if="iceState === 'failed'">NAT 穿透失败</span>
-    </div>
-
-    <!-- 控制行：通话中=静麦/静扬声器/摄像头/挂断；空闲=接通；来电=接听/拒接 -->
-    <div class="controls">
-      <template v-if="phase === 'incoming'">
-        <button class="cbtn reject" title="拒接" @click="reject">✕</button>
-        <button class="cbtn accept" title="接听" @click="accept">📞</button>
-      </template>
-      <template v-else-if="idleState">
-        <button class="cbtn connect" title="与助手接通实时视频通话" @click="startAssistantCall">
-          📹 <span class="cbtn-text">接通</span>
-        </button>
-      </template>
-      <template v-else>
-        <button
-          class="cbtn"
-          :class="{ off: muted }"
-          :disabled="phase === 'ended' || phase === 'idle'"
-          :title="muted ? '取消静音（麦克风）' : '静音（麦克风）'"
-          @click="toggleMute"
-        >
-          {{ muted ? '🔇' : '🎙' }}
-        </button>
-        <button
-          class="cbtn"
-          :class="{ off: speakerMuted }"
-          :title="speakerMuted ? '打开扬声器' : '静扬声器（听不到对方）'"
-          @click="toggleSpeaker"
-        >
-          {{ speakerMuted ? '🔈' : '🔊' }}
-        </button>
-        <button
-          v-if="callType === 'video'"
-          class="cbtn"
-          :class="{ off: !cameraOn }"
-          :disabled="phase === 'ended' || phase === 'idle'"
-          :title="cameraOn ? '关闭摄像头' : '打开摄像头'"
-          @click="toggleCamera"
-        >
-          📹
-        </button>
-      </template>
+      <!-- 控制按钮（盖在画面顶部，底部半段被聊天叠盖）：来电=拒接/接听；空闲=接通；通话中=静麦/静扬声器/摄像头 -->
+      <div class="controls">
+        <template v-if="phase === 'incoming'">
+          <button class="cbtn reject" title="拒接" @click="reject">
+            <svg viewBox="0 0 24 24" v-html="ICONS.x" />
+          </button>
+          <button class="cbtn accept" title="接听" @click="accept">
+            <svg viewBox="0 0 24 24" v-html="ICONS.phone" />
+          </button>
+        </template>
+        <template v-else-if="idleState">
+          <button class="cbtn connect" title="与助手接通实时视频通话" @click="startAssistantCall">
+            <svg viewBox="0 0 24 24" v-html="ICONS.cam" />
+          </button>
+        </template>
+        <template v-else>
+          <button
+            class="cbtn"
+            :class="{ off: muted }"
+            :disabled="phase === 'ended' || phase === 'idle'"
+            :title="muted ? '取消静音（麦克风）' : '静音（麦克风）'"
+            @click="toggleMute"
+          >
+            <svg viewBox="0 0 24 24" v-html="muted ? ICONS.micOff : ICONS.mic" />
+          </button>
+          <button
+            class="cbtn"
+            :class="{ off: speakerMuted }"
+            :title="speakerMuted ? '打开扬声器' : '静扬声器（听不到对方）'"
+            @click="toggleSpeaker"
+          >
+            <svg viewBox="0 0 24 24" v-html="speakerMuted ? ICONS.volumeOff : ICONS.volume" />
+          </button>
+          <button
+            v-if="callType === 'video'"
+            class="cbtn"
+            :class="{ off: !cameraOn }"
+            :disabled="phase === 'ended' || phase === 'idle'"
+            :title="cameraOn ? '关闭摄像头' : '打开摄像头'"
+            @click="toggleCamera"
+          >
+            <svg viewBox="0 0 24 24" v-html="cameraOn ? ICONS.cam : ICONS.camOff" />
+          </button>
+        </template>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* 常驻在右栏顶部，融在桌面上：无卡片壳（透明、无边框、无阴影）；画面区本身保留一块播放面 */
+/* 画面区：视频从顶部按比例自适应（宽度撑满、高度随视频比例），
+   下半段被聊天覆盖层（顶端渐隐）叠在上面，控制按钮放画面顶部 */
 .call-widget {
   position: relative;
-  flex: none;
+  /* 画面随右栏整栏拉伸（聊天是覆盖层不在流内，不再分上下两段） */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: transparent;
   border: none;
   overflow: hidden;
@@ -544,7 +571,8 @@ onBeforeUnmount(() => clearInterval(unwatch))
 
 .media {
   position: relative;
-  height: 138px;
+  flex: 1;
+  min-height: 200px;
   border-radius: 12px;
   /* 半透明暗底：无画面时背景网格透出来；有画面时被视频帧盖住，不影响观看 */
   background: rgba(6, 11, 20, 0.55);
@@ -556,8 +584,13 @@ onBeforeUnmount(() => clearInterval(unwatch))
 
 .remote-video {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  /* 高度按视频宽高比自适应：从顶部开始显示，不拉伸不居中裁剪。
+     竖屏视频超出栏高时 max-height 兜底，contain 保证画面完整（左右留暗边） */
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  align-self: flex-start;
+  background: #000;
 }
 
 .avatar {
@@ -592,7 +625,7 @@ onBeforeUnmount(() => clearInterval(unwatch))
 .local-video {
   position: absolute;
   right: 8px;
-  bottom: 8px;
+  top: 8px;
   width: 84px;
   height: 56px;
   object-fit: cover;
@@ -601,95 +634,46 @@ onBeforeUnmount(() => clearInterval(unwatch))
   background: #000;
 }
 
-.video-tag {
-  position: absolute;
-  top: 6px;
-  left: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  font-size: 10.5px;
-  max-width: 80%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cam-off-tag {
-  position: absolute;
-  right: 8px;
-  top: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.5);
-  color: var(--warn);
-  font-size: 10px;
-}
-
-.info {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px 0;
-}
-
-.name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.phase {
-  flex: none;
-  font-size: 11.5px;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.phase.active {
-  color: var(--ok);
-}
-
-.phase.ended {
-  color: var(--fail);
-}
-
-.hints {
-  padding: 2px 12px 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.hints span {
-  font-size: 10.5px;
-  color: var(--warn);
-}
-
+/* 控制按钮：盖在画面顶部（下半段被聊天覆盖层占住，底部按钮会被盖住点不到），
+   渐变底衬保证看得清；容器本身不挡画面点击 */
 .controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 9px 12px 11px;
+  gap: 10px;
+  padding: 10px 10px 22px;
+  background: linear-gradient(to bottom, rgba(4, 8, 16, 0.7), transparent);
+  pointer-events: none;
 }
 
 .cbtn {
-  width: 38px;
-  height: 38px;
+  pointer-events: auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  font-size: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(10, 16, 26, 0.62);
+  color: #fff;
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
+  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s, background 0.12s;
+}
+
+/* 图标统一 16px 线性风，stroke 跟随按钮颜色 */
+.cbtn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .cbtn:hover:not(:disabled) {
@@ -704,29 +688,18 @@ onBeforeUnmount(() => clearInterval(unwatch))
 }
 
 .cbtn.off {
-  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 60%, transparent);
+  background: color-mix(in srgb, var(--warn) 22%, rgba(10, 16, 26, 0.62));
 }
 
 .cbtn.accept,
 .cbtn.connect {
   background: var(--ok);
   border-color: var(--ok);
-  width: auto;
-  padding: 0 14px;
-  gap: 6px;
-  display: inline-flex;
-  align-items: center;
-  font-size: 13px;
 }
 
 .cbtn.reject {
   background: var(--fail);
   border-color: var(--fail);
-}
-
-.cbtn-text {
-  color: #fff;
-  font-weight: 600;
 }
 </style>
