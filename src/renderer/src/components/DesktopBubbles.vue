@@ -114,23 +114,23 @@ function titleOf(conversationID: string): string {
   position: absolute;
   pointer-events: auto;
   max-width: 360px;
-  /* 底边不出桌面：超高先上移，顶到头再内部滚动（maxHeight 由 adjust() 按窗口高度设置） */
+  /* 限高 400px：超长内部滚动（adjust() 会再按窗口高度收紧）；思考/回复一致。
+     底边不出桌面：超高先上移，顶到头再内部滚动（maxHeight 由 adjust() 按窗口高度设置） */
+  max-height: 400px;
   display: flex;
   flex-direction: column;
+  gap: 4px;
   overflow: hidden;
   padding: 8px 12px 9px;
   border-radius: 14px;
   border: 1px solid var(--accent-a35);
-  background: var(--panel-card-deep-a80, rgba(10, 16, 28, 0.82));
+  background: var(--panel-card-deep-a82);
   box-shadow:
     0 0 16px var(--accent-a12),
     0 12px 30px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .tag {
@@ -150,11 +150,6 @@ function titleOf(conversationID: string): string {
 
 .bubble.thinking .tag {
   color: var(--warn);
-}
-
-/* 气泡限高 400px：超长内部滚动（adjust() 会再按窗口高度收紧）；思考/回复一致 */
-.bubble {
-  max-height: 400px;
 }
 
 .text {

@@ -169,6 +169,8 @@
   --panel-card-deep-a28: rgba(10, 25, 45, 0.28);
   --panel-card-deep-a45: rgba(10, 25, 45, 0.45);
   --panel-card-deep-a55: rgba(10, 25, 45, 0.55);
+  /* a82：桌面投层气泡专用。基色 (10,16,28) 比家族基色 (10,25,45) 更深更冷，是历史值、有意保留 */
+  --panel-card-deep-a82: rgba(10, 16, 28, 0.82);
   --panel-card-deep-a92: rgba(10, 25, 45, 0.92);
   --panel-glass-deep: rgba(8, 22, 40, 0.62); /* HUD 台面玻璃底（输入台/挂件） */
   --panel-a22: rgba(9, 21, 38, 0.22); /* --panel 同色的更透一档（网格线底） */
