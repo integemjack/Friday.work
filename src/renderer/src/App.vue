@@ -23,6 +23,7 @@ import SessionList from './components/SessionList.vue'
 import AssistantChat from './components/AssistantChat.vue'
 import DesktopBubbles from './components/DesktopBubbles.vue'
 import DesktopOps from './components/DesktopOps.vue'
+import CenterScene from './components/CenterScene.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
 
@@ -114,8 +115,10 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
         <SessionList />
       </aside>
 
-      <!-- 中间：桌面主区留白（气泡/操作卡落在几何上的这一块） -->
-      <section class="main-area" />
+      <!-- 中间：3D 场景铺在背景上（网格地面 + 自转陀螺环，纯 CSS 不挡交互），气泡/操作卡投在它上面 -->
+      <section class="main-area">
+        <CenterScene />
+      </section>
 
       <!-- 右栏：通话面板（常驻顶部）+ 与助手聊天（常驻底部），不放别的 -->
       <aside class="side side-right">
