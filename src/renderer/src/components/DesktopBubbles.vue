@@ -166,11 +166,11 @@ function titleOf(conversationID: string): string {
   /* 气泡顶到头后内部滚动：flex 子项缩到 0 起滚，adjust() 自动滚到最新一条 */
   min-height: 0;
   overflow-y: auto;
-  /* 滚动条贴紧气泡右边框：右拉到边（负 margin 抵消气泡右内边距），文字再补回右内边距；
-     槽位常驻，出现滚动条时文字宽度不跳变 */
+  /* 滚动条贴紧气泡右边框：右拉到边（负 margin 抵消气泡右内边距），文字再补回右内边距。
+     不能加 scrollbar-gutter:stable——它会把滚动条连着预留槽一起缩到元素内侧，
+     离右边框空出一个滚动条宽（实验实测）；代价是滚动条出现时文字窄 6px，可接受 */
   margin-right: -12px;
   padding-right: 12px;
-  scrollbar-gutter: stable;
 }
 
 /* 气泡内的滚动条：比全局窄一半，贴着右边框立一道细光条 */
