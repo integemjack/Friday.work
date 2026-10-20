@@ -20,8 +20,9 @@ const props = defineProps<{
   maximized: boolean
   minWidth?: number
   minHeight?: number
-  /** 桌面直显：窗体不铺底不模糊，内容直接浮在桌面背景上（终端用，2026-10-21） */
-  clearBody?: boolean
+  /** 外框朴素：不画四角括号与顶缘光线、不加青色外发光（终端用，2026-10-21）。
+   *  背景与模糊不走这里——和文件窗口同一套（见 styles 里的 .win） */
+  plainChrome?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -110,7 +111,7 @@ onBeforeUnmount(onUp)
   <div
     v-show="!minimized"
     class="win"
-    :class="{ maximized, dragging, 'clear-body': clearBody }"
+    :class="{ maximized, dragging, 'plain-chrome': plainChrome }"
     :style="style"
     @mousedown="emit('focus')"
   >
@@ -168,24 +169,18 @@ onBeforeUnmount(onUp)
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.24);
 }
 
-/* 桌面直显窗（终端）：窗体不铺底、也不模糊——终端内容直接浮在桌面网格/星野上，
-   不留黑底方块；模糊得一起去掉，否则底下那层网格被糊平，看着仍然是一片暗底。
-   选择器里多挂一档 [data-theme='jarvis']：jarvis 那条 .win 的 blur 与本条同特异度、
-   而且排在文件后面（层叠同分看先后），不带上它就是压不过 */
-.win.clear-body,
-[data-theme='jarvis'] .win.clear-body {
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+/* 终端窗外框朴素：不画四角括号与顶缘光线，也不加青色外发光（只留一道描边 + 投影）。
+   背景与模糊和文件窗口同一套（默认 .win 的 --panel、jarvis 的 blur(14px)），这里不再另设——
+   终端画布本身是透明的，磨砂效果由窗体这层给 */
+[data-theme='jarvis'] .win.plain-chrome,
+[data-theme='jarvis'] .win.plain-chrome.dragging {
+  box-shadow:
+    0 0 0 1px var(--accent-a10),
+    0 12px 30px rgba(0, 0, 0, 0.45);
 }
 
-/* 没有面板就不去框它：这类窗体不收四角括号和顶缘光线，外发光也收完（只留一道描边） */
-[data-theme='jarvis'] .win.clear-body {
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-}
-
-[data-theme='jarvis'] .win.clear-body::before,
-[data-theme='jarvis'] .win.clear-body::after {
+[data-theme='jarvis'] .win.plain-chrome::before,
+[data-theme='jarvis'] .win.plain-chrome::after {
   content: none;
 }
 
