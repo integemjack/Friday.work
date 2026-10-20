@@ -288,8 +288,6 @@ export const useAppStore = defineStore('app', {
     loginActive: false,
     /** 手动打开的登录页（换账号/重新扫码时盖在桌面上） */
     loginOverlay: false,
-    /** 桌面直显面板（终端/文件/浏览器不再是浮动窗口）：true=展开。连上机器后铺在桌面上 */
-    docks: { files: true, browser: true, terminals: true } as Record<'files' | 'browser' | 'terminals', boolean>,
     /** 信令队列（state）：通话窗口从里面取（带序号，取过就不重复） */
     callSignals: [] as Array<{ seq: number; signal: unknown }>,
     callSignalSeq: 0,
@@ -379,12 +377,8 @@ export const useAppStore = defineStore('app', {
   actions: {
     // MARK: 桌面窗口
 
-    /** 开一个窗口（同类型已在就置顶；终端/文件/浏览器是桌面面板：点亮面板） */
+    /** 开一个窗口（同类型已在就置顶）；终端/文件/浏览器都是会话用到时才开的正常窗口，无常驻面板 */
     openWindow(kind: WindowKind, options: { title?: string } = {}): string {
-      if (kind === 'terminals' || kind === 'files' || kind === 'browser') {
-        this.docks[kind] = true
-        return ''
-      }
       const existing = this.windows.find((item) => item.kind === kind)
       if (existing) {
         if (options.title) existing.title = options.title
@@ -420,7 +414,9 @@ export const useAppStore = defineStore('app', {
     closeWindow(id: string) {
       const index = this.windows.findIndex((item) => item.id === id)
       if (index < 0) return
+      const item = this.windows[index]!
       this.windows.splice(index, 1)
+      if (item.kind === 'browser') void this.unwatchBrowser()
     },
 
     focusWindow(id: string) {
@@ -475,11 +471,6 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 折叠/展开一个桌面面板（终端/文件/浏览器） */
-    toggleDock(name: 'files' | 'browser' | 'terminals') {
-      this.docks[name] = !this.docks[name]
-    },
-
     /** 关掉某类窗口（切机器时用） */
     closeWindowsOfKind(kind: WindowKind) {
       for (const item of this.windows.filter((entry) => entry.kind === kind)) {
@@ -503,7 +494,6 @@ export const useAppStore = defineStore('app', {
       const desktopHeight = window.innerHeight
       const seen = new Set<string>()
       for (const item of items) {
-        if (item.kind === 'terminals' || item.kind === 'files' || item.kind === 'browser') continue // 这三类是桌面面板，不是窗口
         if (!WINDOW_SIZE[item.kind]) continue // 旧存档里已移除的类型直接丢
         if (seen.has(item.kind)) continue
         seen.add(item.kind)
@@ -961,8 +951,8 @@ export const useAppStore = defineStore('app', {
           this.browserTabs = state.tabs ?? []
           this.browserAvailable = state.available
           this.browserReason = state.reason ?? ''
-          // 会话开新浏览器标签 = 在用浏览器：面板立刻展开
-          if (this.browserTabs.some((tab) => !before.has(tab.id))) this.docks.browser = true
+          // 会话开新浏览器标签 = 在用浏览器：立刻开浏览器窗口（已有就置顶）
+          if (this.browserTabs.some((tab) => !before.has(tab.id))) this.openWindow('browser')
           break
         }
         case 'browser.frame': {
@@ -1421,11 +1411,11 @@ export const useAppStore = defineStore('app', {
       })
     },
 
-    /** 会话用到哪类工具，对应面板立刻展开 */
+    /** 会话用到哪类工具，对应窗口立即在桌面打开（已有就置顶） */
     noteToolUse(tool: string) {
-      if (/terminal|shell|command|exec|process/i.test(tool)) this.docks.terminals = true
-      if (/browser|navigate|web|http/i.test(tool)) this.docks.browser = true
-      if (/file|read|write|edit|glob|grep|list|dir|path|patch|search|download/i.test(tool)) this.docks.files = true
+      if (/terminal|shell|command|exec|process/i.test(tool)) this.openWindow('terminals')
+      if (/browser|navigate|web|http/i.test(tool)) this.openWindow('browser')
+      if (/file|read|write|edit|glob|grep|list|dir|path|patch|search|download/i.test(tool)) this.openWindow('files')
     },
 
     /** 上传一个主进程背书的文件，返回服务端路径 */

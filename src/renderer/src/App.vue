@@ -53,12 +53,6 @@ const jarvis = computed(() => uiTheme.value === 'jarvis')
 // 已有凭据/机器时协议进程会静默恢复，machines 一到 workbenchReady 就是 true，这个页不出现
 const showLogin = computed(() => !store.workbenchReady || store.loginOverlay)
 
-// 面板展开/折叠尺寸：左栏宽度、文件面板高度、终端高度固定档；浏览器在右栏里伸缩
-const dockStyle = computed(() => ({
-  '--dock-files': store.docks.files ? '260px' : '22px',
-  '--dock-term': store.docks.terminals ? '192px' : '22px'
-}))
-
 // 布局持久化：窗口开/关/拖/缩后防抖存一份（saveLayout 里已有内容签名比对，重复状态不落盘）
 let saveTimer = 0
 let lastSignature = ''
@@ -109,59 +103,23 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   <div class="app">
     <TitleBar />
 
-    <!-- 桌面：三栏网格（会话列表 | 主区 | 通话/浏览器/聊天），终端横贯中栏底部；
-         气泡和操作卡投在主区随机位置，浮动窗口（子 Agent / 设置）盖在最上面 -->
-    <div class="desktop" :style="dockStyle">
+    <!-- 桌面：三栏（会话列表 | 留白主区 | 通话+聊天）。
+         气泡和操作卡投在主区随机位置；终端/文件/浏览器/子 Agent/设置都是用到时才开的浮动窗口 -->
+    <div class="desktop">
       <!-- 贾维斯 HUD：全息雷达 + 真实状态（机器连接 / 窗口数 / 待确认 / 时钟） -->
       <JarvisHUD v-if="jarvis" />
 
-      <!-- 左栏：会话列表（常驻）+ 文件面板 -->
+      <!-- 左栏：会话列表（常驻，就这一样） -->
       <aside class="side side-left">
-        <div class="side-sessions"><SessionList /></div>
-        <div v-if="store.connected" class="dock dock-files" :class="{ collapsed: !store.docks.files }">
-          <div class="dock-body"><FilesCard /></div>
-          <div class="dock-rail">
-            <button class="dock-toggle" :title="store.docks.files ? '折叠文件' : '展开文件'" @click="store.toggleDock('files')">
-              {{ store.docks.files ? '⌄' : '⌃' }}
-            </button>
-            <span class="dock-label" @click="store.toggleDock('files')">文件</span>
-          </div>
-        </div>
+        <SessionList />
       </aside>
 
-      <!-- 中间：桌面主区（气泡/操作卡落在几何上的这一块）+ 终端面板 -->
-      <section class="main-area">
-        <div v-if="store.connected" class="dock dock-terminals" :class="{ collapsed: !store.docks.terminals }">
-          <div class="dock-body"><TerminalCard /></div>
-          <div class="dock-rail">
-            <button
-              class="dock-toggle"
-              :title="store.docks.terminals ? '折叠终端' : '展开终端'"
-              @click="store.toggleDock('terminals')"
-            >
-              {{ store.docks.terminals ? '⌃' : '⌄' }}
-            </button>
-            <span class="dock-label" @click="store.toggleDock('terminals')">终端</span>
-          </div>
-        </div>
-      </section>
+      <!-- 中间：桌面主区留白（气泡/操作卡落在几何上的这一块） -->
+      <section class="main-area" />
 
-      <!-- 右栏：通话面板（常驻顶部）+ 浏览器面板 + 与助手聊天（常驻底部） -->
+      <!-- 右栏：通话面板（常驻顶部）+ 与助手聊天（常驻底部），不放别的 -->
       <aside class="side side-right">
         <CallWidget />
-        <div v-if="store.connected" class="dock dock-browser" :class="{ collapsed: !store.docks.browser }">
-          <div class="dock-body"><BrowserCard /></div>
-          <div class="dock-rail">
-            <button
-              class="dock-toggle"
-              :title="store.docks.browser ? '折叠浏览器' : '展开浏览器'"
-              @click="store.toggleDock('browser')"
-            >
-              {{ store.docks.browser ? '⌃' : '⌄' }}
-            </button>
-            <span class="dock-label" @click="store.toggleDock('browser')">浏览器</span>
-          </div>
-        </div>
         <div class="side-chat"><AssistantChat /></div>
       </aside>
 
@@ -234,13 +192,11 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
   background-size: 22px 22px;
   background-position: -1px -1px;
-  /* 三栏两行网格：左=会话列表+文件，中=主区+终端，右=通话+浏览器+聊天（全部常驻面板） */
+  /* 三栏单行：左=会话列表，中=留白主区（气泡/操作卡/浮动窗口），右=通话+聊天 */
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr) 352px;
-  grid-template-rows: minmax(0, 1fr) var(--dock-term);
-  grid-template-areas:
-    'left main right'
-    'left term right';
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'left main right';
   gap: 8px;
   padding: 8px;
 }
@@ -258,26 +214,12 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   grid-area: left;
 }
 
-.side-sessions {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* ---- 中间 ---- */
+/* ---- 中间：留白主区 ---- */
 .main-area {
   grid-area: main;
   position: relative;
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-}
-
-/* 终端面板吃掉主区底部（网格第二行的中栏格），这里只是把它放进中栏流里 */
-.main-area .dock-terminals {
-  flex: none;
-  height: 100%;
 }
 
 /* ---- 右栏 ---- */
@@ -285,118 +227,11 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   grid-area: right;
 }
 
-/* 浏览器面板：展开吃掉右栏中段，折叠成 22px 细轨 */
-.dock-browser {
-  flex: 1 1 auto;
-  min-height: 120px;
-}
-
-.dock-browser.collapsed {
-  flex: none;
-  min-height: 0;
-  height: 22px;
-}
-
 .side-chat {
   flex: none;
   height: 340px;
-}
-
-/* ---- 桌面直显面板（扁平、无窗口样式） ---- */
-.dock {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-  background: var(--panel-card-deep-a55, rgba(8, 14, 24, 0.55));
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-.dock-files {
-  flex: none;
-  height: var(--dock-files);
-}
-
-.dock-terminals {
-  flex-direction: column;
-}
-
-.dock-body {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  background: transparent;
-  border-radius: inherit;
-  overflow: hidden;
-}
-
-/* 边缘轨道：展开时是内侧一条悬停可见的细条（只有箭头）；折叠时就是面板本体（22px，标签+箭头） */
-.dock-rail {
-  position: absolute;
-  inset: 0;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  cursor: pointer;
-  z-index: 5;
-}
-
-.dock:hover .dock-rail,
-.dock.collapsed .dock-rail {
-  display: flex;
-}
-
-/* 展开态：轨道只占上缘 16px（文件/浏览器/终端的折叠钮都在上缘，横向排） */
-.dock:not(.collapsed) .dock-rail {
-  bottom: auto;
-  height: 16px;
-  flex-direction: row;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 72%, transparent), transparent);
-}
-
-.dock:not(.collapsed) .dock-label {
-  display: none;
-}
-
-.dock-label {
-  font-size: 10px;
-  letter-spacing: 3px;
-  color: var(--text-3);
-  user-select: none;
-}
-
-.dock-toggle {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.dock-toggle:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-/* 折叠态：整条就是细轨（标签 + 展开箭头），内容 v-show 隐藏 */
-.dock.collapsed {
-  height: 22px;
-}
-
-.dock.collapsed .dock-body {
-  display: none;
+  /* 贴住右栏底部：上面是通话，中间留空给桌面 */
+  margin-top: auto;
 }
 
 /* 没连机器时提示铺满（盖在面板上层） */
