@@ -143,6 +143,10 @@ const statusMark: Record<string, string> = {
 .op.tall .result {
   max-height: min(400px, calc(100vh - 116px));
   overflow-y: auto;
+  /* 滚动条贴紧卡右边框：负 margin 抵消卡的右内边距（10px），文字再补回右内边距；
+     槽位常驻，出现滚动条时文字宽度不跳变（与气泡 .text 同一套做法） */
+  margin-right: -10px;
+  padding-right: 10px;
   scrollbar-gutter: stable;
 }
 
