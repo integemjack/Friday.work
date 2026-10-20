@@ -1,4 +1,5 @@
-/* Friday Work —— 简洁大气：纯色底、1px 分隔、圆角卡片；深浅色跟随系统 */
+/* Friday Work —— 设计令牌：三套主题的变量定义，全库唯一改色处
+   （浅色 :root / 深色 @media / 贾维斯 :root[data-theme]）。规则层一律引用这里的变量，不写字面色值。 */
 
 :root {
   /* 面板半透明：桌面内容与背景融合（磨砂玻璃），浅色 = 白玻璃 */
@@ -24,6 +25,10 @@
   --hover: rgba(120, 120, 130, 0.1);
   --selected: var(--accent-weak);
   --chip: rgba(120, 120, 130, 0.14);
+
+  /* 滚动条（base.css 通用规则引用）*/
+  --scrollbar-thumb: var(--border);
+  --scrollbar-thumb-hover: var(--border);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -50,6 +55,9 @@
     --hover: rgba(160, 160, 170, 0.12);
     --selected: var(--accent-weak);
     --chip: rgba(160, 160, 170, 0.16);
+
+    --scrollbar-thumb: var(--border);
+    --scrollbar-thumb-hover: var(--border);
   }
 }
 
@@ -84,5 +92,55 @@
 
   /* HUD 文案（状态行、时间戳、提示）用的等宽字体 */
   --font-hud: 'Cascadia Code', Consolas, monospace;
+
+  /* ---- 透明度梯度（color-mix 从基色派生，改基色自动跟随）----
+     命名：<基色令牌>-a<透明度×100>。供 [data-theme='jarvis'] 下的结构装饰层
+     （styles/jarvis.css 与各组件 scoped 里的贾维斯段）引用；
+     浅/深主题不定义这些——它们没有这层装饰，效果走 base.css 的通用变量。 */
+  --accent-a4: color-mix(in srgb, var(--accent) 4%, transparent);
+  --accent-a7: color-mix(in srgb, var(--accent) 7%, transparent);
+  --accent-a8: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-a10: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-a12: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-a18: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-a20: color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-a22: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-a25: color-mix(in srgb, var(--accent) 25%, transparent);
+  --accent-a28: color-mix(in srgb, var(--accent) 28%, transparent);
+  --accent-a30: color-mix(in srgb, var(--accent) 30%, transparent);
+  --accent-a32: color-mix(in srgb, var(--accent) 32%, transparent);
+  --accent-a35: color-mix(in srgb, var(--accent) 35%, transparent);
+  --accent-a40: color-mix(in srgb, var(--accent) 40%, transparent);
+  --accent-a45: color-mix(in srgb, var(--accent) 45%, transparent);
+  --accent-a55: color-mix(in srgb, var(--accent) 55%, transparent);
+  --accent-a60: color-mix(in srgb, var(--accent) 60%, transparent);
+  --accent-a70: color-mix(in srgb, var(--accent) 70%, transparent);
+  --accent-a90: color-mix(in srgb, var(--accent) 90%, transparent);
+  --ok-a28: color-mix(in srgb, var(--ok) 28%, transparent);
+  --ok-a30: color-mix(in srgb, var(--ok) 30%, transparent);
+  --ok-a55: color-mix(in srgb, var(--ok) 55%, transparent);
+  --run-a25: color-mix(in srgb, var(--run) 25%, transparent);
+  --run-a32: color-mix(in srgb, var(--run) 32%, transparent);
+  --run-a35: color-mix(in srgb, var(--run) 35%, transparent);
+  --warn-a25: color-mix(in srgb, var(--warn) 25%, transparent);
+  --warn-a30: color-mix(in srgb, var(--warn) 30%, transparent);
+  --warn-a55: color-mix(in srgb, var(--warn) 55%, transparent);
+  --fail-a35: color-mix(in srgb, var(--fail) 35%, transparent);
+  --fail-a55: color-mix(in srgb, var(--fail) 55%, transparent);
+  --fail-a60: color-mix(in srgb, var(--fail) 60%, transparent);
+  --text-3-a80: color-mix(in srgb, var(--text-3) 80%, transparent);
+
+  /* ---- 贾维斯专属面板层次（深色全息玻璃）---- */
+  --panel-input: rgba(13, 30, 52, 0.35); /* 输入卡 */
+  --panel-code: rgba(7, 20, 36, 0.85); /* 代码块/终端输出实底 */
+  --panel-card-deep: rgba(10, 25, 45, 0.5); /* 工具卡/思考块 */
+
+  /* ---- 文字 ---- */
+  --heading-bright: #d9f6ff; /* markdown 标题的亮青白 */
+  --code-inline-fg: #7dd3fc; /* 行内代码 */
+
+  /* ---- 滚动条（base.css 通用规则引用）---- */
+  --scrollbar-thumb: color-mix(in srgb, var(--accent) 35%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 

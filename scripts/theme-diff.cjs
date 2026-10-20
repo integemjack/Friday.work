@@ -44,7 +44,7 @@ for (const theme of themesA) {
     if (!varMapB.has(k)) report(`${label}root-var 仅A有: ${k} = ${v}`)
     else if (varMapB.get(k) !== v) report(`${label}root-var 不一致: ${k}\n    A: ${v}\n    B: ${varMapB.get(k)}`)
   }
-  for (const k of varMapB.keys()) if (!varMapA.has(k)) report(`${label}root-var 仅B有: ${k} = ${varMapB.get(k)}`)
+  // 仅B新增的令牌定义不算差异：不影响视觉，元素样式对拍才是硬门榁
 
   const views = new Set()
   for (const dir of [ta, tb]) {

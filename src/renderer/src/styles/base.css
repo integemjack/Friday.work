@@ -1,37 +1,5 @@
-/* Friday Work —— 元素基础样式与通用小件（主题无关：颜色全部走 tokens.css 的变量） */
-/* 深空底：中心一圈青色辉光 + 暗角，窗口浮在上面像全息投影 */
-html[data-theme='jarvis'] body {
-  background:
-    radial-gradient(ellipse 70% 55% at 50% 40%, rgba(34, 211, 238, 0.07), transparent 70%),
-    radial-gradient(ellipse 120% 90% at 50% 110%, rgba(8, 47, 73, 0.5), transparent 65%),
-    var(--bg);
-}
-
-html[data-theme='jarvis'] ::-webkit-scrollbar-thumb {
-  background: rgba(34, 211, 238, 0.35);
-  background-clip: content-box;
-}
-
-html[data-theme='jarvis'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(34, 211, 238, 0.55);
-  background-clip: content-box;
-}
-
-html[data-theme='jarvis'] ::selection {
-  background: rgba(34, 211, 238, 0.3);
-}
-
-/* 贾维斯下按钮/徽章的边框带一点青色呼吸感 */
-html[data-theme='jarvis'] .btn.primary {
-  background: linear-gradient(180deg, rgba(34, 211, 238, 0.9), rgba(14, 165, 191, 0.9));
-  border-color: rgba(34, 211, 238, 0.9);
-  color: #04121a;
-  text-shadow: none;
-}
-
-html[data-theme='jarvis'] .badge.ok { color: var(--ok); border-color: rgba(45, 212, 167, 0.55); }
-html[data-theme='jarvis'] .badge.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.55); }
-html[data-theme='jarvis'] .badge.fail { color: var(--fail); border-color: rgba(251, 95, 125, 0.55); }
+/* Friday Work —— 元素基础样式与通用小件（主题无关：颜色全部走 tokens.css 的变量。
+   贾维斯专属的全局规则在 styles/jarvis.css，不在本文件。） */
 
 * {
   box-sizing: border-box;
@@ -84,9 +52,14 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--scrollbar-thumb);
   border-radius: 5px;
   border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
 
