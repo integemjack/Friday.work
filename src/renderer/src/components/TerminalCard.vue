@@ -68,12 +68,14 @@ async function attach(id: string): Promise<void> {
   term.reset()
   try {
     const result = (await rpc(store.currentMachine, 'term.attach', { id })) as TermAttachResult
+    if (!term) return // 等回执的时候窗口可能已经关了
     term.reset()
     if (result.data) term.write(b64ToBytes(result.data))
     if (result.cols > 0 && result.rows > 0) term.resize(result.cols, result.rows)
     doFit()
     term.focus()
   } catch (error) {
+    if (!term) return
     term.write(`\r\n\x1b[31m接不上这个终端：${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`)
   } finally {
     loading.value = false
@@ -100,6 +102,21 @@ async function closeTerminal(id: string): Promise<void> {
   if (!store.currentMachine) return
   await rpc(store.currentMachine, 'term.close', { id }).catch(() => {})
   if (currentID === id) currentID = ''
+}
+
+/** 终端窗口关掉时：把里面挂着的终端全部真关掉（term.close）。
+ *  不关的话 shell 会一直留在机器上跑，Agent 那边（read_terminal）也一直看得见——「在客户端里关了却没关」积下来就是一堆僵尸终端。
+ *  要收起窗口不关终端，用最小化。应用退出 / 整页刷新不走这里，终端照旧留给机器上的会话。 */
+function closeAllTerminalsOnWindowClose(): void {
+  const machine = store.currentMachine
+  const ids = store.terminals.map((terminal) => terminal.id)
+  if (!machine || ids.length === 0) return
+  // 先把本地列表清掉（标签随窗口一起消失）；服务端的 terminals 事件回来只是确认，断了也不残留
+  store.terminals = []
+  store.activeTerminalID = ''
+  for (const id of ids) {
+    void rpc(machine, 'term.close', { id }).catch(() => {})
+  }
 }
 
 onMounted(async () => {
@@ -161,6 +178,17 @@ onBeforeUnmount(() => {
   term?.dispose()
   term = null
 })
+
+// 终端窗口从窗口列表里消失 = 用户把它关了：把里面挂着的终端全部真关掉（closeAllTerminalsOnWindowClose）。
+// 用 watch 窗口列表而不是 onBeforeUnmount：热更新也会卸载重挂组件，那样不能把终端带走；
+// sync：窗口从 store 里删掉的那一刻同步执行——pre/post 会随组件卸载一起被停掉，来不及跑
+watch(
+  () => store.windows.some((item) => item.kind === 'terminals'),
+  (open, wasOpen) => {
+    if (wasOpen && !open) closeAllTerminalsOnWindowClose()
+  },
+  { flush: 'sync' }
+)
 
 async function selectTerminal(id: string): Promise<void> {
   if (id === currentID) return
