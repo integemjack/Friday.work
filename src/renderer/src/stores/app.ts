@@ -363,6 +363,10 @@ export const useAppStore = defineStore('app', {
     terminals: [] as TerminalInfo[],
     terminalsAvailable: false,
     terminalsReason: '',
+    /** Agent 在这段会话里自动弹开过终端窗口的会话（run_in_terminal 开新终端 / 用终端的工具）：
+     *  会话做完（finished）把终端窗口收起（最小化，标签和终端都留着，随时点开复查）；
+     *  用户自己手动开的终端窗口不记，不收 */
+    autoTerminals: new Set<string>(),
     browserTabs: [] as BrowserTab[],
     browserAvailable: false,
     browserReason: '',
@@ -717,6 +721,7 @@ export const useAppStore = defineStore('app', {
       this.terminals = []
       this.terminalsAvailable = false
       this.terminalsReason = ''
+      this.autoTerminals.clear()
       this.browserTabs = []
       this.browserAvailable = false
       this.browserReason = ''
@@ -977,7 +982,7 @@ export const useAppStore = defineStore('app', {
               if (tool) {
                 next.currentTool = { tool: tool.tool ?? '', title: tool.title ?? '', summary: tool.summary ?? '' }
                 // 会话用到终端/浏览器/文件：对应面板立刻展开（订阅不上时这里也能投出操作卡）
-                this.noteToolUse(tool.tool ?? '')
+                this.noteToolUse(tool.tool ?? '', evt.conversationID)
                 if (!this.details[evt.conversationID]) {
                   this.pushOp({
                     id: `act:${evt.conversationID}:${tool.tool ?? ''}`,
@@ -1020,6 +1025,12 @@ export const useAppStore = defineStore('app', {
               next.status = status === 'question' ? 'question' : status === 'quota' ? 'quota' : status === 'error' ? 'error' : 'idle'
               if (brief) next.lastBrief = brief as Record<string, unknown>
               next.currentTool = undefined
+              // 这段会话里 Agent 自动弹开过的终端窗口：做完了收起（最小化，标签和终端都留着，
+              // 任务栏点开就能复查）；之后又用到终端会重新弹出来。用户手动开的不动
+              if (this.autoTerminals.delete(evt.conversationID)) {
+                const win = this.windows.find((item) => item.kind === 'terminals')
+                if (win && !win.minimized) this.minimizeWindow(win.id)
+              }
               // 会话收尾：还没结果的操作卡都收掉（消息补丁那路会带真结果，这里兑底）
               for (const card of this.opCards) {
                 if (card.conversationID === evt.conversationID && card.status === 'running') {
@@ -1045,10 +1056,12 @@ export const useAppStore = defineStore('app', {
           if (this.activeTerminalID && !this.terminals.some((terminal) => terminal.id === this.activeTerminalID)) {
             this.activeTerminalID = ''
           }
-          // Agent 用 run_in_terminal 开的新终端：一出现就选中并打开卡片（方案 §5.4）
+          // Agent 用 run_in_terminal 开的新终端：一出现就选中并打开卡片（方案 §5.4）；
+          // 记下这段会话自动弹开过终端窗口（做完时收起，见 case 'finished'）
           const fresh = this.terminals.find((terminal) => !before.has(terminal.id) && terminal.command)
           if (fresh) {
             this.activeTerminalID = fresh.id
+            this.autoTerminals.add(fresh.conversationID)
             this.openWindow('terminals')
           } else if (!this.activeTerminalID && this.terminals.length > 0) {
             this.activeTerminalID = this.terminals[0]!.id
@@ -1725,8 +1738,12 @@ export const useAppStore = defineStore('app', {
  *  用浏览器，read_file / write_file / edit_file / find_files / search_files / list_directory
  *  这类在文件系统上干活的开文件面板；run_shell、web_search、search_memory、read_agent_log
  *  这些只是拿结果的操作不动文件系统/终端/浏览器，投操作卡即可，不弹面板 */
-    noteToolUse(tool: string) {
-      if (/terminal/i.test(tool)) this.openWindow('terminals')
+    noteToolUse(tool: string, conversationID?: string) {
+      // 用终端的记下这段会话（autoTerminals）：做完时把自动弹开的终端窗口收起（case 'finished'）
+      if (/terminal/i.test(tool)) {
+        if (conversationID) this.autoTerminals.add(conversationID)
+        this.openWindow('terminals')
+      }
       if (/browse/i.test(tool)) this.openWindow('browser')
       if (/file|directory/i.test(tool)) this.openWindow('files')
     },
