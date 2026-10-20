@@ -3,6 +3,7 @@
 // 没有标签页，只有「来自哪段会话 / 内容 / 结果」；有结果后 5 秒渐隐消失。
 // 审批也走这里（带 批准/拒绝 按钮）；数据与定时全在 store（pushOp / scheduleOpFade / fadeOp）。
 import { useAppStore } from '../stores/app.js'
+import InlineMedia from './InlineMedia.vue'
 
 const store = useAppStore()
 
@@ -38,6 +39,16 @@ const statusMark: Record<string, string> = {
             <span v-if="card.content" class="content">{{ card.content }}</span>
           </span>
         </div>
+        <!-- 看图/看视频的卡：媒体直接嵌在卡里（图片内联显示、视频静音循环自动播放）。
+             点媒体不冒泡，不会把卡点没 -->
+        <InlineMedia
+          v-if="card.toolName"
+          class="op-media"
+          :name="card.toolName"
+          :args="card.content"
+          :conversationID="card.conversationID"
+          compact
+        />
         <div v-if="card.result" class="line result" :class="card.status">{{ card.result }}</div>
         <div v-if="card.status === 'awaitingApproval'" class="approval-row">
           <button class="abtn" @click.stop="store.resolveApproval(card.id, false)">拒绝</button>
@@ -170,6 +181,10 @@ const statusMark: Record<string, string> = {
 .op.tall .content::-webkit-scrollbar-track,
 .op.tall .result::-webkit-scrollbar-track {
   background: transparent;
+}
+
+.op-media {
+  margin: 5px 0 0;
 }
 
 .result {

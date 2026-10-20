@@ -1,20 +1,15 @@
 // 工具卡片的媒体内嵌（看图 / 看视频）：从 analyze_image / analyze_video 的参数里取出媒体，
 // http(s)/data URL 直接当 src；本地文件走 fs.read 分块拉回来拼 Blob。
-// 图片直接显示，视频由 ToolCard 自动播放（静音循环 + 控件，可点开声音）。
+// 图片直接显示，视频自动播放（静音循环 + 控件，可点开声音）。
 // 本地文件只在卡片滚进视口时才拉（一条长消息里几十张看图卡片不能同时全量拉，会压垮 WebRTC 通道），
 // 失败自动重试一次（通道偶发抖动）。
 import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { FsReadResult, ToolEvent } from '../../../protocol/rpc/protocol.js'
 import { rpc } from './host.js'
 import { useAppStore } from '../stores/app.js'
+import { TOOL_MEDIA_ARG } from './mediaTools.js'
 
 type MediaKind = 'image' | 'video'
-
-/** 参数里装媒体路径的字段名：analyze_image → image，analyze_video → video */
-const TOOL_MEDIA_ARG: Record<string, { field: string; kind: MediaKind }> = {
-  analyze_image: { field: 'image', kind: 'image' },
-  analyze_video: { field: 'video', kind: 'video' }
-}
 
 const IMAGE_MIME: Record<string, string> = {
   png: 'image/png',
@@ -75,13 +70,19 @@ function sleep(ms: number): Promise<void> {
  * - state：idle / loading / ready / error / skipped；note：error/skipped 时给用户看的提示
  * - mediaEl：绑到媒体容器上，滚进视口才开始拉本地文件（:ref="setMediaEl"）
  */
-export function useToolMedia(tool: Ref<ToolEvent> | (() => ToolEvent)) {
+export function useToolMedia(
+  tool: Ref<ToolEvent> | (() => ToolEvent),
+  /** conversationID：相对路径按哪段会话的工作目录解析。桌面操作卡可能不属于活动会话，
+   *  不给（空）就退回活动会话——聊天面板里两段是同一段 */
+  options?: { conversationID?: () => string }
+) {
   const store = useAppStore()
 
   /** 相对路径 → 会话工作目录下的绝对路径（工具参数里的按对话工作目录解析；服务端 fs.read 不认相对路径） */
   function resolvePath(path: string): string {
     if (isAbsolute(path)) return path
-    const base = store.summaries.find((s) => s.id === store.activeConversationID)?.workingDirectory
+    const id = options?.conversationID?.() || store.activeConversationID
+    const base = store.summaries.find((s) => s.id === id)?.workingDirectory
     if (!base) return path
     return `${base.replace(/[\\/]+$/, '')}/${path.replace(/^[\\/]+/, '')}`
   }

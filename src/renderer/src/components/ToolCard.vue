@@ -4,7 +4,7 @@ import { computed, ref } from 'vue'
 import type { ToolEvent } from '../../../protocol/rpc/protocol.js'
 import { blockCase, blockPayload } from '../../../protocol/rpc/protocol.js'
 import ToolCard from './ToolCard.vue'
-import { useToolMedia } from '../lib/toolMedia.js'
+import InlineMedia from './InlineMedia.vue'
 
 const props = defineProps<{
   tool: ToolEvent
@@ -36,10 +36,6 @@ const statusText = computed(() => {
 })
 
 const title = computed(() => props.tool.title ?? props.tool.name)
-
-// 看图/看视频：把分析对象的图片/视频直接内嵌在卡片里（视频自动播放，详见 toolMedia.ts）。
-// 本地文件滚进视口才拉（mediaEl 绑给容器，懒加载）
-const { source: mediaSource, url: mediaURL, state: mediaState, note: mediaNote, setMediaEl } = useToolMedia(() => props.tool)
 
 /** 展开后的参数：JSON 就格式化，否则原样 */
 const prettyArguments = computed(() => {
@@ -99,29 +95,9 @@ function symbol(): string {
       <span class="tool-status" :class="statusClass">{{ statusText }}</span>
       <span class="tool-chevron">{{ open ? '▾' : '▸' }}</span>
     </div>
-    <!-- 内嵌媒体：图片直接显示；视频自动播放（静音循环，控件可开声音）。
-         点击不冒泡：操作视频控件 / 点图片不会折叠卡片 -->
-    <div v-if="mediaSource" :ref="setMediaEl" class="tool-media" @click.stop>
-      <img
-        v-if="mediaSource.kind === 'image' && mediaURL"
-        class="media-image"
-        :src="mediaURL"
-        :alt="mediaSource.src"
-        draggable="false"
-      />
-      <video
-        v-else-if="mediaSource.kind === 'video' && mediaURL"
-        class="media-video"
-        :src="mediaURL"
-        autoplay
-        muted
-        loop
-        playsinline
-        controls
-      />
-      <div v-if="mediaState === 'loading'" class="media-note">媒体加载中…</div>
-      <div v-else-if="mediaState === 'error' || mediaState === 'skipped'" class="media-note">{{ mediaNote }}</div>
-    </div>
+    <!-- 内嵌媒体（看图/看视频）：图片直接显示；视频自动播放（静音循环，控件可开声音）。
+         InlineMedia 内部处理懒加载，不是看图/看视频就不渲染 -->
+    <InlineMedia :name="tool.name" :args="tool.arguments" />
     <div v-if="!open" class="tool-summary">
       <div v-if="argumentSummary" class="arg">参数：{{ argumentSummary }}</div>
       <div v-if="resultSummary" class="res">{{ resultSummary }}</div>
@@ -205,39 +181,9 @@ function symbol(): string {
   font-size: 11px;
 }
 
-/* 内嵌媒体（看图/看视频） */
-.tool-media {
-  padding: 0 10px 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.tool-head + .tool-media {
-  padding-top: 2px;
-}
-
-.media-image {
-  max-width: 100%;
-  max-height: 320px;
-  width: auto;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  align-self: flex-start;
-}
-
-.media-video {
-  width: 100%;
-  max-height: 420px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: #000;
-  display: block;
-}
-
-.media-note {
-  font-size: 12px;
-  color: var(--text-3);
+/* 内嵌媒体由 InlineMedia 自带样式；这里只补卡片左右留白（不渲染时无节点、不占位） */
+.tool-card > :deep(.inline-media) {
+  padding: 2px 10px 5px;
 }
 
 .tool-summary {

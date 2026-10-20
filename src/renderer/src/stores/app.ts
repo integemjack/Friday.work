@@ -3,6 +3,7 @@
 
 import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
+import { isMediaTool } from '../lib/mediaTools.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
 import {
@@ -101,6 +102,8 @@ export interface DesktopOp {
   content: string
   result: string
   status: 'running' | 'awaitingApproval' | 'succeeded' | 'failed' | 'denied'
+  /** 工具名（看图 analyze_image / 看视频 analyze_video）：这些卡把媒体直接嵌在卡里展示 */
+  toolName?: string
   /** 全量内容的卡：内容/结果不截断（240 字/96px 那套裁剪不适用），各自限高 400（与思考气泡
  *  一致）内部滚动看全文。执行命令 / 写入文件 / 看图片 / 看视频——这些卡的内容就是要看的主体 */
   tall?: boolean
@@ -1472,6 +1475,7 @@ export const useAppStore = defineStore('app', {
       result: string
       status: DesktopOp['status']
       tall?: boolean
+      toolName?: string
     }) {
       // 已渐隐移除的卡不复活：后续补丁重walk到同一历史块时若重建，就会同一操作反复弹出
       if (this.fadedOps.has(card.id)) {
@@ -1492,6 +1496,7 @@ export const useAppStore = defineStore('app', {
         if (card.content) existing.content = card.content
         if (card.result) existing.result = card.result
         if (card.tall) existing.tall = true
+        if (card.toolName) existing.toolName = card.toolName
         if (card.status !== 'running' || existing.status === 'running') existing.status = card.status
         if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
         return
@@ -1511,10 +1516,12 @@ export const useAppStore = defineStore('app', {
       if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
     },
 
-    /** 操作到终态：5 秒后开始渐隐 */
+    /** 操作到终态：5 秒后开始渐隐。看图/看视频的卡不自动渐隐——
+     *  媒体要一直留在桌面上（视频还在循环播放），点卡才收 */
     scheduleOpFade(id: string) {
       const card = this.opCards.find((item) => item.id === id)
       if (!card || card.fading || card.timer) return
+      if (card.toolName && isMediaTool(card.toolName)) return
       card.timer = window.setTimeout(() => this.fadeOp(id), 5000)
     },
 
@@ -1599,7 +1606,8 @@ export const useAppStore = defineStore('app', {
         content: tall ? content : content.length > 240 ? `${content.slice(0, 240)}…` : content,
         result: event.result || '',
         status,
-        tall
+        tall,
+        toolName: event.name ?? ''
       })
     },
 
