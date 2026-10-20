@@ -1607,12 +1607,11 @@ export const useAppStore = defineStore('app', {
       if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
     },
 
-    /** 操作到终态：5 秒后开始渐隐。看图/看视频的卡不自动渐隐——
-     *  媒体要一直留在桌面上（视频还在循环播放），点卡才收 */
+    /** 操作到终态：5 秒后开始渐隐。看图/看视频不再例外——成功时媒体已归进
+     *  桌面的图片叠/视频叠（addStackMedia），卡照常 5 秒渐隐，媒体仍留在叠里可查看 */
     scheduleOpFade(id: string) {
       const card = this.opCards.find((item) => item.id === id)
       if (!card || card.fading || card.timer) return
-      if (card.toolName && isMediaTool(card.toolName)) return
       card.timer = window.setTimeout(() => this.fadeOp(id), 5000)
     },
 
