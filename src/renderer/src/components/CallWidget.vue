@@ -574,8 +574,8 @@ onBeforeUnmount(() => clearInterval(unwatch))
   flex: 1;
   min-height: 200px;
   border-radius: 12px;
-  /* 半透明暗底：无画面时背景网格透出来；有画面时被视频帧盖住，不影响观看 */
-  background: rgba(6, 11, 20, 0.55);
+  /* 无底色：右栏融进桌面背景（圆角留着裁视频画面的四角）；有画面时视频帧自己盖住 */
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;

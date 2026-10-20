@@ -3,7 +3,9 @@
    只在 <html data-theme="jarvis"> 下生效。这里负责所有窗口通用的元素
    （输入、按钮、代码块、状态行、卡片、头像、菜单、表格、状态点…），
    各窗口的结构性装饰（角括号、雷达、扫描线）在各组件 scoped 里。
-   注意：xterm 的隐藏输入框 .xterm-helper-textarea 必须排除，不能动。
+   注意：xterm 的隐藏输入框 .xterm-helper-textarea 必须排除，不能动；
+   输入台 .composer-card 里的 textarea 也排除：它是全息指令台的一部分，
+   不做独立的输入框外观（无青色底/描边/聚焦环，融进卡片）。
    颜色一律引用 tokens.css 的令牌（--accent-aXX 等梯度由 color-mix 从基色派生）。
    ============================================================ */
 
@@ -22,7 +24,7 @@ html[data-theme='jarvis'] .titlebar {
 
 /* 输入框 / 文本域：透明青底 + 聚焦辉光 */
 html[data-theme='jarvis']
-  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea) {
+  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea):not(.composer-card textarea) {
   background-color: var(--accent-a4);
   border-color: var(--accent-a25);
   caret-color: var(--accent);
@@ -30,7 +32,7 @@ html[data-theme='jarvis']
 }
 
 html[data-theme='jarvis']
-  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea):focus {
+  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea):not(.composer-card textarea):focus {
   border-color: var(--accent-a60);
   box-shadow:
     0 0 0 1px var(--accent-a22),
