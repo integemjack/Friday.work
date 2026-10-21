@@ -37,6 +37,12 @@ function md(blockID: string, caseName: string): string {
       <span class="role">{{ isUser() ? '你' : 'Friday' }}</span>
       <span v-if="message.agentName" class="agent">· {{ message.agentName }}</span>
       <span v-if="message.sentBy" class="agent">· 助手发送 · {{ message.sentBy }}</span>
+      <!-- 工作中补充（qt MessageRow）：智能体工作时插入的，做完当时那一步就交给了它 -->
+      <span
+        v-if="message.interjected"
+        class="agent interjected"
+        title="智能体工作时发的：做完当时那一步就交给了它"
+      >· 工作中补充</span>
       <span v-if="message.error" class="tag fail">{{ message.error }}</span>
       <span v-if="message.notice" class="notice">{{ message.notice }}</span>
     </div>
@@ -123,6 +129,10 @@ function md(blockID: string, caseName: string): string {
 
 .agent {
   color: var(--text-3);
+}
+
+.agent.interjected {
+  color: var(--accent);
 }
 
 .tag.fail {

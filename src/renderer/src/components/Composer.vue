@@ -192,7 +192,9 @@ function onDrop(event: DragEvent) {
 
 async function send() {
   const value = text.value.trim()
-  if ((!value && attachments.value.length === 0) || busy.value || sending.value) return
+  if ((!value && attachments.value.length === 0) || busy.value) return
+  // 生成中也能发（插入内容）：runner.submit 不带 whenBusy，服务端 == 输入框——
+  // 这段在工作就排进它的队列，做完当前这一步就交给它（REMOTE.md；qt ComposerView「补充给智能体」）
   busy.value = true
   uploadError.value = ''
   try {
@@ -427,13 +429,29 @@ async function newConversation(): Promise<void> {
         <span v-if="switchError" class="error">{{ switchError }}</span>
         <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
         <span v-else-if="dirError" class="error">{{ dirError }}</span>
-        <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+        <span class="hint">{{ sending ? 'Enter 补充给智能体 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
         <span class="spacer" />
-        <button v-if="sending" class="round-btn stop" title="停止生成" @click="stop">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="5" y="5" width="14" height="14" rx="2.5" />
-          </svg>
-        </button>
+        <!-- 生成中：停止键 + 补充键（插入内容：做完当前这一步就交给它；qt 同款双键） -->
+        <template v-if="sending">
+          <button class="round-btn stop" title="停止生成" @click="stop">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="5" y="5" width="14" height="14" rx="2.5" />
+            </svg>
+          </button>
+          <button
+            v-if="canSend"
+            class="round-btn send insert"
+            title="补充给智能体：做完当前这一步就交给它 (Enter)"
+            :disabled="busy"
+            @click="send"
+          >
+            <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19V5" />
+              <path d="M5 12l7-7 7 7" />
+            </svg>
+            <span v-else class="busy-dot" />
+          </button>
+        </template>
         <button
           v-else
           class="round-btn send"
