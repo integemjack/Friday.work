@@ -157,9 +157,6 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
       <!-- 贾维斯深空层：漂移星野 + 流星 + 星云（最底层，面板全是玻璃能透出来） -->
       <SpaceVeil v-if="jarvis" />
 
-      <!-- 贾维斯 HUD：全息雷达 + 真实状态（机器连接 / 窗口数 / 待确认 / 时钟） -->
-      <JarvisHUD v-if="jarvis" />
-
       <!-- 左栏：会话列表（常驻，就这一样） -->
       <aside class="side side-left">
         <SessionList />
@@ -171,6 +168,9 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
            媒体叠（看图/看视频成功归档，图片一叠视频一叠）压在最底层，被气泡/卡/窗口盖住就点不到；
            底部居中悬浮输入台（盖过投层气泡，别被随机投下的气泡挡住打字） -->
       <section class="main-area">
+        <!-- 贾维斯 HUD 挂在主区里（不挂桌面）：左右栏宽不对称（248/352），
+             挂桌面上居中会相对整窗偏左半个栏差——挂主区，雷达才正对两栏之间的空白中心 -->
+        <JarvisHUD v-if="jarvis" />
         <CenterScene v-if="!jarvis" />
         <DesktopMediaStacks />
         <div class="composer-dock">
