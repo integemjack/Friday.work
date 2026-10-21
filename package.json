@@ -1,6 +1,6 @@
 {
   "name": "friday-desktop-work",
-  "version": "0.5.37",
+  "version": "0.5.38",
   "description": "Friday 远程工作流客户端：SChat 扫码连入，WebRTC 工作通道（语音 / 视频 / 数据）",
   "main": "./out/main/index.js",
   "private": true,
