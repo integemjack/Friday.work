@@ -26,6 +26,7 @@ run('npx', ['esbuild', 'src/protocol/session/TargetParse.ts', '--bundle', '--pla
 run('npx', ['esbuild', 'src/renderer/src/lib/voiceMedia.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/voicemedia.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/speechInput.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--outfile=.tmp/speechinput.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/askUser.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/askuser.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/serviceUsage.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/serviceusage.cjs'])
 run('npx', ['esbuild', 'src/shared/update.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/update.cjs'])
 run('node', ['--test', 'test/'])
 

@@ -7,6 +7,7 @@ import type { EngineView } from '../stores/app.js'
 import type { CommandInfo } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
+import { usageForEntry, usageKey, type UsageLine } from '../lib/serviceUsage.js'
 
 const emit = defineEmits<{ submit: [text: string, attachments: Array<{ path: string; name: string }>] }>()
 
@@ -56,7 +57,9 @@ const currentEngineTip = computed(() => {
     !engine || engine.model === engine.title
       ? engine?.title || '默认模型'
       : `${engine.title} · ${engine.model}`
-  return `当前模型：${text}`
+  // 悬停给全：当前模型 + 这一家的余额 / 套餐用量明细（没有就不加）
+  const detail = engine ? usageOf(engine.id).detail : []
+  return [`当前模型：${text}`, ...detail.map((item) => item.text)].join('\n')
 })
 
 function toggleModelMenu() {
@@ -66,6 +69,40 @@ function toggleModelMenu() {
     voiceMenuOpen.value = false
     switchError.value = ''
   }
+}
+
+// 模型菜单开着：订服务端的用量推送（serviceUsage 事件）并查一遍各家余额 / 套餐用量；
+// 关掉就退订。所有关闭路径（再点一下、点外面、选定、切到目录菜单）都改 modelOpen，所以用 watch 看着它。
+watch(modelOpen, (open) => {
+  void store.watchServiceUsage(open)
+})
+onBeforeUnmount(() => {
+  if (modelOpen.value) void store.watchServiceUsage(false)
+})
+
+/** 这家服务现在要说的一句话（余额 / 套餐用量 / 额度用完；按接口地址 + 密钥名取，同一家的模型共用一份） */
+const engineUsage = computed<Map<string, { line?: UsageLine; detail: UsageLine[] }>>(() => {
+  const now = new Date()
+  const map = new Map<string, { line?: UsageLine; detail: UsageLine[] }>()
+  for (const engine of availableEngines.value) {
+    const key = usageKey(engine.baseURL ?? '', engine.apiKeySecret ?? '')
+    const entry = store.serviceUsage[key]
+    if (!entry) continue
+    map.set(engine.id, usageForEntry(entry, now))
+  }
+  return map
+})
+
+function usageOf(engineID: string): { line?: UsageLine; detail: UsageLine[] } {
+  return engineUsage.value.get(engineID) ?? { detail: [] }
+}
+
+/** 菜单项的悬停提示：服务商 · 模型 + 余额 / 用量的明细（有的话一项一行） */
+function engineTip(engine: EngineView): string {
+  const base =
+    engine.model && engine.model !== engine.title ? `${engine.title} · ${engine.model}` : engine.model || engine.title
+  const detail = usageOf(engine.id).detail
+  return detail.length > 0 ? [base, ...detail.map((item) => item.text)].join('\n') : base
 }
 
 async function chooseEngine(engine: EngineView) {
@@ -713,12 +750,17 @@ onBeforeUnmount(() => {
               :key="engine.id"
               class="model-item"
               :class="{ current: engine.id === currentEngineID }"
-              :title="engine.model && engine.model !== engine.title ? `${engine.title} · ${engine.model}` : engine.model || engine.title"
+              :title="engineTip(engine)"
               @click="chooseEngine(engine)"
             >
               <span class="model-item-main">
                 <span class="model-item-title">{{ engine.model || engine.title }}</span>
                 <span v-if="engine.model && engine.title && engine.model !== engine.title" class="model-item-model">{{ engine.title }}</span>
+                <span
+                  v-if="usageOf(engine.id).line"
+                  class="model-item-usage"
+                  :class="{ warning: usageOf(engine.id).line!.warning }"
+                >{{ usageOf(engine.id).line!.text }}</span>
               </span>
               <span v-if="engine.id === currentEngineID" class="model-check">✓</span>
             </button>
@@ -1366,6 +1408,20 @@ textarea::placeholder {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 服务端来的余额 / 套餐用量 / 额度用完（services.usage + serviceUsage 事件）：菜单里每个模型下面一行小字，
+   额度用完 / 余额不足时转橙色 */
+.model-item-usage {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-item-usage.warning {
+  color: var(--warn);
 }
 
 .model-check {

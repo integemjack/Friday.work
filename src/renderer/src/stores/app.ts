@@ -16,6 +16,13 @@ import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
 import { parseAskQuestions } from '../lib/askUser.js'
 import {
+  canQueryUsage,
+  usageKey,
+  type UsageEntry,
+  type UsageResult,
+  type UsageTarget
+} from '../lib/serviceUsage.js'
+import {
   blockCase,
   blockPayload,
   type ActivityEventParams,
@@ -53,6 +60,10 @@ export interface EngineView {
   title: string
   model: string
   kind?: string
+  /** 接口地址（余额 / 套餐用量按「接口地址 + 密钥名」认；REMOTE.md §6「在线服务」） */
+  baseURL?: string
+  /** 密钥库里的名字（只有名字，没有值） */
+  apiKeySecret?: string
   supportsTools?: boolean
   subAgentAllowed?: boolean
   disabled?: boolean
@@ -311,6 +322,13 @@ const activitySubscribed = new Set<string>()
 // 已订阅助手日志的机器（同上，模块级）。开着「和助手说」才订，退出/切机器就退（REMOTE.md §6「助手」）。
 const assistantSubscribed = new Set<string>()
 
+// 订了 config 的机器（服务端只把 serviceUsage 事件推给订着 config.subscribe 的客户端；模型选择器开着才订，关掉退订）。
+// 模块级，原因同上（放进 state 会被布局持久化序列化）。
+const usageSubscribed = new Set<string>()
+
+// 订不上 config 的机器（旧服务端没有这一组方法）：不再反复试，只能手动查一次
+const usageUnsupported = new Set<string>()
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     machines: [] as MachineStateInfo[],
@@ -442,6 +460,11 @@ export const useAppStore = defineStore('app', {
     browserFrame: null as { tab: string; data: string; viewport: [number, number] } | null,
     /** 这台机器的引擎（hello 快照 + engines 事件；输入框的模型选择器用） */
     engines: [] as EngineView[],
+    /** 各家在线服务的余额 / 套餐用量（services.usage 查 + serviceUsage 事件推；
+     *  键 = usageKey(接口地址, 密钥名)，和事件里的 observedKey 同一套写法） */
+    serviceUsage: {} as Record<string, UsageEntry>,
+    /** 模型选择器开着（要服务端推 serviceUsage）：打开时订 config.subscribe，关掉退订 */
+    usageWanted: false,
     /** 新对话默认引擎（liveState；输入框的模型选择器在未选过时显示它） */
     defaultEngineID: '',
     /** 当前机器最近选择的工作目录（hello 快照 + directories 事件；输入框的目录选择器用）。
@@ -725,6 +748,19 @@ export const useAppStore = defineStore('app', {
         }
         // 连上的机器订阅 activity（审批、动静总览的数据源）；刚连上的取一次实时卡片状态
         for (const machine of info.machines) {
+          // 模型选择器开着：服务端只把 serviceUsage 事件推给订着 config 的客户端——重连 / 切机器后补订一次，
+          // 从别处回来时补查一遍数（订阅是按连接的，断了就没了）
+          if (
+            machine.state === 'ready' &&
+            machine.id === this.currentMachine &&
+            this.usageWanted &&
+            !usageSubscribed.has(machine.id) &&
+            !usageUnsupported.has(machine.id)
+          ) {
+            void this.ensureUsageSubscription().then(() => {
+              if (usageSubscribed.has(machine.id)) void this.refreshServiceUsage(true)
+            })
+          }
           if (machine.state === 'ready' && !activitySubscribed.has(machine.id)) {
             activitySubscribed.add(machine.id)
             this.rpc(machine.id, 'activity.subscribe', {})
@@ -755,6 +791,8 @@ export const useAppStore = defineStore('app', {
             // 掉线：等重连后重新订阅
             activitySubscribed.delete(machine.id)
             assistantSubscribed.delete(machine.id)
+            usageSubscribed.delete(machine.id)
+            usageUnsupported.delete(machine.id)
             if (machine.id === this.currentMachine) {
               this.assistantState = null
               this.assistantEntries = []
@@ -815,6 +853,12 @@ export const useAppStore = defineStore('app', {
       if (this.currentMachine === id) return
       await this.leaveConversation()
       await this.closeAssistantChat()
+      // 用量订阅是按连接的：旧机器退掉（新机器由机器状态那一轮重新订，见 bindHost）
+      if (usageSubscribed.has(this.currentMachine)) {
+        usageSubscribed.delete(this.currentMachine)
+        rpc(this.currentMachine, 'config.unsubscribe', {}).catch(() => {})
+      }
+      usageUnsupported.delete(this.currentMachine)
       this.currentMachine = id
       this.summaries = []
       this.details = {}
@@ -850,6 +894,7 @@ export const useAppStore = defineStore('app', {
       this.teamRuns = []
       this.runnerState = null
       this.recentDirectories = null
+      this.serviceUsage = {}
       this.commands = null
       this.browserFrame = null
       this.activeTerminalID = ''
@@ -1282,6 +1327,11 @@ export const useAppStore = defineStore('app', {
           this.recentDirectories = state.recent ?? []
           break
         }
+        case 'serviceUsage': {
+          // 各家服务的余额 / 套餐用量变了（REMOTE.md §5；只有订了 config 的客户端才收）
+          this.applyServiceUsageEvent(params)
+          break
+        }
       }
     },
 
@@ -1653,6 +1703,141 @@ export const useAppStore = defineStore('app', {
       } catch {
         this.recentDirectories = null // 旧服务端：菜单里不列
       }
+    },
+
+    // MARK: 各家服务的余额 / 套餐用量（REMOTE.md §6「在线服务」）
+
+    /** 模型选择器开着（要推送）：订 config.subscribe —— 服务端只把 serviceUsage 事件推给订着 config 的客户端。
+     *  同时查一遍（菜单一打开就有数）。旧服务端没有 config：只手动查，没有推送。 */
+    async watchServiceUsage(on: boolean) {
+      this.usageWanted = on
+      const machine = this.currentMachine
+      if (!machine) return
+      if (!on) {
+        usageSubscribed.delete(machine)
+        rpc(machine, 'config.unsubscribe', {}).catch(() => {})
+        return
+      }
+      await this.ensureUsageSubscription()
+      await this.refreshServiceUsage()
+    },
+
+    /** 订这个客户端的 config（幂等）；旧服务端订不上就记下不再试 */
+    async ensureUsageSubscription() {
+      const machine = this.currentMachine
+      if (!machine || !this.usageWanted) return
+      if (this.currentMachineInfo?.state !== 'ready') return
+      if (usageSubscribed.has(machine) || usageUnsupported.has(machine)) return
+      try {
+        await rpc(machine, 'config.subscribe', {})
+        if (this.currentMachine !== machine) return
+        usageSubscribed.add(machine)
+      } catch {
+        // 旧服务端没有 config.subscribe：没有推送，只有手动查的那一次
+        if (this.currentMachine === machine) usageUnsupported.add(machine)
+      }
+    },
+
+    /** 当前机器要查哪些：可用引擎按「接口地址 + 密钥名」去重（同一家的多个模型只查一次；本机地址不查） */
+    usageTargets(): UsageTarget[] {
+      const targets = new Map<string, UsageTarget>()
+      for (const engine of this.engines) {
+        if (engine.disabled) continue
+        const baseURL = engine.baseURL ?? ''
+        if (!canQueryUsage(baseURL)) continue
+        const secretName = engine.apiKeySecret ?? ''
+        const key = usageKey(baseURL, secretName)
+        if (targets.has(key)) continue
+        // custom：客户端没有服务目录，不知道这家是不是「自定义服务」。传 true 时：认得的服务照旧（按地址），
+        // 不认得的地址会当成 one-api 这类中转试一次 billing 接口（本机地址上面已经滤掉了）
+        targets.set(key, { key, baseURL, secretName, custom: true })
+      }
+      return [...targets.values()]
+    },
+
+    /** 查一遍用量（services.usage）。force = 推送来说额度用完 / 恢复了，不管刚查过 */
+    async refreshServiceUsage(force = false) {
+      const machine = this.currentMachine
+      if (!machine || this.currentMachineInfo?.state !== 'ready') return
+      await Promise.all(this.usageTargets().map((target) => this.queryServiceUsage(target, force)))
+    },
+
+    /** 查一家（按接口地址 + 密钥名）。30 秒内查过的不重复查（推送里的「请求成功」很频繁） */
+    async queryServiceUsage(target: UsageTarget, force = false) {
+      const machine = this.currentMachine
+      if (!machine) return
+      const existing = this.serviceUsage[target.key]
+      if (existing?.loading) return
+      if (!force && existing && Date.now() - existing.checkedAt < 30_000) return
+      this.serviceUsage[target.key] = {
+        key: target.key,
+        baseURL: target.baseURL,
+        secretName: target.secretName,
+        custom: target.custom,
+        loading: true,
+        checked: existing?.checked ?? false,
+        supported: existing?.supported ?? false,
+        report: existing?.report,
+        observed: existing?.observed,
+        error: '',
+        checkedAt: existing?.checkedAt ?? 0
+      }
+      try {
+        const result = (await rpc(machine, 'services.usage', {
+          baseURL: target.baseURL,
+          secretName: target.secretName,
+          custom: target.custom
+        })) as UsageResult
+        if (this.currentMachine !== machine) return
+        this.serviceUsage[target.key] = {
+          key: target.key,
+          baseURL: target.baseURL,
+          secretName: target.secretName,
+          custom: target.custom,
+          loading: false,
+          checked: true,
+          supported: result.supported === true,
+          report: result.report,
+          observed: result.observed,
+          error: result.error ?? '',
+          checkedAt: Date.now()
+        }
+      } catch (error) {
+        if (this.currentMachine !== machine) return
+        this.serviceUsage[target.key] = {
+          key: target.key,
+          baseURL: target.baseURL,
+          secretName: target.secretName,
+          custom: target.custom,
+          loading: false,
+          checked: true,
+          supported: false,
+          error: error instanceof Error ? error.message : String(error),
+          checkedAt: Date.now()
+        }
+      }
+    },
+
+    /** 服务端推的用量变化（REMOTE.md §5：{changes: [{observedKey, observed}]}）：
+     *  额度用完 / 恢复（observed）的立刻重查；只是请求成功过的，30 秒内查过就不重复查。
+     *  手里还没有这份记录的（比如刚订上、菜单里还没列到它）：整批补一次 */
+    applyServiceUsageEvent(params: unknown) {
+      const changes = (params as { changes?: Array<{ observedKey?: string; observed?: boolean }> }).changes ?? []
+      let missing = false
+      for (const change of changes) {
+        const key = change.observedKey ?? ''
+        if (!key) continue
+        const entry = this.serviceUsage[key]
+        if (!entry) {
+          missing = true
+          continue
+        }
+        void this.queryServiceUsage(
+          { key: entry.key, baseURL: entry.baseURL, secretName: entry.secretName, custom: entry.custom },
+          change.observed === true
+        )
+      }
+      if (missing) void this.refreshServiceUsage(true)
     },
 
     /** 从最近目录里去掉一条（REMOTE.md directories.remove） */
