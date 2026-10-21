@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // 右栏下半段常驻的「与助手聊天」面板：叠在视频上面，顶端顶到视频中点、向上渐隐。
-// 作用在当前选中的会话上（左侧会话列表切换）；没选中时默认就是和助手的新对话（直接输入就开一段新的），流式输出同时以气泡投到桌面。
+// 默认作用在当前选中的会话上（左侧会话列表切换）；「和助手说」开着时改在所连机器的助手日志上
+// （assistant.say 发、assistant.entry 流式回，REMOTE.md §6），此时不碰会话。
 // 消息流（顶端渐隐）/ 审批横幅 / 信息行；输入框已挪到中间桌面底部（App.vue 挂 Composer）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import type { ChatMessage } from '../../../protocol/rpc/protocol.js'
 import MessageItem from './MessageItem.vue'
 import AskPanel from './AskPanel.vue'
 
@@ -23,6 +25,33 @@ const messages = computed(() => {
 })
 const runtime = computed(() => detail.value?.runtime ?? null)
 const approvals = computed(() => store.approvals[conversationID.value] ?? [])
+
+// MARK: 和助手说（助手模式）：面板改显所连机器的助手日志（JournalEntry → MessageItem 认的形状）
+const assistantChat = computed(() => store.assistantChat)
+/** 助手名字（config.name）或引擎名，都没有就「这台机器的助手」 */
+const assistantName = computed(() => {
+  const config = store.assistantState?.config as { name?: string } | undefined
+  return config?.name || store.assistantState?.brainEngineTitle || '这台机器的助手'
+})
+/** user 靠右，其余（assistant/receipt/tool/notice）都靠左；silent 的不显示；
+ *  流式同一条反复改（同 id），打断的标一下 */
+const assistantMessages = computed(() =>
+  store.assistantEntries
+    .filter((entry) => !(entry.data?.silent))
+    .map((entry) => ({
+      message: {
+        id: entry.id,
+        role: entry.kind === 'user' ? 'user' : 'assistant',
+        createdAt: entry.at,
+        blocks: entry.text ? [{ id: entry.id, kind: { text: entry.text } }] : [],
+        error: entry.data?.error ? '出错了' : undefined,
+        notice: entry.interrupted ? '被打断' : undefined,
+        agentName: entry.source && entry.kind === 'user' && entry.source !== 'desktop' ? entry.source : undefined
+      } as ChatMessage
+    }))
+)
+/** 面板实际显示的消息流：助手模式给助手日志，否则给当前会话 */
+const shownMessages = computed(() => (assistantChat.value ? assistantMessages.value : messages.value))
 
 // 排队 / 待插入的消息（runtime.queue）：像用户消息一样靠右、虚线描边的淡色气泡，可撤回（qt QueuedBubbles）
 const queued = computed(() => runtime.value?.queue ?? [])
@@ -71,6 +100,25 @@ async function scrollToBottom(immediate = false) {
 
 watch(messages, () => void scrollToBottom(), { deep: false })
 
+// 助手模式：新的日志条（自己说的 user）强制贴底，流式增长跟随滚动（同会话那套规则）
+watch(
+  () => store.assistantEntries,
+  (next, prev) => {
+    const from = prev?.length ?? 0
+    if (next.length > from && next[from]?.kind === 'user') {
+      stickToBottom.value = true
+      void scrollToBottom(true)
+    } else {
+      void scrollToBottom()
+    }
+  }
+)
+// 进/出助手模式：重置窗口化、回到底部
+watch(assistantChat, () => {
+  stickToBottom.value = true
+  void scrollToBottom(true)
+})
+
 // 输入框已挪到中间桌面底部（App.vue），提交不经过本组件；
 // 追加进来的是自己发的消息（user）时强制贴底——不管刚才滚到了哪里，都跟着回到底部。
 // 助手回复的流式增长不强制（上滚读历史时不被拽下去，仍走 stickToBottom 开关）。
@@ -91,6 +139,13 @@ watch(queued, (next, prev) => {
 })
 
 const statusLine = computed(() => {
+  if (assistantChat.value) {
+    if (store.assistantUnsupported) return '这台机器的 Friday 版本不带助手'
+    if (store.assistantState === null) return store.connected ? '正在拿助手日志…' : ''
+    if (store.assistantState.reacting) return '正在回复…'
+    if (!store.assistantState.enabled) return '助手关着：说的话只记日志、不会回'
+    return ''
+  }
   const current = runtime.value
   if (!current) return ''
   if (current.generating) return current.queue.length > 0 ? `正在生成 · ${current.queue.length} 条待插入` : '正在生成…'
@@ -106,10 +161,10 @@ const statusLine = computed(() => {
   <section class="assistant-chat" data-testid="assistant-chat">
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
       <div ref="messagesEl" class="messages">
-        <MessageItem v-for="entry in messages" :key="entry.message.id" :message="entry.message" />
+        <MessageItem v-for="entry in shownMessages" :key="entry.message.id" :message="entry.message" />
 
-        <!-- 排队 / 待插入的消息（qt QueuedBubbles）：靠右虚线气泡，随列表滚动，接在消息流末尾 -->
-        <div v-if="queued.length > 0" class="queued">
+        <!-- 排队 / 待插入的消息（qt QueuedBubbles）：靠右虚线气泡，随列表滚动，接在消息流末尾（会话模式才有） -->
+        <div v-if="!assistantChat && queued.length > 0" class="queued">
           <div v-for="item in queued" :key="item.id" class="queued-item">
             <div v-if="item.attachments.length > 0" class="queued-atts" :title="item.attachments.join(', ')">
               📎 {{ item.attachments.map(baseName).join('、') }}
@@ -123,15 +178,25 @@ const statusLine = computed(() => {
           </div>
         </div>
 
-        <div v-if="!conversationID" class="hint">
-          {{ store.connected ? '直接说话，和助手开一段新对话' : '先连上机器' }}
+        <div v-if="assistantChat ? assistantMessages.length === 0 : !conversationID" class="hint">
+          {{
+            assistantChat
+              ? store.assistantUnsupported
+                ? '这台机器的 Friday 版本不带助手'
+                : store.connected
+                  ? '直接说话，发给这台机器上的助手'
+                  : '先连上机器'
+              : store.connected
+                ? '直接说话，和助手开一段新对话'
+                : '先连上机器'
+          }}
         </div>
       </div>
     </div>
 
-    <!-- 审批横幅 / 信息行挪到底部（消息流顶端直通视频中点、渐隐，顶部不再压文字）。
-         ask_user 的待确认不足批准/拒绝：展开成问题面板（选项点选/自己写/跳过，AskPanel） -->
-    <div v-if="approvals.length > 0" class="approval-bar">
+    <!-- 审批横幅 / 信息行挪到底部（消息流顶端直通视频中点、渐隐，顶部不再压文字）；
+         会话模式才有审批（助手日志里没有审批卡） -->
+    <div v-if="!assistantChat && approvals.length > 0" class="approval-bar">
       <div
         v-for="approval in approvals"
         :key="approval.eventID"
@@ -161,11 +226,21 @@ const statusLine = computed(() => {
 
     <header class="head">
       <span class="head-title">助手</span>
-      <!-- 没选会话时也占位显示「新对话」：默认态就是和助手的新对话 -->
-      <span class="session-name" :title="summary?.title">{{ conversationID ? summary?.title || '（无标题）' : '新对话' }}</span>
+      <!-- 助手模式：显示助手名字；没选会话时也占位显示「新对话」：默认态就是和助手的新对话 -->
+      <span class="session-name" :title="summary?.title">{{
+        assistantChat ? assistantName : conversationID ? summary?.title || '（无标题）' : '新对话'
+      }}</span>
       <span v-if="statusLine" class="status-line">{{ statusLine }}</span>
       <span class="spacer" />
-      <button v-if="runtime?.generating" class="stop-btn" @click="store.stopRunner(conversationID)">停止</button>
+      <button
+        v-if="assistantChat"
+        class="stop-btn"
+        :disabled="!(store.assistantState?.reacting ?? false)"
+        @click="store.assistantStop()"
+      >
+        停止
+      </button>
+      <button v-else-if="runtime?.generating" class="stop-btn" @click="store.stopRunner(conversationID)">停止</button>
     </header>
   </section>
 </template>
@@ -231,6 +306,11 @@ const statusLine = computed(() => {
 .stop-btn:hover {
   border-color: var(--fail);
   color: var(--fail);
+}
+
+.stop-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .approval-bar {

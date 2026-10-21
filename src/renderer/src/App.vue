@@ -135,10 +135,14 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   settings: { minWidth: 420, minHeight: 320 }
 }
 
-// 中间桌面底部的输入台：提交作用在当前选中会话上（和原来右栏聊天里的那一个一样）；
-// 没选中会话时默认和助手开一段新的（输入台旁的「开新会话」键显式开，AssistantChat 空态显示「新对话」）
+// 中间桌面底部的输入台：提交作用在当前选中会话上（没选中时默认和助手开一段新的，
+// 「开新会话」键显式开）；「和助手说」开着时不走会话，直接发给所连机器的助手（assistant.say）
 const conversationID = computed(() => store.activeConversationID)
 async function onComposerSubmit(text: string, attachments: Array<{ path: string; name: string }>) {
+  if (store.assistantChat) {
+    await store.assistantSay(text, attachments.map((attachment) => attachment.path))
+    return
+  }
   await store.submitText(text, attachments)
 }
 </script>

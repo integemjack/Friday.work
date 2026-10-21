@@ -20,6 +20,9 @@ import {
   blockPayload,
   type ActivityEventParams,
   type AskQuestion,
+  type AssistantEntry,
+  type AssistantState,
+  type AssistantSubscribeResult,
   type BlocksPatch,
   type BrowserFrameParams,
   type BrowserTab,
@@ -303,6 +306,9 @@ export function saveLayout(store: {
 // 之前就是这么写的，导致 activity.subscribe 整段崩、遥测面板/会话恢复不工作）。
 const activitySubscribed = new Set<string>()
 
+// 已订阅助手日志的机器（同上，模块级）。开着「和助手说」才订，退出/切机器就退（REMOTE.md §6「助手」）。
+const assistantSubscribed = new Set<string>()
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     machines: [] as MachineStateInfo[],
@@ -315,6 +321,15 @@ export const useAppStore = defineStore('app', {
     branchInfo: {} as Record<string, Record<string, BranchInfo>>,
     /** 当前活动会话（会话列表选中项；右下聊天面板作用在它上面） */
     activeConversationID: '',
+    /** 和助手说：聊天面板不在会话上、改在所连机器的助手日志上（assistant.say / assistant.entry）。
+     *  输入台旁「和助手说」键进入；选中/新建任何会话自动退出 */
+    assistantChat: false,
+    /** 助手状态（assistant.subscribe 的 state） */
+    assistantState: null as AssistantState | null,
+    /** 助手日志（订阅快照 + assistant.entry 流式合并，时间序） */
+    assistantEntries: [] as AssistantEntry[],
+    /** 这台机器的 Friday 不带助手（老版本，assistant.* 不通） */
+    assistantUnsupported: false,
     /** 桌面上打开的窗口（只剩子 Agent / 设置，其余内容常驻桌面） */
     windows: [] as DesktopWindow[],
     /** 下一个窗口的层叠高度 */
@@ -728,10 +743,17 @@ export const useAppStore = defineStore('app', {
             if (machine.id === this.currentMachine) {
               void this.refreshLiveState()
               void this.refreshSummaries()
+              // 重连时「和助手说」还开着：重新订阅拿全量（断线时订阅已清）
+              if (this.assistantChat) void this.openAssistantChat()
             }
           } else if (machine.state !== 'ready') {
             // 掉线：等重连后重新订阅
             activitySubscribed.delete(machine.id)
+            assistantSubscribed.delete(machine.id)
+            if (machine.id === this.currentMachine) {
+              this.assistantState = null
+              this.assistantEntries = []
+            }
           }
         }
       })
@@ -776,6 +798,7 @@ export const useAppStore = defineStore('app', {
     async removeMachine(id: string) {
       await host.request({ type: 'machines.remove', id })
       if (this.currentMachine === id) {
+        await this.closeAssistantChat()
         this.currentMachine = ''
         this.summaries = []
         this.details = {}
@@ -786,6 +809,7 @@ export const useAppStore = defineStore('app', {
     async selectMachine(id: string) {
       if (this.currentMachine === id) return
       await this.leaveConversation()
+      await this.closeAssistantChat()
       this.currentMachine = id
       this.summaries = []
       this.details = {}
@@ -826,6 +850,9 @@ export const useAppStore = defineStore('app', {
       this.activeFile = null
       this.activities = {}
       this.approvals = {}
+      this.assistantState = null
+      this.assistantEntries = []
+      this.assistantUnsupported = false
       this.closeTerminalWindowIfEmpty(hadTerminals)
     },
 
@@ -913,8 +940,10 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 打开一段会话：订阅拿整段并设为活动会话（右下聊天面板切到它）。不再开浮动窗口。 */
+    /** 打开一段会话：订阅拿整段并设为活动会话（右下聊天面板切到它）。不再开浮动窗口。
+     *  从「和助手说」切回会话：自动退出助手模式（聊天面板跟着回会话）。 */
     async openConversation(conversationID: string) {
+      if (this.assistantChat) await this.closeAssistantChat()
       await this.subscribeConversation(conversationID)
       this.activeConversationID = conversationID
     },
@@ -1022,6 +1051,22 @@ export const useAppStore = defineStore('app', {
         case 'message.patch':
           this.applyPatch(params)
           break
+        case 'assistant.entry': {
+          // 助手日志加了/改了一条（流式同一条合在一起推；REMOTE.md §5）：只往开着「和助手说」的面板里并
+          if (this.assistantChat) {
+            const entry = (params as { entry?: AssistantEntry }).entry
+            if (entry) this.mergeAssistantEntry(entry)
+          }
+          break
+        }
+        case 'assistant.reset': {
+          // 日志/记忆清空或搬来新的一份：重新订阅拿全量
+          if (this.assistantChat) {
+            if (this.currentMachine) assistantSubscribed.delete(this.currentMachine)
+            void this.openAssistantChat()
+          }
+          break
+        }
         case 'runtime': {
           // runtime 事件的 params 是 {conversationID, runtime}（REMOTE.md §5）
           const payload = params as { conversationID?: string; runtime?: Runtime }
@@ -1497,6 +1542,74 @@ export const useAppStore = defineStore('app', {
         text,
         attachments: attachments.map((attachment) => attachment.path)
       })
+    },
+
+    // MARK: 和助手说（REMOTE.md §6「助手」）：聊天面板切到所连机器的助手，不走会话
+
+    /** 进「和助手说」：订阅助手日志拿最近条目，之后 assistant.entry 流式进来。
+     *  老服务端没有 assistant.*：面板里给一句人话，不发 */
+    async openAssistantChat() {
+      const machine = this.currentMachine
+      if (!machine) return
+      this.assistantChat = true
+      this.assistantUnsupported = false
+      if (assistantSubscribed.has(machine)) return
+      try {
+        const result = (await rpc(machine, 'assistant.subscribe', { count: 80 })) as AssistantSubscribeResult
+        assistantSubscribed.add(machine)
+        // 等回复的中间换机器了：别把旧机器的日志填进新机器的面板
+        if (this.currentMachine !== machine) return
+        this.assistantState = result.state ?? null
+        this.assistantEntries = [...(result.entries ?? [])]
+      } catch {
+        if (this.currentMachine === machine) {
+          this.assistantUnsupported = true
+          this.assistantState = null
+          this.assistantEntries = []
+        }
+      }
+    },
+
+    /** 退出「和助手说」回到会话（选中/新建会话、切机器时自动走这里）：退订、清面板 */
+    async closeAssistantChat() {
+      const machine = this.currentMachine
+      this.assistantChat = false
+      this.assistantState = null
+      this.assistantEntries = []
+      this.assistantUnsupported = false
+      if (machine && assistantSubscribed.has(machine)) {
+        assistantSubscribed.delete(machine)
+        rpc(machine, 'assistant.unsubscribe', {}).catch(() => {})
+      }
+    },
+
+    /** 说给这台机器的助手（assistant.say）：助手在说时服务端自动打断重来；
+     *  回执 entry 先并入（事件随后还会来，按 id 去重），流式由 assistant.entry 续写 */
+    async assistantSay(text: string, attachments: string[]) {
+      if (!this.currentMachine) return
+      const result = (await rpc(this.currentMachine, 'assistant.say', {
+        text,
+        source: 'desktop',
+        ...(attachments.length > 0 ? { attachments } : {})
+      })) as { entry?: AssistantEntry }
+      if (result.entry) this.mergeAssistantEntry(result.entry)
+    },
+
+    /** 打断正在说的助手（assistant.stop） */
+    async assistantStop() {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'assistant.stop', {}).catch(() => {})
+    },
+
+    /** 助手日志合并：同 id 更新（流式同一条反复改），新的按时间序插进去 */
+    mergeAssistantEntry(entry: AssistantEntry) {
+      const index = this.assistantEntries.findIndex((item) => item.id === entry.id)
+      if (index >= 0) {
+        this.assistantEntries.splice(index, 1, entry)
+        return
+      }
+      const at = this.assistantEntries.findIndex((item) => item.at > entry.at)
+      this.assistantEntries.splice(at < 0 ? this.assistantEntries.length : at, 0, entry)
     },
 
     /** 切换这段会话的引擎（REMOTE.md：runner.setEngine {conversationID, engineID?}）。

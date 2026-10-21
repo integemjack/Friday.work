@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，文本区左边「和助手开新会话」，底行左侧附件、右侧圆形发送键；
+// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，文本区左边「开新会话」「和助手说」两键，底行左侧附件、右侧圆形发送键；
 // 生成中发送键变成停止。附件（对话框 + 拖放，经主进程背书上传）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -159,6 +159,9 @@ const sending = computed(() => {
   return runtime?.generating ?? false
 })
 
+/** 助手模式下换占位文案 */
+const placeholder = computed(() => (store.assistantChat ? '和助手说点什么…' : '有什么可以帮你？'))
+
 const canSend = computed(() => Boolean(text.value.trim()) || attachments.value.length > 0)
 
 function resize() {
@@ -226,7 +229,19 @@ function removeAttachment(index: number) {
 }
 
 function stop() {
-  void store.stopRunner()
+  // 助手模式下停止 = 打断正在说的助手（assistant.stop）；平时停会话的 runner
+  if (store.assistantChat) void store.assistantStop()
+  else void store.stopRunner()
+}
+
+// MARK: 和助手说（输入台目标切到所连机器的助手：submit 走 assistant.say，模型/目录选择不适用）
+const assistantReacting = computed(() => store.assistantChat && (store.assistantState?.reacting ?? false))
+
+/** 开/关「和助手说」。开着时点「开新会话」或选中会话自动切回（store.openConversation 会退出助手模式） */
+async function toggleAssistantChat(): Promise<void> {
+  if (!store.connected) return
+  if (store.assistantChat) await store.closeAssistantChat()
+  else await store.openAssistantChat()
 }
 
 // MARK: 和助手开新会话（默认和助手对话：没选中会话时，输入本来就直接开一段新的和助手聊；
@@ -268,13 +283,13 @@ async function newConversation(): Promise<void> {
         </div>
       </div>
 
-      <!-- 输入区：文本区左边挂「和助手开新会话」键（显眼位置，不藏在底行一排按钮里）；
-           默认没选会话时输入就会自动开新的一段，这个键是显式开 -->
+      <!-- 输入区：文本区左边挂「开新会话」「和助手说」两键（显眼位置，不藏在底行一排按钮里）；
+           默认没选会话时输入就会自动开新的一段会话，「和助手说」把输入切到机器上的助手（不经会话） -->
       <div class="input-zone">
         <button
           class="icon-btn new-chat-btn"
-          title="和助手开新会话"
-          aria-label="和助手开新会话"
+          title="开新会话"
+          aria-label="开新会话"
           :disabled="!store.connected || newChatBusy"
           @click="newConversation"
         >
@@ -284,11 +299,24 @@ async function newConversation(): Promise<void> {
             <path d="M9 10h6" />
           </svg>
         </button>
+        <button
+          class="icon-btn assistant-say-btn"
+          :class="{ active: store.assistantChat }"
+          title="和助手说：直接跟这台机器上的助手聊，不开会话"
+          aria-label="和助手说"
+          :disabled="!store.connected"
+          @click="toggleAssistantChat"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 3.5l1.8 4.2 4.2 1.8-4.2 1.8L11 15.5l-1.8-4.2L5 9.5l4.2-1.8z" />
+            <path d="M18.5 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" />
+          </svg>
+        </button>
         <textarea
           ref="textarea"
           v-model="text"
           rows="1"
-          placeholder="有什么可以帮你？"
+          :placeholder="placeholder"
           @input="resize"
           @keydown="onKeydown"
           @focus="focused = true"
@@ -303,8 +331,8 @@ async function newConversation(): Promise<void> {
           </svg>
         </button>
 
-        <!-- 模型选择（Friday 输入框底行的模型选择器） -->
-        <div ref="modelWrap" class="model-wrap">
+        <!-- 模型选择（Friday 输入框底行的模型选择器；和助手说时不适用，收起） -->
+        <div v-if="!store.assistantChat" ref="modelWrap" class="model-wrap">
           <button
             class="model-chip"
             :class="{ open: modelOpen }"
@@ -333,8 +361,8 @@ async function newConversation(): Promise<void> {
           </div>
         </div>
 
-        <!-- 工作目录选择（方案 §5.3）：作用在当前会话；没打开会话就新建一段把目录带上 -->
-        <div ref="dirWrap" class="model-wrap dir-wrap">
+        <!-- 工作目录选择（方案 §5.3）：作用在当前会话；没打开会话就新建一段把目录带上；助手模式下收起 -->
+        <div v-if="!store.assistantChat" ref="dirWrap" class="model-wrap dir-wrap">
           <button
             class="model-chip"
             :class="{ open: dirOpen }"
@@ -429,29 +457,41 @@ async function newConversation(): Promise<void> {
         <span v-if="switchError" class="error">{{ switchError }}</span>
         <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
         <span v-else-if="dirError" class="error">{{ dirError }}</span>
-        <span class="hint">{{ sending ? 'Enter 补充给智能体 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
+        <span class="hint">{{
+          store.assistantChat
+            ? assistantReacting
+              ? '助手在说 · Enter 发下一句会打断重来 · Shift+Enter 换行'
+              : 'Enter 发给助手 · Shift+Enter 换行'
+            : sending
+              ? 'Enter 补充给智能体 · Shift+Enter 换行'
+              : 'Enter 发送 · Shift+Enter 换行'
+        }}</span>
         <span class="spacer" />
-        <!-- 生成中：停止键 + 补充键（插入内容：做完当前这一步就交给它；qt 同款双键） -->
-        <template v-if="sending">
-          <button class="round-btn stop" title="停止生成" @click="stop">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="5" y="5" width="14" height="14" rx="2.5" />
-            </svg>
-          </button>
-          <button
-            v-if="canSend"
-            class="round-btn send insert"
-            title="补充给智能体：做完当前这一步就交给它 (Enter)"
-            :disabled="busy"
-            @click="send"
-          >
-            <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 19V5" />
-              <path d="M5 12l7-7 7 7" />
-            </svg>
-            <span v-else class="busy-dot" />
-          </button>
-        </template>
+        <!-- 生成中/助手在说：停止键；会话生成中还多一颗补充键（插入内容：做完当前这一步就交给它，qt 同款双键）。
+             助手在说时没有补充键：Enter 本来就是打断重来（REMOTE.md assistant.say） -->
+        <button
+          v-if="sending || assistantReacting"
+          class="round-btn stop"
+          :title="store.assistantChat ? '打断助手' : '停止生成'"
+          @click="stop"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="5" y="5" width="14" height="14" rx="2.5" />
+          </svg>
+        </button>
+        <button
+          v-if="sending && !store.assistantChat && canSend"
+          class="round-btn send insert"
+          title="补充给智能体：做完当前这一步就交给它 (Enter)"
+          :disabled="busy"
+          @click="send"
+        >
+          <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 19V5" />
+            <path d="M5 12l7-7 7 7" />
+          </svg>
+          <span v-else class="busy-dot" />
+        </button>
         <button
           v-else
           class="round-btn send"
@@ -1016,6 +1056,31 @@ textarea::placeholder {
 [data-theme='jarvis'] .new-chat-btn:hover:not(:disabled) {
   border-color: var(--accent-a60);
   background: var(--accent-a20);
+}
+
+/* 和助手说：贾维斯主题同样给常态淡青描边（和开新会话键一致，不靠悬停才被看见）；
+   开着时（输入目标就是助手）描边和底色都加重 + 一圈微光 */
+[data-theme='jarvis'] .assistant-say-btn {
+  color: var(--accent);
+  border: 1px solid var(--accent-a30);
+  background: transparent;
+}
+
+[data-theme='jarvis'] .assistant-say-btn:hover:not(:disabled) {
+  border-color: var(--accent-a60);
+  background: var(--accent-a10);
+}
+
+[data-theme='jarvis'] .assistant-say-btn.active {
+  border-color: var(--accent-a60);
+  background: var(--accent-a20);
+  box-shadow: 0 0 10px var(--accent-a25);
+}
+
+/* 系统主题：开着时给个明确的选中态 */
+.assistant-say-btn.active {
+  color: var(--text);
+  background: var(--hover);
 }
 
 [data-theme='jarvis'] .hint {
