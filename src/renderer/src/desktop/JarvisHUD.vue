@@ -6,6 +6,8 @@
 // 只在「贾维斯界面」下挂载（App.vue 里 v-if="jarvis"），别的主题不渲染、零开销。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import { rpc } from '../lib/host.js'
+import type { FsReadResult } from '../../../protocol/rpc/protocol.js'
 
 const store = useAppStore()
 
@@ -70,6 +72,90 @@ const tzText = computed(() => {
   return `UTC${sign}${Number.isInteger(abs) ? abs : abs.toFixed(1)}`
 })
 
+// ---- 远程服务器资源（真实数据，不是装饰）：fs.read 读那台的 /proc ----
+// CPU：/proc/stat 首行聚合，两次采样差值算使用率；RAM：MemTotal/MemAvailable。
+// 没连机器、那台不是 Linux（读不到 /proc）或 fs.read 不给用：显示 N/A 并停轮询（换机器时重试）。
+const hostName = ref('N/A')
+const cpuText = ref('…')
+const ramText = ref('…')
+let remoteTimer = 0
+let remoteDead = false // fs.read 明确不给用 / 这台读不到：停轮询，免得每 3 秒白打两枪
+let prevCpu: { idle: number; total: number } | null = null
+let polledMachine = ''
+
+function pct(n: number): string {
+  return `${Math.max(0, Math.min(100, Math.round(n)))}%`
+}
+
+function parseCpu(text: string): { idle: number; total: number } | null {
+  const first = text.split('\n', 1)[0] ?? ''
+  const parts = first.trim().split(/\s+/).slice(1).map(Number)
+  // user nice system idle iowait irq softirq steal …（至少前四列）
+  if (parts.length < 4 || !parts.slice(0, 4).every(Number.isFinite)) return null
+  return { idle: parts[3]! + (parts[4] ?? 0), total: parts.reduce((sum, v) => sum + v, 0) }
+}
+
+async function pollRemote(): Promise<void> {
+  // 先排下一次再干活：断线/没连时也能在恢复后自动接上；dead 时空转（不发包）
+  remoteTimer = window.setTimeout(() => void pollRemote(), 3000)
+  const machineID = store.currentMachine
+  const info = store.currentMachineInfo
+  if (!machineID || info?.state !== 'ready') {
+    hostName.value = 'N/A'
+    cpuText.value = 'N/A'
+    ramText.value = 'N/A'
+    prevCpu = null
+    remoteDead = false
+    polledMachine = machineID
+    return
+  }
+  if (machineID !== polledMachine) {
+    // 换了台机器：重新起测
+    polledMachine = machineID
+    remoteDead = false
+    prevCpu = null
+    cpuText.value = '…'
+    ramText.value = '…'
+  }
+  if (remoteDead) return
+  hostName.value = info.serverInfo?.hostname || 'REMOTE'
+  try {
+    const [stat, mem] = (await Promise.all([
+      rpc(machineID, 'fs.read', { path: '/proc/stat', offset: 0, length: 256 }),
+      rpc(machineID, 'fs.read', { path: '/proc/meminfo', offset: 0, length: 4096 })
+    ])) as [FsReadResult, FsReadResult]
+    if (typeof stat?.data === 'string') {
+      const sample = parseCpu(atob(stat.data))
+      if (sample) {
+        if (prevCpu) {
+          const dTotal = sample.total - prevCpu.total
+          const dIdle = sample.idle - prevCpu.idle
+          if (dTotal > 0) cpuText.value = pct((1 - dIdle / dTotal) * 100)
+        }
+        prevCpu = sample
+      } else {
+        cpuText.value = 'N/A'
+      }
+    } else {
+      cpuText.value = 'N/A'
+    }
+    if (typeof mem?.data === 'string') {
+      const text = atob(mem.data)
+      const total = /MemTotal:\s+(\d+) kB/.exec(text)
+      const avail = /MemAvailable:\s+(\d+) kB/.exec(text)
+      ramText.value = total && avail && Number(total[1]) > 0 ? pct(((Number(total[1]) - Number(avail[1])) / Number(total[1])) * 100) : 'N/A'
+    } else {
+      ramText.value = 'N/A'
+    }
+  } catch {
+    // fs.read 不给用（回错误 4）或那台没有 /proc：这台测不了，空转等换机器
+    cpuText.value = 'N/A'
+    ramText.value = 'N/A'
+    prevCpu = null
+    remoteDead = true
+  }
+}
+
 // 连接状态（和任务栏同一份 state，换成 HUD 味的英文短语；0.3 起只剩这几种）
 const stateText: Record<string, string> = {
   disconnected: 'OFFLINE',
@@ -112,10 +198,12 @@ onMounted(() => {
   hexTimer = window.setInterval(rollHex, 420)
   fpsLast = performance.now()
   fpsRaf = requestAnimationFrame(fpsLoop)
+  void pollRemote()
 })
 onBeforeUnmount(() => {
   window.clearInterval(timer)
   window.clearInterval(hexTimer)
+  window.clearTimeout(remoteTimer)
   cancelAnimationFrame(fpsRaf)
 })
 </script>
@@ -125,8 +213,9 @@ onBeforeUnmount(() => {
     <div class="hud-top">J.A.R.V.I.S. // FRIDAY DESKTOP</div>
 
     <div class="hud-stage">
-      <!-- 左遥测：FPS / 内存 / 运行时长（实测） -->
+      <!-- 左遥测：本机（实测） -->
       <div class="telemetry">
+        <div class="t-head">LOCAL</div>
         <div class="t-row"><span class="t-key">FPS</span><span class="t-val">{{ fps || '…' }}</span></div>
         <div class="t-row"><span class="t-key">MEM</span><span class="t-val">{{ memText }}</span></div>
         <div class="t-row"><span class="t-key">UPTIME</span><span class="t-val">{{ uptime }}</span></div>
@@ -206,11 +295,20 @@ onBeforeUnmount(() => {
         </g>
       </svg>
 
-      <!-- 右遥测：日期 / 核数 / 时区（真实） -->
+      <!-- 右遥测：上组 = 远程服务器资源（fs.read 读那台的 /proc，实测）；下组 = 本机日期/核数/时区 -->
       <div class="telemetry align-r">
-        <div class="t-row"><span class="t-key">DATE</span><span class="t-val">{{ dateText }}</span></div>
-        <div class="t-row"><span class="t-key">CORE</span><span class="t-val">{{ coreText }}</span></div>
-        <div class="t-row"><span class="t-key">TZ</span><span class="t-val">{{ tzText }}</span></div>
+        <div class="t-head">REMOTE</div>
+        <div class="t-row">
+          <span class="t-key">HOST</span>
+          <span class="t-val host">{{ hostName }}</span>
+        </div>
+        <div class="t-row"><span class="t-key">CPU</span><span class="t-val">{{ cpuText }}</span></div>
+        <div class="t-row"><span class="t-key">RAM</span><span class="t-val">{{ ramText }}</span></div>
+        <div class="t-div">
+          <div class="t-row"><span class="t-key">DATE</span><span class="t-val">{{ dateText }}</span></div>
+          <div class="t-row"><span class="t-key">CORE</span><span class="t-val">{{ coreText }}</span></div>
+          <div class="t-row"><span class="t-key">TZ</span><span class="t-val">{{ tzText }}</span></div>
+        </div>
       </div>
     </div>
 
@@ -361,6 +459,25 @@ svg {
   gap: 2px;
 }
 
+/* 遥测分组标题（LOCAL / REMOTE） */
+.t-head {
+  color: var(--accent);
+  opacity: 0.55;
+  font-size: 9px;
+  letter-spacing: 2.5px;
+  margin-bottom: -4px;
+}
+
+/* 右遥测第二组（日期/核数/时区）：细线隔开远程资源组 */
+.t-div {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--accent-a22);
+}
+
 .t-key {
   color: var(--accent);
   opacity: 0.55;
@@ -374,6 +491,16 @@ svg {
 .t-val {
   color: var(--text-2);
   text-shadow: 0 0 8px var(--accent-a25);
+}
+
+/* 主机名超宽时左缘渐隐（右对齐保尾端，照会话名行的渐隐偏好，不用 … 截断） */
+.t-val.host {
+  max-width: 16ch;
+  align-self: flex-end;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(270deg, #000 calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(270deg, #000 calc(100% - 14px), transparent);
 }
 
 .hud-data {
