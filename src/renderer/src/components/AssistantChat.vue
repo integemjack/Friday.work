@@ -88,10 +88,13 @@ onBeforeUnmount(() => {
   stopSpeaking()
 })
 
+/** 滚动区顶部有没有内容被裁（有才显示雾化窗帘；没有时窗帘隐藏，视频从顶部完整透出） */
+const scrolledFromTop = ref(false)
 function onScroll() {
   const el = scrollEl.value
   if (!el) return
   stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  scrolledFromTop.value = el.scrollTop > 2
 }
 
 watch(conversationID, () => {
@@ -253,6 +256,8 @@ const statusLine = computed(() => {
 <template>
   <section class="assistant-chat" data-testid="assistant-chat">
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
+      <!-- 顶端雾化窗帘：内容滚入顶部 96px 时渐进模糊，替代旧的 scroller mask -->
+      <div class="top-fade" :class="{ on: scrolledFromTop }" aria-hidden="true" />
       <div ref="messagesEl" class="messages">
         <MessageItem v-for="entry in shownMessages" :key="entry.message.id" :message="entry.message" />
 
@@ -479,7 +484,27 @@ const statusLine = computed(() => {
   min-height: 0;
   overflow-y: auto;
   padding: 6px 8px 12px;
-  /* 顶端渐隐：向上滚进视频区的消息淡出，视频从聊天底下透出来 */
+  /* 顶端渐隐改用 .top-fade 雾化窗帘：原先的 scroller mask 是祖先级 backdrop root，
+     会把消息里气泡的 backdrop-filter 困在滚动容器内（磨砂全失效，实测 blur 差 87→2） */
+}
+
+/* 顶端雾化窗帘：sticky 钉在滚动视口顶部、负 margin 不占流内空间；
+   自带 blur + 自身 mask 渐显 → 顶部锐利、往下渐进模糊（自身 mask 不影响自身 backdrop 采样范围）。
+   只在顶部真有内容被裁（scrollTop > 2）时显示，没有时视频从顶部完整透出 */
+.top-fade {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 96px;
+  margin-bottom: -96px;
+  pointer-events: none;
+  display: none;
+}
+
+.top-fade.on {
+  display: block;
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
   mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
 }

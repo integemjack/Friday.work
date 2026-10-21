@@ -1054,10 +1054,12 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 18px;
-  /* 悬浮输入台：磨砂玻璃卡（透出底下场景）+ 顶部内高光 + 柔和落影 */
+  /* 悬浮输入台：磨砂玻璃卡（透出底下场景）+ 顶部内高光 + 柔和落影。
+     磨砂画在 ::before 而不是卡片自己：backdrop-filter 会把卡片变成 backdrop root，
+     后代弹出菜单（model/voice/dir-menu）的 backdrop-filter 就只能看到卡片内部，
+     悬出卡片外的部分磨砂直接失效（实测开/关 blur 像素差仅 33/255）。
+     挪到伪元素后，菜单的 backdrop 回到文档根，能真正糊到桌面场景 */
   background: var(--panel-2);
-  backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 10px 30px rgba(0, 0, 0, 0.16);
@@ -1066,6 +1068,17 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 1px;
   transition: border-color 0.18s, box-shadow 0.18s, transform 0.18s;
+}
+
+/* 磨砂层：垫在卡片半透明底色之下（z -1，卡片在 dock 的 stacking context 内不会沉过场景） */
+.composer-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
 }
 
 /* 贾维斯主题的输入台样式在文件末尾的「全息指令台」段（四角括号/能量线/聚焦辉光，特异性更高会盖掉上面） */
@@ -1757,12 +1770,16 @@ textarea::placeholder {
   background:
     linear-gradient(90deg, transparent, var(--accent-a40), transparent) top / 100% 1px no-repeat,
     var(--panel-glass-deep);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border-color: var(--accent-a26);
   box-shadow:
     0 0 20px var(--accent-a7),
     0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+/* 磨砂同卡挪到伪元素（原因见 .composer-card::before），糊得比默认主题轻一点 */
+[data-theme='jarvis'] .composer-card::before {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 /* 四角括号：::before 画上面两角，::after 画下面两角 */

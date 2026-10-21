@@ -166,7 +166,11 @@ function md(blockID: string, caseName: string): string {
 }
 
 .message.user .md {
-  background: var(--accent-weak);
+  /* 磨砂气泡：半透 accent 底 + 模糊（叠在视频/桌面上有玻璃质感）。
+     之前的 --accent-weak 是不透明色，模糊挂了也看不见；换成 color-mix 保色相又透 */
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
   border-radius: 10px;
   padding: 7px 11px;
   /* 窄栏里 85% 太浪费：同一段话会多出一两行 */
