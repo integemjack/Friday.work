@@ -5,7 +5,7 @@
 // CPU/RAM/GPU/显存/进程数实测（Linux 走 fs.read 读 /proc+/sys，Windows 本机走主进程 IPC）。
 // 随鼠标做 3D 视差倾斜（--par-x/--par-y 由 App.vue 下发，rAF 已插值）。
 // 只在「贾维斯界面」下挂载（App.vue 里 v-if="jarvis"），别的主题不渲染、零开销。
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { rpc } from '../lib/host.js'
 import type { FsListResult, FsReadResult } from '../../../protocol/rpc/protocol.js'
@@ -83,8 +83,10 @@ const tzText = computed(() => {
 //              %ProgramData%\Friday\sysstats.json——那份文件由服务器机器上跑着的 Friday Work
 //              主进程每次采样写入（协议没有系统采样方法，这是纯客户端仓库内的跨机器桥）；
 //              文件读不到 / 超过 10 秒没更新（那台没跑 Friday Work）→ N/A。
-// 没连机器 / 那台测不了（fs.read 不给用、平台两条路都不通）：显示 N/A；
-// Linux 的 fs.read 明确失败时停轮询（remoteDead），换机器时自动重试。
+// 没连机器：五项显示 NO LINK（一眼知道是没连上，不是取不到）。
+// 某一轮没取到（通道卡死、fs.read 报错、某个文件读不到）：每个指标各自沿用 12 秒内的
+// 上次好值，过期才落 N/A，并把下一轮退避到 10 秒——不再因为一次失败就永久停轮询
+//（原来 remoteDead 一旦置上，HUD 就永远空在那儿，只有换机器或断线重连才恢复）。
 const hostName = ref('N/A')
 const cpuText = ref('…')
 const ramText = ref('…')
@@ -92,10 +94,12 @@ const gpuText = ref('…')
 const vramText = ref('…')
 const procText = ref('…')
 let remoteTimer = 0
-let remoteDead = false // Linux fs.read 明确不给用 / 那台没有 /proc：停轮询，免得每 3 秒白打几枪
+let polling = false // 上一轮还挂着就不并发发第二轮（通道慢时避免请求堆积）
+let roundOk = false // 这一轮至少取到了一项：决定下一轮 3 秒还是退避 10 秒
 let prevCpu: { idle: number; total: number } | null = null
 let polledMachine = ''
 let gpuCard: string | null = null // Linux 那台探到的 DRM 卡名（/sys/class/drm/card0…）；'' = 探过、没有
+let gpuTries = 0 // GPU sysfs 连续读不到的轮数，够几轮就判定这台没有可用接口
 
 function pct(n: number): string {
   return `${Math.max(0, Math.min(100, Math.round(n)))}%`
@@ -115,8 +119,8 @@ function parseCpu(text: string): { idle: number; total: number } | null {
   return { idle: parts[3]! + (parts[4] ?? 0), total: parts.reduce((sum, v) => sum + v, 0) }
 }
 
-function resetRemote(pending: boolean): void {
-  const text = pending ? '…' : 'N/A'
+/** 五个指标一起写成同一个样子（pending = 还没起测的 …；没连上 = NO LINK） */
+function resetRemote(text: string): void {
   cpuText.value = text
   ramText.value = text
   gpuText.value = text
@@ -124,37 +128,87 @@ function resetRemote(pending: boolean): void {
   procText.value = text
 }
 
-/** 把一份 SysStats 上屏（IPC 与 json 桥共用；字段缺失按 null → N/A 处理） */
+// 每个指标各自记「上次成功」：这轮没取到就沿用好值，过期才 N/A——
+// 通道抖一下、某一个文件读不到，都不会把整组打回空白，也不会挂着十分钟前的数不放。
+const HOLD_MS = 12_000
+type MetricKey = 'cpu' | 'ram' | 'gpu' | 'vram' | 'proc'
+const metricRefs: Record<MetricKey, Ref<string>> = { cpu: cpuText, ram: ramText, gpu: gpuText, vram: vramText, proc: procText }
+const holds = new Map<MetricKey, { text: string; at: number }>()
+
+/** text = null：这轮没取到（沿用上次好值，过期 N/A）；'…'：还没到出值的轮次（不记好值） */
+function setMetric(key: MetricKey, text: string | null): void {
+  const target = metricRefs[key]
+  if (text === '…') {
+    target.value = '…'
+    return
+  }
+  if (text != null) {
+    holds.set(key, { text, at: Date.now() })
+    target.value = text
+    roundOk = true
+    return
+  }
+  const held = holds.get(key)
+  target.value = held && Date.now() - held.at < HOLD_MS ? held.text : 'N/A'
+}
+
+/** 这一轮这一路什么也没取到：五个指标各自走「沿用好值 / 过期 N/A」 */
+function missedRound(): void {
+  setMetric('cpu', null)
+  setMetric('ram', null)
+  setMetric('gpu', null)
+  setMetric('vram', null)
+  setMetric('proc', null)
+}
+
+function clearHolds(): void {
+  holds.clear()
+  roundOk = false
+}
+
+/** 把一份 SysStats 上屏（IPC 与 json 桥共用；字段缺失按这轮没取到处理） */
 function applyStats(s: Partial<SysStatsSnapshot>): void {
-  cpuText.value = s.cpuPct == null ? 'N/A' : pct(s.cpuPct)
-  ramText.value = s.ramPct == null ? 'N/A' : pct(s.ramPct)
-  gpuText.value = s.gpuPct == null ? 'N/A' : pct(s.gpuPct)
-  vramText.value = fmtVram(s.vramUsedMiB ?? null, s.vramTotalMiB ?? null)
-  procText.value = s.procs == null ? 'N/A' : String(s.procs)
+  // 服务器刚起的第一轮没有 CPU 差值：显示 …，下一轮才有数
+  setMetric('cpu', s.cpuPct == null ? '…' : pct(s.cpuPct))
+  setMetric('ram', s.ramPct == null ? null : pct(s.ramPct))
+  setMetric('gpu', s.gpuPct == null ? null : pct(s.gpuPct))
+  setMetric('vram', s.vramUsedMiB == null || s.vramTotalMiB == null ? null : fmtVram(s.vramUsedMiB, s.vramTotalMiB))
+  setMetric('proc', s.procs == null ? null : String(s.procs))
+}
+
+/** 一次 fs.read：4 秒没回当没取到（工作通道死了会一直挂着、要 60 秒才超时，
+ *  不能让它拖住整轮）；报错 / 没数据也回 null。回的是解好 base64 的文本。 */
+async function readRemote(machineID: string, path: string, length: number): Promise<string | null> {
+  try {
+    const r = (await Promise.race([
+      rpc(machineID, 'fs.read', { path, offset: 0, length }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+    ])) as FsReadResult | null
+    return r && typeof r.data === 'string' ? atob(r.data) : null
+  } catch {
+    return null
+  }
 }
 
 /** Windows 服务器·第二级：服务器不是本机（从别的电脑连它）——协议 fs.read 读
  *  服务器上跑着的 Friday Work 写的 %ProgramData%\Friday\sysstats.json。
- *  读不到 / JSON 坏了 / 超过 10 秒没更新（那台没跑 Friday Work 或刚断）→ N/A。 */
+ *  读不到 / JSON 坏了 / 超过 10 秒没更新（那台没跑 Friday Work 或刚断）→ 按这轮没取到处理。 */
 const REMOTE_STATS_PATH = 'C:/ProgramData/Friday/sysstats.json'
 const REMOTE_STATS_FRESH_MS = 10_000
 
 async function pollWindowsViaFile(machineID: string): Promise<void> {
+  const text = await readRemote(machineID, REMOTE_STATS_PATH, 2048)
+  let s: Partial<SysStatsSnapshot> | null = null
   try {
-    const r = (await rpc(machineID, 'fs.read', { path: REMOTE_STATS_PATH, offset: 0, length: 2048 })) as FsReadResult
-    if (typeof r?.data !== 'string') {
-      resetRemote(false)
-      return
-    }
-    const s = JSON.parse(atob(r.data)) as Partial<SysStatsSnapshot>
-    if (typeof s?.at !== 'number' || Date.now() - s.at > REMOTE_STATS_FRESH_MS) {
-      resetRemote(false)
-      return
-    }
-    applyStats(s)
+    s = text ? (JSON.parse(text) as Partial<SysStatsSnapshot>) : null
   } catch {
-    resetRemote(false)
+    s = null
   }
+  if (!s || typeof s.at !== 'number' || Date.now() - s.at > REMOTE_STATS_FRESH_MS) {
+    missedRound()
+    return
+  }
+  applyStats(s)
 }
 
 /** Windows 服务器：先试本机 IPC（服务器就是这台机器时最快最准），
@@ -176,127 +230,133 @@ async function pollLocalServer(machineID: string, serverHostname: string | undef
   await pollWindowsViaFile(machineID)
 }
 
-/** Linux：fs.read 读那台的 /proc 与 /sys（GPU 是尽力而为，读不到只显示 N/A、不判死） */
+/** Linux：fs.read 读那台的 /proc 与 /sys——五个指标各自取、各自成不成，
+ *  一个读不到不连带把整组清零（原来三个 Promise.all 一起包在一个 try 里，
+ *  任意一个报错 / 超时就直接 remoteDead，CPU/RAM/进程数明明能读也不显示了） */
 async function pollLinuxServer(machineID: string): Promise<void> {
-  try {
-    const [stat, mem, load] = (await Promise.all([
-      rpc(machineID, 'fs.read', { path: '/proc/stat', offset: 0, length: 256 }),
-      rpc(machineID, 'fs.read', { path: '/proc/meminfo', offset: 0, length: 4096 }),
-      rpc(machineID, 'fs.read', { path: '/proc/loadavg', offset: 0, length: 128 })
-    ])) as [FsReadResult, FsReadResult, FsReadResult]
-    if (typeof stat?.data === 'string') {
-      const sample = parseCpu(atob(stat.data))
-      if (sample) {
-        if (prevCpu) {
-          const dTotal = sample.total - prevCpu.total
-          const dIdle = sample.idle - prevCpu.idle
-          if (dTotal > 0) cpuText.value = pct((1 - dIdle / dTotal) * 100)
-        }
-        prevCpu = sample
-      } else {
-        cpuText.value = 'N/A'
-      }
+  const [stat, mem, load] = await Promise.all([
+    readRemote(machineID, '/proc/stat', 256),
+    readRemote(machineID, '/proc/meminfo', 4096),
+    readRemote(machineID, '/proc/loadavg', 128)
+  ])
+  // CPU：和上一轮的累计时间片做差（第一轮只有基准，显示 …）
+  const sample = stat ? parseCpu(stat) : null
+  if (sample) {
+    if (!prevCpu) {
+      setMetric('cpu', '…')
     } else {
-      cpuText.value = 'N/A'
+      const dTotal = sample.total - prevCpu.total
+      const dIdle = sample.idle - prevCpu.idle
+      setMetric('cpu', dTotal > 0 ? pct((1 - dIdle / dTotal) * 100) : null)
     }
-    if (typeof mem?.data === 'string') {
-      const text = atob(mem.data)
-      const total = /MemTotal:\s+(\d+) kB/.exec(text)
-      const avail = /MemAvailable:\s+(\d+) kB/.exec(text)
-      ramText.value = total && avail && Number(total[1]) > 0 ? pct(((Number(total[1]) - Number(avail[1])) / Number(total[1])) * 100) : 'N/A'
-    } else {
-      ramText.value = 'N/A'
-    }
-    // loadavg 第 4 字段「运行中/进程总数」：取总数当进程数
-    if (typeof load?.data === 'string') {
-      const m = /(?:^|\s)\d+\/(\d+)\s/.exec(atob(load.data))
-      procText.value = m ? m[1]! : 'N/A'
-    } else {
-      procText.value = 'N/A'
-    }
-    await pollLinuxGpu(machineID)
-  } catch {
-    // fs.read 不给用（回错误 4）或那台没有 /proc：这台测不了，空转等换机器
-    resetRemote(false)
-    prevCpu = null
-    remoteDead = true
+    prevCpu = sample
+  } else {
+    setMetric('cpu', null)
   }
+  if (mem) {
+    const total = /MemTotal:\s+(\d+) kB/.exec(mem)
+    const avail = /MemAvailable:\s+(\d+) kB/.exec(mem)
+    setMetric('ram', total && avail && Number(total[1]) > 0 ? pct(((Number(total[1]) - Number(avail[1])) / Number(total[1])) * 100) : null)
+  } else {
+    setMetric('ram', null)
+  }
+  // loadavg 第 4 字段「运行中/进程总数」：取总数当进程数
+  const m = load ? /(?:^|\s)\d+\/(\d+)\s/.exec(load) : null
+  setMetric('proc', m ? m[1]! : null)
+  await pollLinuxGpu(machineID)
 }
 
 /** Linux GPU：/sys/class/drm/ 下 cardN/device 里 AMD/Intel 暴露的 gpu_busy_percent 与 mem_info_vram_*
- *  （字节）；NVIDIA 没有内核利用率接口、虚拟机没有 GPU——都显示 N/A。卡列表只探一次，换机器重置。 */
+ *  （字节）；NVIDIA 闭源驱动没有内核利用率接口、虚拟机没有 GPU——连着几轮读不到就定成 NO GPU。
+ *  卡列表探不到（超时 / 没权限）不算探过，下轮再探，不再一错就永久记成「没有」。 */
 async function pollLinuxGpu(machineID: string): Promise<void> {
-  const read = async (path: string): Promise<string | null> => {
-    try {
-      const r = (await rpc(machineID, 'fs.read', { path, offset: 0, length: 128 })) as FsReadResult
-      return typeof r?.data === 'string' ? atob(r.data).trim() : null
-    } catch {
-      return null
-    }
-  }
   if (gpuCard === null) {
     try {
-      const listing = (await rpc(machineID, 'fs.list', { path: '/sys/class/drm' })) as FsListResult
-      gpuCard = listing?.entries?.find((e) => /^card\d+$/.test(e.name))?.name ?? ''
+      const listing = (await Promise.race([
+        rpc(machineID, 'fs.list', { path: '/sys/class/drm' }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+      ])) as FsListResult | null
+      if (listing?.entries) gpuCard = listing.entries.find((e) => /^card\d+$/.test(e.name))?.name ?? ''
     } catch {
-      gpuCard = ''
+      // 保持 gpuCard === null：这轮 GPU/显存沿用上次值，下轮再探
     }
   }
+  if (gpuCard === null) return
+  if (gpuCard && gpuTries >= 5) {
+    // 有卡但连着 5 轮读不到利用率/显存文件：这台没有可用接口——记下，别再每轮白读三个文件
+    gpuCard = ''
+    gpuTries = 0
+  }
   if (!gpuCard) {
-    gpuText.value = 'N/A'
-    vramText.value = 'N/A'
+    setMetric('gpu', 'NO GPU')
+    setMetric('vram', 'NO GPU')
     return
   }
-  const busy = await read(`/sys/class/drm/${gpuCard}/device/gpu_busy_percent`)
-  const busyNum = Number(busy)
-  gpuText.value = busy != null && Number.isFinite(busyNum) ? pct(busyNum) : 'N/A'
-  const [usedBytes, totalBytes] = await Promise.all([
-    read(`/sys/class/drm/${gpuCard}/device/mem_info_vram_used`),
-    read(`/sys/class/drm/${gpuCard}/device/mem_info_vram_total`)
+  const busy = await readRemote(machineID, `/sys/class/drm/${gpuCard}/device/gpu_busy_percent`, 128)
+  const [usedText, totalText] = await Promise.all([
+    readRemote(machineID, `/sys/class/drm/${gpuCard}/device/mem_info_vram_used`, 128),
+    readRemote(machineID, `/sys/class/drm/${gpuCard}/device/mem_info_vram_total`, 128)
   ])
-  const used = Number(usedBytes)
-  const total = Number(totalBytes)
+  const busyNum = busy == null ? NaN : Number(busy.trim())
+  const used = usedText == null ? NaN : Number(usedText.trim())
+  const total = totalText == null ? NaN : Number(totalText.trim())
+  setMetric('gpu', Number.isFinite(busyNum) ? pct(busyNum) : null)
   // sysfs 值是字节，fmtVram 吃 MiB：除 1024²
-  vramText.value =
-    usedBytes != null && totalBytes != null && Number.isFinite(used) && Number.isFinite(total)
-      ? fmtVram(used / 1048576, total / 1048576)
-      : 'N/A'
+  setMetric('vram', Number.isFinite(used) && Number.isFinite(total) && total > 0 ? fmtVram(used / 1048576, total / 1048576) : null)
+  if (Number.isFinite(busyNum) || Number.isFinite(used)) gpuTries = 0
+  else gpuTries += 1
 }
 
 async function pollRemote(): Promise<void> {
-  // 先排下一次再干活：断线/没连时也能在恢复后自动接上；dead 时空转（不发包）
-  remoteTimer = window.setTimeout(() => void pollRemote(), 3000)
+  // 先排下一次再干活：断线 / 没连时也能在恢复后自动接上
+  const next = (delay: number): void => {
+    remoteTimer = window.setTimeout(() => void pollRemote(), delay)
+  }
   const machineID = store.currentMachine
   const info = store.currentMachineInfo
   if (!machineID || info?.state !== 'ready') {
     hostName.value = 'N/A'
-    resetRemote(false)
+    clearHolds()
+    resetRemote('NO LINK')
     prevCpu = null
     gpuCard = null
-    remoteDead = false
+    gpuTries = 0
     polledMachine = machineID
+    next(3000)
     return
   }
   if (machineID !== polledMachine) {
     // 换了台机器：重新起测
     polledMachine = machineID
-    remoteDead = false
+    clearHolds()
     prevCpu = null
     gpuCard = null
-    resetRemote(true)
+    gpuTries = 0
+    resetRemote('…')
   }
-  if (remoteDead) return
+  if (polling) {
+    // 上一轮还挂着（通道慢）：不并发发第二轮，1 秒后再看
+    next(1000)
+    return
+  }
+  polling = true
+  roundOk = false
   hostName.value = info.serverInfo?.hostname || 'REMOTE'
   const platform = info.serverInfo?.platform
-  if (platform === 'windows') {
-    await pollLocalServer(machineID, info.serverInfo?.hostname)
-    return
+  try {
+    if (platform === 'windows') {
+      await pollLocalServer(machineID, info.serverInfo?.hostname)
+    } else if (platform === 'linux') {
+      await pollLinuxServer(machineID)
+    } else {
+      // 平台两条路都不通（macos / 没给）：按这轮没取到处理
+      missedRound()
+    }
+  } finally {
+    polling = false
   }
-  if (platform === 'linux') {
-    await pollLinuxServer(machineID)
-    return
-  }
-  resetRemote(false)
+  // 一件都没取到（通道卡死、fs.read 全报错）：退避到 10 秒再试，不永久停轮询
+  next(roundOk ? 3000 : 10_000)
 }
 
 // 连接状态（和任务栏同一份 state，换成 HUD 味的英文短语；0.3 起只剩这几种）
