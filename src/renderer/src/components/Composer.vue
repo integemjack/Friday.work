@@ -25,6 +25,7 @@ function onPrefill(event: Event): void {
   void nextTick(() => {
     textarea.value?.focus()
     textarea.value?.setSelectionRange(detail.length, detail.length)
+    resize() // 程序赋值不触发 @input，预填长文本时文本域要自己长高
   })
 }
 onMounted(() => window.addEventListener('friday-prefill', onPrefill as EventListener))
@@ -228,6 +229,13 @@ function resize() {
   if (!el) return
   el.style.height = 'auto'
   el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+  // 按钮组的对齐随行数切换：单行时与文字垂直居中，多行时改顶部对齐（按钮组高 36px 与单行文本域同高，
+  // 顶对齐正好让组的中线落在第一行文字中线上）。lineHeight 拿到的是倍数（"1.55"）就用字号折算。
+  const cs = getComputedStyle(el)
+  const lhRaw = parseFloat(cs.lineHeight)
+  const lineHeight = Number.isFinite(lhRaw) && lhRaw >= 10 ? lhRaw : parseFloat(cs.fontSize) * 1.55
+  const oneLine = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + lineHeight
+  el.closest('.input-zone')?.classList.toggle('multi-line', el.scrollHeight > oneLine + 1)
 }
 
 async function handleAttachments(picked: PickedFile[]) {
@@ -376,6 +384,7 @@ function chooseCommand(name: string) {
     textarea.value?.focus()
     const end = text.value.length
     textarea.value?.setSelectionRange(end, end)
+    resize() // 程序赋值不触发 @input，文本域高度要跟着内容走
   })
 }
 
@@ -1104,6 +1113,12 @@ textarea::placeholder {
 .input-zone {
   display: flex;
   align-items: center;
+}
+
+/* 正文多行时按钮组改顶部对齐：不再钉在整块垂直中间漂着，而是贴住文本域顶、
+   中线正好对上第一行文字（组高 36px = 单行文本域高） */
+.input-zone.multi-line {
+  align-items: flex-start;
 }
 
 .input-zone textarea {
