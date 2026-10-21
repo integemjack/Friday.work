@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，底行左侧附件、右侧圆形发送键；
+// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，文本区左边「和助手开新会话」，底行左侧附件、右侧圆形发送键；
 // 生成中发送键变成停止。附件（对话框 + 拖放，经主进程背书上传）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -266,32 +266,35 @@ async function newConversation(): Promise<void> {
         </div>
       </div>
 
-      <textarea
-        ref="textarea"
-        v-model="text"
-        rows="1"
-        placeholder="有什么可以帮你？"
-        @input="resize"
-        @keydown="onKeydown"
-        @focus="focused = true"
-        @blur="focused = false"
-      />
-
-      <div class="row">
-        <!-- 和助手开新会话：默认没选会话时输入就会开新的一段，这个键显式开 -->
+      <!-- 输入区：文本区左边挂「和助手开新会话」键（显眼位置，不藏在底行一排按钮里）；
+           默认没选会话时输入就会自动开新的一段，这个键是显式开 -->
+      <div class="input-zone">
         <button
-          class="icon-btn"
+          class="icon-btn new-chat-btn"
           title="和助手开新会话"
           aria-label="和助手开新会话"
           :disabled="!store.connected || newChatBusy"
           @click="newConversation"
         >
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             <path d="M12 7v6" />
             <path d="M9 10h6" />
           </svg>
         </button>
+        <textarea
+          ref="textarea"
+          v-model="text"
+          rows="1"
+          placeholder="有什么可以帮你？"
+          @input="resize"
+          @keydown="onKeydown"
+          @focus="focused = true"
+          @blur="focused = false"
+        />
+      </div>
+
+      <div class="row">
         <button class="icon-btn" title="添加附件" @click="pick">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -538,6 +541,24 @@ textarea {
 
 textarea::placeholder {
   color: var(--text-3);
+}
+
+/* 输入区：文本域 + 左边「和助手开新会话」；多行时按钮钉在左下角 */
+.input-zone {
+  display: flex;
+  align-items: flex-end;
+}
+
+.input-zone textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+.new-chat-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  margin: 3px 2px 3px 6px;
 }
 
 .row {
@@ -965,6 +986,18 @@ textarea::placeholder {
 [data-theme='jarvis'] .icon-btn:hover {
   color: var(--accent);
   text-shadow: 0 0 8px var(--accent-a60);
+}
+
+/* 开新会话键在输入框左边独占一位：常态也给一圈淡青描边，不靠悬停才被看见 */
+[data-theme='jarvis'] .new-chat-btn {
+  color: var(--accent);
+  border: 1px solid var(--accent-a30);
+  background: var(--accent-a10);
+}
+
+[data-theme='jarvis'] .new-chat-btn:hover:not(:disabled) {
+  border-color: var(--accent-a60);
+  background: var(--accent-a20);
 }
 
 [data-theme='jarvis'] .hint {
