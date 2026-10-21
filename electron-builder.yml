@@ -10,6 +10,7 @@ directories:
 
 files:
   - out/**/*
+  - resources/**/*
   - package.json
   - '!**/*.map'
   - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}/**'
