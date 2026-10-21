@@ -86,7 +86,14 @@ async function attach(id: string): Promise<void> {
     if (result.data) term.write(b64ToBytes(result.data))
     if (result.cols > 0 && result.rows > 0) term.resize(result.cols, result.rows)
     doFit()
-    term.focus()
+    // 不跟用户正在打字的输入框抢焦点：Agent 自动弹的终端不该打断输入（焦点进了 xterm 还会把
+    // 后续按键发给远端 shell）。当前焦点在可编辑元素上就不动它；用户点开终端窗口 / 点标签 /
+    // 点 ＋ 时焦点在按钮或 body 上，照常聚焦，点开就能打字
+    const active = document.activeElement
+    const editing =
+      active instanceof HTMLElement &&
+      (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)
+    if (!editing) term.focus()
   } catch (error) {
     if (!term) return
     term.write(`\r\n\x1b[31m接不上这个终端：${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`)
