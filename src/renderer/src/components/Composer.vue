@@ -172,17 +172,15 @@ const sending = computed(() => {
   return runtime?.generating ?? false
 })
 
-/** 占位文案：Enter/Shift+Enter 键盘提示并进 placeholder（不占底行位置）；助手模式/生成中换对应文案 */
+/** 占位文案：Enter/Shift+Enter 键盘提示并进 placeholder（不占底行位置）；默认不带场景前缀，助手模式保留场景文案 */
 const placeholder = computed(() => {
-  const base = store.assistantChat ? '和助手说点什么…' : '有什么可以帮你？'
-  const enterHint = store.assistantChat
-    ? store.assistantState?.reacting
+  if (store.assistantChat) {
+    const enterHint = store.assistantState?.reacting
       ? 'Enter 发下一句会打断重来'
       : 'Enter 发给助手'
-    : sending.value
-      ? 'Enter 补充给智能体'
-      : 'Enter 发送'
-  return `${base} · ${enterHint} · Shift+Enter 换行`
+    return `和助手说点什么… · ${enterHint} · Shift+Enter 换行`
+  }
+  return sending.value ? 'Enter 补充给智能体 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'
 })
 
 const canSend = computed(() => Boolean(text.value.trim()) || attachments.value.length > 0)
@@ -297,6 +295,7 @@ async function newConversation(): Promise<void> {
 // 两种模式：hold=按住识别松开结束（默认）；click=按一下开始持续识别、再按一下结束
 const VOICE_LANGS: Array<{ value: string; label: string }> = [
   { value: 'auto', label: '自动（跟随系统）' },
+  { value: 'mix', label: '中英混合（whisper）' },
   { value: 'zh-CN', label: '中文（简体）' },
   { value: 'zh-TW', label: '中文（繁體）' },
   { value: 'en-US', label: 'English (US)' },
@@ -324,8 +323,17 @@ function saveVoicePref(key: string, value: string): void {
   }
 }
 
+// 识别模型：默认按语言自动选（中文等 → SenseVoice，混合/其他 → whisper）；也可手动锁定某一款
+const VOICE_MODELS: Array<{ value: string; label: string; note: string }> = [
+  { value: 'auto', label: '自动（按语言选，推荐）', note: '中文→SenseVoice，混合/小语种→Whisper' },
+  { value: 'sensevoice', label: 'SenseVoice', note: '约230MB · 中文最快最准、抗噪' },
+  { value: 'whisper-small', label: 'Whisper Small', note: '约240MB · 中英混合稳，较慢' },
+  { value: 'whisper-base', label: 'Whisper Base', note: '约80MB · 最小，中文易错' }
+]
+
 const voiceMode = ref<'hold' | 'click'>(loadVoicePref('voice.mode') === 'click' ? 'click' : 'hold')
 const voiceLang = ref(loadVoicePref('voice.lang') || 'auto')
+const voiceModel = ref(loadVoicePref('voice.model') || 'auto')
 const voiceMicId = ref(loadVoicePref('voice.mic'))
 const voiceMenuOpen = ref(false)
 const voiceWrap = ref<HTMLDivElement | null>(null)
@@ -394,6 +402,11 @@ function setVoiceLang(value: string): void {
   saveVoicePref('voice.lang', value)
 }
 
+function setVoiceModel(value: string): void {
+  voiceModel.value = value
+  saveVoicePref('voice.model', value)
+}
+
 function chooseMic(deviceId: string): void {
   voiceMicId.value = deviceId
   saveVoicePref('voice.mic', deviceId)
@@ -413,6 +426,7 @@ async function startListen(): Promise<void> {
         voiceLang.value === 'auto'
           ? navigator.language || undefined // 「自动」= 跟随系统：whisper 对短音频自己猜语言容易猜错（实测中文句被译成英文）
           : voiceLang.value,
+      model: voiceModel.value,
       deviceId: voiceMicId.value || undefined,
       onPhase: (phase: VoicePhase, detail?: string) => {
         if (phase === 'listening') {
@@ -765,6 +779,21 @@ onBeforeUnmount(() => {
                   <span v-if="lang.value !== 'auto'" class="model-item-model">{{ lang.value }}</span>
                 </span>
                 <span v-if="voiceLang === lang.value" class="model-check">✓</span>
+              </button>
+              <div class="dir-sep">识别模型</div>
+              <button
+                v-for="m in VOICE_MODELS"
+                :key="m.value"
+                class="model-item"
+                :class="{ current: voiceModel === m.value }"
+                :title="m.note"
+                @click="setVoiceModel(m.value)"
+              >
+                <span class="model-item-main">
+                  <span class="model-item-title">{{ m.label }}</span>
+                  <span class="model-item-model">{{ m.note }}</span>
+                </span>
+                <span v-if="voiceModel === m.value" class="model-check">✓</span>
               </button>
             </div>
           </div>
