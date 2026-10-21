@@ -371,6 +371,16 @@ export class MachineConnection {
     }
   }
 
+  /** 外部依赖恢复（SChat 重连上线）：不等退避计时，立刻重拨想要的连接。
+   *  SChat 断线时这台机器一定断开并进入退避（最长 60 秒才试下一次），
+   *  信令层先恢复时由宿主踢这一脚，工作台和视频通话才能马上回来 */
+  retryNow(): void {
+    if (!this.wanted || this.connecting || this.state === 'ready') return
+    this.clearReconnect()
+    this.backoffIndex = 0
+    void this.start()
+  }
+
   private teardown(): void {
     this.rpc?.failAll(new Error('连接已断开'))
     // 先取快照、先置空再挂断：hangup() 可能同步触发信令回调重入 teardown()，

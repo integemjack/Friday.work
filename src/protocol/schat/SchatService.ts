@@ -13,6 +13,9 @@ import type { CredentialBackend } from '../session/PairingStore.js'
 
 const KEY = 'schat'
 
+/** 意外断线后的重连退避（和机器连接同一套节奏；连上就清零） */
+const WS_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000]
+
 /** 落盘的 SChat 会话（加密存） */
 interface StoredSession {
   server: string
@@ -71,6 +74,8 @@ export interface SchatHooks {
   onChange(state: SchatState): void
   /** 收到一帧通话信令（渲染进程拿去喂 RTCPeerConnection） */
   onCallSignal(signal: CallSignal): void
+  /** 恢复在线（重连成功）：宿主可以借机立刻重连依赖 SChat 信令的 work 机器，不等它们的退避计时 */
+  onOnline?(): void
 }
 
 /** work 通道（0.3）：callType "work" 的 p2p_* 转给对应机器的连接 */
@@ -104,6 +109,10 @@ export class SchatService {
   private loading = false
   /** work 通道（0.3）：机器人 → 信令状态机（按 botUserID 一台机器一个） */
   private readonly workRoutes = new Map<number, WorkRoute>()
+  /** 还想在线（有已登录会话、没被踢/没退出）：意外断线后自动重连 */
+  private wantedOnline = false
+  private wsRetryTimer: NodeJS.Timeout | null = null
+  private wsRetryIndex = 0
 
   constructor(
     private readonly backend: CredentialBackend,
@@ -168,6 +177,7 @@ export class SchatService {
       const stored = JSON.parse(raw) as StoredSession
       if (!stored?.server || !stored.token) return
       this.session = stored
+      this.wantedOnline = true
       this.patch({ server: stored.server, userId: stored.userId, deviceName: stored.deviceName, status: '正在连接聊天服务器…' })
       await this.connectWs()
     } catch {
@@ -181,6 +191,9 @@ export class SchatService {
   /** 开始扫码登录：建会话、把二维码内容交给界面、轮询到批准 */
   async startLogin(server?: string, deviceName?: string): Promise<SchatState> {
     this.qr?.cancel()
+    // 旧会话的断线重连先停：别在扫码过程中把旧连接拨回来（onApproved 成功后会重新开始）
+    this.wantedOnline = false
+    this.clearWsRetry()
     const chosen = (server?.trim() || this.state.server || DEFAULT_SCHAT_SERVER).replace(/\/+$/, '')
     const name = deviceName?.trim() || `Friday Work（${process.platform === 'win32' ? 'Windows' : 'Linux'}）`
     this.patch({ phase: 'logging-in', server: chosen, deviceName: name, qrPayload: '', status: '正在获取登录二维码…', error: '' })
@@ -252,13 +265,19 @@ export class SchatService {
     }
     this.session = stored
     await this.backend.store(KEY, JSON.stringify(stored))
+    this.wantedOnline = true
     await this.connectWs()
   }
 
   /** 有凭据就直连（每次连接前先刷一次 refreshToken，rotation 后写回） */
   private async connectWs(): Promise<void> {
     if (!this.session) return
-    this.client?.close()
+    this.clearWsRetry()
+    // 先摘下旧连接再关：close() 会同步触发 offline 回调，回调里
+    // 「this.client 还是这条吗」的判断靠它——先置 null 才不会把主动换线误当成意外断线
+    const previous = this.client
+    this.client = null
+    previous?.close()
     const session = this.session
     try {
       if (session.refreshToken) {
@@ -288,15 +307,25 @@ export class SchatService {
         onEvent: (envelope) => this.onEnvelope(envelope),
         onState: (state, detail) => {
           if (state === 'online') {
+            this.wsRetryIndex = 0
+            this.clearWsRetry()
             this.patch({ phase: 'online', userId: session.userId, status: '' })
             void this.loadBots()
+            this.hooks.onOnline?.()
           } else if (state === 'kicked') {
+            // 凭据被服务端作废：不再自动重连（防失效 token 反复降级成 guest）
+            this.wantedOnline = false
+            this.clearWsRetry()
             this.patch({ phase: 'error', status: detail ?? '凭据已失效', error: '凭据已失效，请重新扫码登录' })
           } else if (state === 'offline') {
             this.patch({ phase: 'idle', status: detail ?? '' })
             // 掉线：还在通话的话一并结束；work 机器也断（信令层没了）
             this.calls.onDisconnected()
             this.workRoutes.forEach((route) => route.onWorkEnvelope('offline', {}))
+            // 意外断线（这条连接还在位、不是换线时的主动关闭）：自动重连。
+            // 没有它，schat-ws 断一次就永远 idle：workHost() 恒 null、机器重连永远
+            // 拿不到信令主机，工作台的视频通话也永远不会自己回来
+            if (this.wantedOnline && this.client === client) this.scheduleWsRetry()
           }
         }
       })
@@ -305,6 +334,29 @@ export class SchatService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.patch({ phase: 'error', error: message, status: message })
+      // 想在线但连不上（启动时网络没好 / 服务器暂时不可达）：退避重试，别把用户撂在 error 态
+      if (this.wantedOnline) this.scheduleWsRetry()
+    }
+  }
+
+  // MARK: 断线重连
+
+  private scheduleWsRetry(): void {
+    if (!this.wantedOnline || this.wsRetryTimer) return
+    const delay = WS_BACKOFF_MS[Math.min(this.wsRetryIndex, WS_BACKOFF_MS.length - 1)]
+    this.wsRetryIndex += 1
+    this.patch({ status: `连接断了，${Math.round(delay / 1000)} 秒后重连…` })
+    this.wsRetryTimer = setTimeout(() => {
+      this.wsRetryTimer = null
+      if (!this.wantedOnline || !this.session) return
+      void this.connectWs()
+    }, delay)
+  }
+
+  private clearWsRetry(): void {
+    if (this.wsRetryTimer) {
+      clearTimeout(this.wsRetryTimer)
+      this.wsRetryTimer = null
     }
   }
 
@@ -520,8 +572,12 @@ export class SchatService {
   disconnect(): void {
     this.qr?.cancel()
     this.qr = null
-    this.client?.close()
+    this.wantedOnline = false
+    this.clearWsRetry()
+    // 先摘下再关：close() 的 offline 回调靠「this.client 还是这条吗」识别主动退出
+    const client = this.client
     this.client = null
+    client?.close()
     this.session = null
     void this.backend.delete(KEY)
     this.patch({ phase: 'idle', qrPayload: '', bots: [], messages: {}, status: '', error: '', userId: 0 })

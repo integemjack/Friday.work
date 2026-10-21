@@ -47,7 +47,11 @@ export class ProtocolHost {
     this.remotesFile = join(init.userDataPath, 'Remotes', 'remotes.json')
     this.schat = new SchatService(backends.credentials, {
       onChange: (state) => this.port?.postMessage({ type: 'schat', state }),
-      onCallSignal: (signal) => this.port?.postMessage({ type: 'schatCall', signal })
+      onCallSignal: (signal) => this.port?.postMessage({ type: 'schatCall', signal }),
+      // SChat 恢复在线：依赖它的信令重连 work 机器都立刻重试，不等各自最长 60 秒的退避
+      onOnline: () => {
+        for (const machine of this.machines.values()) machine.retryNow()
+      }
     })
   }
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // 通话面板（常驻版，右栏）：进入工作台（机器连上）就自动与助手 bot 建立实时视频通话，
 // 可以直接开口对话；视频从右栏顶部按比例自适应显示、下半段被聊天覆盖层（顶端渐隐）叠盖——
-//   通话中：远端画面（视频通话）+ 本端小窗 + 静麦 / 静扬声器 / 摄像头开关（没有挂断：挂断=结束程序）
-//   未接通：显示原因 + 「接通」按钮（结束后不自动重拨，点它重拨）
+//   通话中：远端画面（视频通话）+ 本端小窗 + 静麦 / 静扬声器 / 摄像头开关 / 挂断
+//   未接通：显示原因 + 「接通」按钮（结束后不自动重拨，点它重拨；断线弄断的除外）
 // 媒体引擎（WebRTC PC / getUserMedia / 音视频渲染）全在这里；信令在协议进程（schat-ws p2p_*）。
 // 音频口径：Opus 48 kHz 单声道；对方没摄像头时退回头像 + 电平脉冲。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -70,6 +70,8 @@ const ICONS = {
   cam: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
   camOff: '<path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/>',
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  // 挂断：电话图标旋转 135°（听筒朝下的传统挂断样式）
+  hangup: '<g transform="rotate(135 12 12)"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></g>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
 } as const
 
@@ -343,6 +345,16 @@ async function reject(): Promise<void> {
   teardownMedia()
 }
 
+/** 挂断通话（控制条上的红色按钮）：结束信令 + 停媒体；想再打点挂件上的「接通」 */
+async function hangup(): Promise<void> {
+  try {
+    await store.callHangup()
+  } catch {
+    // 连接已断时挂不了：直接把本地媒体收掉
+  }
+  teardownMedia()
+}
+
 async function toggleMute(): Promise<void> {
   const next = !muted.value
   await store.callMute(next)
@@ -398,6 +410,8 @@ async function startAssistantCall(): Promise<void> {
  *  被 busy/超时拒掉的话同一连接会话里再补一次（挂断后不自动重拨，点挂件上的接通） */
 let autoTimer = 0
 let autoRetries = 0
+/** 断线弄断的通话自动补接的次数（同一连接会话；正常挂断/对方拒接不补） */
+let disconnectRetries = 0
 
 function scheduleAutoDial(delayMs: number): void {
   window.clearTimeout(autoTimer)
@@ -418,6 +432,7 @@ watch(
     if (!store.connected) {
       autoDialedMachine = ''
       autoRetries = 0
+      disconnectRetries = 0
       window.clearTimeout(autoTimer)
       return
     }
@@ -425,18 +440,25 @@ watch(
     if (store.schat.phase !== 'online') return
     autoDialedMachine = store.currentMachine
     autoRetries = 0
+    disconnectRetries = 0
     scheduleAutoDial(3000)
   },
   { immediate: true }
 )
 
-// 自动那通被拒（busy/没人接）：同一连接会话里再补一次
+// 自动那通被拒（busy/没人接）：同一连接会话里再补一次；
+// 断线弄断的（schat-ws 掉线把通话一并结束，endedCode=disconnected）：连接恢复后自动接回来，最多两次
 watch(phase, (now, before) => {
   if (now !== 'ended' || before === 'idle') return
   if (!store.connected || autoDialedMachine !== store.currentMachine) return
   const code = String((store.schat.call as { endedCode?: string }).endedCode ?? '')
   if ((code === 'busy' || code === 'timeout') && autoRetries < 1) {
     autoRetries += 1
+    scheduleAutoDial(5000)
+    return
+  }
+  if (code === 'disconnected' && disconnectRetries < 2) {
+    disconnectRetries += 1
     scheduleAutoDial(5000)
   }
 })
@@ -546,6 +568,9 @@ onBeforeUnmount(() => clearInterval(unwatch))
             @click="toggleCamera"
           >
             <svg viewBox="0 0 24 24" v-html="cameraOn ? ICONS.cam : ICONS.camOff" />
+          </button>
+          <button class="cbtn hangup" title="挂断" @click="hangup">
+            <svg viewBox="0 0 24 24" v-html="ICONS.hangup" />
           </button>
         </template>
       </div>
@@ -699,6 +724,11 @@ onBeforeUnmount(() => clearInterval(unwatch))
 }
 
 .cbtn.reject {
+  background: var(--fail);
+  border-color: var(--fail);
+}
+
+.cbtn.hangup {
   background: var(--fail);
   border-color: var(--fail);
 }
