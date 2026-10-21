@@ -447,10 +447,6 @@ watch(
   outline: none;
 }
 
-.address-input:focus {
-  border-color: var(--accent);
-}
-
 .fixed-badge {
   font-size: 10px;
   color: var(--muted);

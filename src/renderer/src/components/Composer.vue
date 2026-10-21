@@ -438,13 +438,8 @@ function stop() {
 
 /* 贾维斯主题的输入台样式在文件末尾的「全息指令台」段（四角括号/能量线/聚焦辉光，特异性更高会盖掉上面） */
 
-/* 聚焦：卡片轻轻上浮、边框亮半档（全亮太硬）、外圈光环 + 落影加深 */
+/* 聚焦：不再改边框/光环（用户要求去掉输入框聚焦边框），只保留轻轻上浮 */
 .composer-card.focused {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    0 0 0 3px var(--accent-weak),
-    0 16px 36px rgba(0, 0, 0, 0.18);
   transform: translateY(-2px);
 }
 
@@ -903,18 +898,9 @@ textarea::placeholder {
   background-repeat: no-repeat;
 }
 
+/* 聚焦：同样只上浮，不改边框/辉光；四角括号也不再点亮（去掉聚焦边框效果） */
 [data-theme='jarvis'] .composer-card.focused {
-  border-color: var(--accent-a60);
-  box-shadow:
-    0 0 0 1px var(--accent-a20),
-    0 0 28px var(--accent-a16),
-    0 14px 32px rgba(0, 0, 0, 0.5);
   transform: translateY(-2px);
-}
-
-[data-theme='jarvis'] .composer-card.focused::before,
-[data-theme='jarvis'] .composer-card.focused::after {
-  opacity: 1;
 }
 
 [data-theme='jarvis'] .composer-card textarea {

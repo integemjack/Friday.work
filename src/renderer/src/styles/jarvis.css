@@ -22,21 +22,12 @@ html[data-theme='jarvis'] .titlebar {
   border-bottom: 1px solid var(--accent-a18);
 }
 
-/* 输入框 / 文本域：透明青底 + 聚焦辉光 */
+/* 输入框 / 文本域：透明青底（聚焦不加边框/辉光，用户要求去掉；键盘焦点走全局 :focus-visible） */
 html[data-theme='jarvis']
   :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea):not(.composer-card textarea) {
   background-color: var(--accent-a4);
   border-color: var(--accent-a25);
   caret-color: var(--accent);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-html[data-theme='jarvis']
-  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):not(.xterm-helper-textarea):not(.composer-card textarea):focus {
-  border-color: var(--accent-a60);
-  box-shadow:
-    0 0 0 1px var(--accent-a22),
-    0 0 14px var(--accent-a12);
   outline: none;
 }
 
@@ -285,4 +276,12 @@ html[data-theme='jarvis'] ::selection {
 html[data-theme='jarvis'] :focus-visible {
   outline: 1px solid var(--accent-a60);
   outline-offset: 1px;
+}
+
+/* 文本输入控件连键盘/脚本聚焦也不出描边（用户要求彻底去掉聚焦边框；
+   自动聚焦会触发 :focus-visible，上方全局规则会让输入台闪出青框）。
+   光标 caret 仍在，能看出输入位置。 */
+html[data-theme='jarvis']
+  :is(input:not([type='checkbox']):not([type='radio']), textarea, select):focus-visible {
+  outline: none;
 }

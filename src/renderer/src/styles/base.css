@@ -43,6 +43,13 @@ textarea {
   color: inherit;
 }
 
+/* 输入控件聚焦时不出边框/光环（用户要求）：去掉 Chromium 默认 focus ring。 */
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+}
+
 /* MARK: 融合层（所有主题）：桌面上常驻的容器半透明 + 磨砂模糊，背景透出来。
    半透明没有 blur 只是发灰；blur 在这里统一给，不挑主题。
    （输入台 composer 不在这里：它悬浮在中间桌面，卡片自带 blur，外层是透明的；
