@@ -2,6 +2,8 @@
 //   - 103 个音色：sid 0-2 英文女声（af_maple/af_sol/bf_vale），3-57 中文女声
 //     （zf_001-zf_055），58-102 中文男声（zm_001-zm_045）——映射来自
 //     k2-fsa/sherpa-onnx PR #1942；中英文都能念，标点自带停顿。
+//     默认 sid 44（zf_042）：103 个音色实测基频/亮度里最「清亮」的一档，见渲染层
+//     speechOutput.ts 的 PRESET_VOICES 注释。
 //   - 用 fp32 不用 int8：实测 i7-10700F（8核）上 int8 RTF 1.29（比实时还慢，
 //     反量化反而拖后腿），fp32 RTF 0.30-0.43（快 3-4 倍）；配合渲染层分句
 //     流水线，首句 1-2 秒出声，后续句在播放期间合成。
@@ -221,7 +223,7 @@ export function registerTtsIpc(): void {
     ): Promise<{ samples: Float32Array; sampleRate: number }> => {
       const text = (payload.text ?? '').trim()
       if (!text) return { samples: new Float32Array(0), sampleRate: 24000 }
-      const sid = Number.isInteger(payload.sid) && payload.sid! >= 0 ? payload.sid! : 3
+      const sid = Number.isInteger(payload.sid) && payload.sid! >= 0 ? payload.sid! : 44
       const speed = typeof payload.speed === 'number' && payload.speed > 0.2 && payload.speed < 4 ? payload.speed : 1.0
       return synthesizeSpeech(event.sender, text, sid, speed)
     }

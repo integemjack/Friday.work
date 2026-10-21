@@ -149,7 +149,7 @@ const customVoiceOptions = CUSTOM_VOICE_GROUPS.map((group) => ({
 /** 全部可选音色：预置 10 个 + 用户自定义的（自定义的排后面，可删） */
 const allVoices = computed<VoiceOption[]>(() => [...PRESET_VOICES, ...customVoices.value])
 
-const draft = ref({ name: '', sid: 3, speed: 1.0 })
+const draft = ref({ name: '', sid: 44, speed: 1.0 })
 const draftOpen = ref(false)
 
 function pickDraftVoice(sid: number): void {
@@ -166,7 +166,7 @@ function saveCustom(): void {
   const voice = addCustomVoice(name, draft.value.sid, draft.value.speed)
   setCurrentVoice(voice.id)
   draftOpen.value = false
-  draft.value = { name: '', sid: 3, speed: 1.0 }
+  draft.value = { name: '', sid: 44, speed: 1.0 }
 }
 
 /** 模型状态文案（下载/解压/加载/就绪/出错；首次使用自动下载约 150MB） */
