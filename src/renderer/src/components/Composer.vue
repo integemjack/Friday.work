@@ -927,6 +927,11 @@ textarea {
   line-height: 1.55;
   min-height: 36px;
   max-height: 200px;
+  /* 占位提示（Enter/Shift+Enter）比输入区宽时超出部分向右渐隐，不硬切（照会话名行的做法）；
+     渐隐带锚定在文字区右缘（border-box 右移 44px padding，否则渐变全落在空白 padding 里盖不住切点），
+     最右 36px 恢复不透明，多行滚动时滚动条不隐身；正文长到滚动时右缘同样淡出 */
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 72px), transparent calc(100% - 44px), #000 calc(100% - 36px), #000 100%);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 72px), transparent calc(100% - 44px), #000 calc(100% - 36px), #000 100%);
 }
 
 textarea::placeholder {
@@ -1006,14 +1011,18 @@ textarea::placeholder {
 /* 模型选择器（Friday 样式：ghost chip + 上拉菜单） */
 .model-wrap {
   position: relative;
-  flex: none;
+  /* 空间不够时跟着收缩（chip 限宽、名称 ellipsis），发送键不被顶出输入台；
+     不加 overflow——模型/目录/语音菜单都是从这个容器弹出的，加了会把菜单裁掉 */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .model-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 220px;
+  /* 跟着 .model-wrap 的收缩变窄（名称有 ellipsis），不收缩时最宽仍是 220px */
+  max-width: min(220px, 100%);
   height: 30px;
   padding: 0 9px;
   border-radius: 8px;
@@ -1257,6 +1266,12 @@ textarea::placeholder {
   font-size: 10.5px;
   color: var(--text-3);
   white-space: nowrap;
+  /* 底行空间不够时自己收缩、超出的部分右缘渐隐（照会话名行的做法），不把发送/语音键顶出输入台 */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
 }
 
 /* 面板窄时提示行没地方放：按容器宽（.assistant-chat 设了 container-type）而不是视口宽判断，
