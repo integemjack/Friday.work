@@ -3,9 +3,11 @@
 // 没有标签页，只有「来自哪段会话 / 内容 / 结果」；有结果后 5 秒渐隐消失。
 // 面板基础（定位/毛玻璃/标题行渐隐/滚动条/进出场动画）与思考/回复气泡共用 styles/cast.css；
 // 所有卡一套限高（不截断，超高内部滚动），无 tall 普通卡之分。
-// 审批也走这里（带 批准/拒绝 按钮）；数据与定时全在 store（pushOp / scheduleOpFade / fadeOp）。
+// 审批也走这里（要批准的调用带 批准/拒绝 按钮）；ask_user 的问题不是批准——展开成问题面板
+// （选项点选/自己写/跳过，AskPanel）；数据与定时全在 store（pushOp / scheduleOpFade / fadeOp）。
 import { useAppStore } from '../stores/app.js'
 import InlineMedia from './InlineMedia.vue'
+import AskPanel from './AskPanel.vue'
 
 const store = useAppStore()
 
@@ -52,7 +54,16 @@ const statusMark: Record<string, string> = {
           compact
         />
         <div v-if="card.result" class="line result cast-scroll" :class="card.status">{{ card.result }}</div>
-        <div v-if="card.status === 'awaitingApproval'" class="approval-row">
+        <!-- ask_user 在等回答：问题面板（单选点一下就过、多选勾完确定、自己写、跳过） -->
+        <AskPanel
+          v-if="card.status === 'awaitingApproval' && card.questions?.length"
+          class="ask-row"
+          :questions="card.questions"
+          :answered="store.answeredAsks.has(card.id)"
+          @answer="(payload) => store.answerQuestion(card.id, payload)"
+          @skip="store.skipQuestion(card.id)"
+        />
+        <div v-else-if="card.status === 'awaitingApproval'" class="approval-row">
           <button class="abtn" @click.stop="store.resolveApproval(card.id, false)">拒绝</button>
           <button class="abtn primary" @click.stop="store.resolveApproval(card.id, true)">批准</button>
         </div>
@@ -182,6 +193,14 @@ const statusMark: Record<string, string> = {
   justify-content: flex-end;
   gap: 6px;
   margin-top: 5px;
+}
+
+/* ask_user 的问题面板：深色卡上的一套变量（AskPanel 内部用） */
+.ask-row {
+  margin-top: 5px;
+  --ask-line: var(--line);
+  --ask-accent: var(--accent);
+  --ask-picked: var(--accent-a15, rgba(80, 170, 255, 0.15));
 }
 
 .abtn {

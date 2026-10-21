@@ -123,6 +123,11 @@ export class IpcBridge {
       this.getWindow()?.setBackgroundColor(color)
     })
 
+    // 有待答的 ask_user：窗口切到系统级置顶（提问浮层显示中永远最前，压过其他应用），没了恢复
+    ipcMain.on('ui:ask-pinned', (_event, pinned: unknown) => {
+      this.getWindow()?.setAlwaysOnTop(pinned === true, 'screen-saver')
+    })
+
     // 无边框窗口的窗控钮（TitleBar.vue）：最小化 / 最大化切换 / 关闭
     ipcMain.on('win:minimize', (event) => {
       BrowserWindow.fromWebContents(event.sender)?.minimize()

@@ -23,6 +23,8 @@ declare global {
       notify(payload: { title: string; body?: string; conversationID?: string }): void
       /** 界面主题底色（贾维斯深空蓝 / 跟随系统深浅） */
       setWindowBackground(color: string): void
+      /** 有待答的 ask_user 问题时窗口切到系统级置顶（提问浮层显示中永远最前），没了恢复 */
+      setAskPinned(pinned: boolean): void
       /** 无边框窗口的窗控钮 */
       winMinimize(): void
       winMaximizeToggle(): void

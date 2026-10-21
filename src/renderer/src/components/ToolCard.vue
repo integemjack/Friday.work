@@ -28,7 +28,7 @@ const statusText = computed(() => {
   switch (props.tool.status) {
     case 'succeeded': return '完成'
     case 'failed': return '失败'
-    case 'awaitingApproval': return '待确认'
+    case 'awaitingApproval': return props.tool.name === 'ask_user' ? '等你回答' : '待确认'
     case 'running': return '运行中'
     case 'denied': return '已拒绝'
     default: return props.tool.status

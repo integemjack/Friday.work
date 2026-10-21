@@ -18,6 +18,7 @@ import BrowserCard from './components/BrowserCard.vue'
 import AgentsCard from './components/AgentsCard.vue'
 import SettingsWindow from './components/SettingsWindow.vue'
 import LoginView from './components/LoginView.vue'
+import AskOverlay from './components/AskOverlay.vue'
 import CallWidget from './components/CallWidget.vue'
 import SessionList from './components/SessionList.vue'
 import AssistantChat from './components/AssistantChat.vue'
@@ -221,6 +222,9 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
 
     <!-- 登录页：盖在桌面上（面板不卸载，终端等实例还在），连上后自己收起 -->
     <LoginView v-if="showLogin" />
+
+    <!-- ask_user 置顶提问浮层：有待答的问题时弹在屏幕正中间、窗口系统级置顶，没了收起 -->
+    <AskOverlay />
 
     <!-- 媒体灯箱：叠里点单张图片放大 / 视频大窗播放（盖过登录页，Esc/点背景关） -->
     <MediaLightbox />

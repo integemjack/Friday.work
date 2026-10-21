@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   setWindowBackground: (color: string): void => {
     ipcRenderer.send('ui:background', color)
   },
+  /** 有待答的 ask_user 问题时把窗口切到系统级置顶（浮层显示中永远最前），没了恢复 */
+  setAskPinned: (pinned: boolean): void => {
+    ipcRenderer.send('ui:ask-pinned', pinned)
+  },
   /** 无边框窗口的窗控钮 */
   winMinimize: (): void => {
     ipcRenderer.send('win:minimize')

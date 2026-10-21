@@ -5,6 +5,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import MessageItem from './MessageItem.vue'
+import AskPanel from './AskPanel.vue'
 
 const store = useAppStore()
 const scrollEl = ref<HTMLDivElement | null>(null)
@@ -77,7 +78,7 @@ const statusLine = computed(() => {
   if (!current) return ''
   if (current.generating) return '正在生成…'
   if (current.stopping) return '正在停止…'
-  if (approvals.value.length > 0) return '等待你确认'
+  if (approvals.value.length > 0) return approvals.value.some((item) => item.questions?.length) ? '等你回答' : '等待你确认'
   if (current.queue.length > 0) return `${current.queue.length} 条消息排队`
   return ''
 })
@@ -94,15 +95,33 @@ const statusLine = computed(() => {
       </div>
     </div>
 
-    <!-- 审批横幅 / 信息行挪到底部（消息流顶端直通视频中点、渐隐，顶部不再压文字） -->
+    <!-- 审批横幅 / 信息行挪到底部（消息流顶端直通视频中点、渐隐，顶部不再压文字）。
+         ask_user 的待确认不足批准/拒绝：展开成问题面板（选项点选/自己写/跳过，AskPanel） -->
     <div v-if="approvals.length > 0" class="approval-bar">
-      <div v-for="approval in approvals" :key="approval.eventID" class="approval-item">
-        <span class="approval-tool">{{ approval.title || approval.tool }}</span>
-        <span class="approval-summary">{{ approval.summary }}</span>
-        <div class="approval-actions">
-          <button class="abtn" @click="store.resolveApproval(approval.eventID, false)">拒绝</button>
-          <button class="abtn primary" @click="store.resolveApproval(approval.eventID, true)">批准</button>
-        </div>
+      <div
+        v-for="approval in approvals"
+        :key="approval.eventID"
+        class="approval-item"
+        :class="{ ask: !!approval.questions?.length }"
+      >
+        <template v-if="approval.questions?.length">
+          <span class="approval-tool">{{ approval.title || '问你' }}</span>
+          <AskPanel
+            class="approval-ask"
+            :questions="approval.questions"
+            :answered="store.answeredAsks.has(approval.eventID)"
+            @answer="(payload) => store.answerQuestion(approval.eventID, payload)"
+            @skip="store.skipQuestion(approval.eventID)"
+          />
+        </template>
+        <template v-else>
+          <span class="approval-tool">{{ approval.title || approval.tool }}</span>
+          <span class="approval-summary">{{ approval.summary }}</span>
+          <div class="approval-actions">
+            <button class="abtn" @click="store.resolveApproval(approval.eventID, false)">拒绝</button>
+            <button class="abtn primary" @click="store.resolveApproval(approval.eventID, true)">批准</button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -194,6 +213,20 @@ const statusLine = computed(() => {
   color: #fff;
   font-size: 12px;
   flex-wrap: wrap;
+}
+
+/* ask_user：问题面板整行展开（橙底白字，AskPanel 的变量在这给一套） */
+.approval-item.ask {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  --ask-line: rgba(255, 255, 255, 0.55);
+  --ask-accent: #fff;
+  --ask-picked: rgba(255, 255, 255, 0.16);
+}
+
+.approval-ask {
+  width: 100%;
 }
 
 .approval-tool {

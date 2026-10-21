@@ -459,11 +459,30 @@ export interface FileUploadResult {
 
 // MARK: 活动与审批（REMOTE.md §6「会话的实时动静」）
 
+/** ask_user 的一个选项（label + 一行说明） */
+export interface AskOption {
+  label: string
+  detail?: string
+}
+
+/** ask_user 的一题（ASK.md v2.13）。activity / 快照里的 recommended 是 0 起；
+ *  工具参数原文（ToolEvent.arguments）里是 1 起的序号或选项上的 recommended:true，解析见 lib/askUser.ts */
+export interface AskQuestion {
+  question: string
+  options: AskOption[]
+  /** 能多选 */
+  multiple?: boolean
+  /** 推荐的选项（0 起；没有为 -1 / 缺省） */
+  recommended?: number
+}
+
 export interface PendingApproval {
   eventID: string
   tool: string
   title: string
   summary: string
+  /** v2.13 ask_user 问的（有值 = 这个在等的是提问，不是要批准的调用） */
+  questions?: AskQuestion[]
 }
 
 export interface SessionActivity {
@@ -491,6 +510,8 @@ export interface ActivityEventParams {
   title?: string
   workingDirectory?: string
   approvals?: PendingApproval[]
+  /** v2.45 approval：比上一条少掉的那几个各是怎么结束的（answer 是给人看的一句，如「已选：卡片式」；老服务端没有） */
+  resolved?: Array<{ eventID: string; outcome: 'answered' | 'approved' | 'denied' | 'stopped'; answer?: string }>
   brief?: Record<string, unknown>
   [key: string]: unknown
 }

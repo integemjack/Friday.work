@@ -14,10 +14,12 @@ import {
 } from '../lib/stackMediaCache.js'
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
+import { parseAskQuestions } from '../lib/askUser.js'
 import {
   blockCase,
   blockPayload,
   type ActivityEventParams,
+  type AskQuestion,
   type BlocksPatch,
   type BrowserFrameParams,
   type BrowserTab,
@@ -120,6 +122,8 @@ export interface DesktopOp {
   content: string
   result: string
   status: 'running' | 'awaitingApproval' | 'succeeded' | 'failed' | 'denied'
+  /** ask_user 在等问题：有值时审批行换成问题面板（选项点选，lib/askUser.ts） */
+  questions?: AskQuestion[]
   /** 工具名（看图 analyze_image / 看视频 analyze_video）：这些卡把媒体直接嵌在卡里展示 */
   toolName?: string
   x: number
@@ -378,6 +382,10 @@ export const useAppStore = defineStore('app', {
     callSignalCount: 0,
     /** 当前机器全部会话的待确认调用（activity 订阅，REMOTE.md §6） */
     approvals: {} as Record<string, PendingApproval[]>,
+    /** 已在这边交了回答/跳过的 ask_user（eventID）：面板冻结在「已交」，等 approval 事件把它收走 */
+    answeredAsks: new Set<string>(),
+    /** 在置顶提问浮层里点了「稍后再说」的 ask_user（eventID）：新问题来了再弹，旧的不再弹 */
+    dismissedAsks: new Set<string>(),
     /** 当前机器全部会话的实时动静（会话列表状态点、桌面投窗的数据源，REMOTE.md §6「会话的实时动静」） */
     activities: {} as Record<string, SessionActivity>,
     /** 桌面投窗：思考/文本气泡（随流式更新，5 秒无新内容渐隐） */
@@ -450,6 +458,24 @@ export const useAppStore = defineStore('app', {
   getters: {
     currentMachineInfo(state): MachineStateInfo | undefined {
       return state.machines.find((machine) => machine.id === state.currentMachine)
+    },
+
+    /** 待答的 ask_user（跨全部会话）：屏幕中间的置顶提问浮层（AskOverlay）就弹这些；
+     *  交了回答/跳过/点了稍后的不算（answeredAsks / dismissedAsks） */
+    pendingAsks(state): Array<{ conversationID: string; conversationTitle: string; approval: PendingApproval }> {
+      const list: Array<{ conversationID: string; conversationTitle: string; approval: PendingApproval }> = []
+      for (const [conversationID, approvals] of Object.entries(state.approvals)) {
+        for (const approval of approvals) {
+          if (!approval.questions?.length) continue
+          if (state.answeredAsks.has(approval.eventID) || state.dismissedAsks.has(approval.eventID)) continue
+          list.push({
+            conversationID,
+            conversationTitle: state.summaries.find((item) => item.id === conversationID)?.title ?? '会话',
+            approval
+          })
+        }
+      }
+      return list
     },
     connected(): boolean {
       return this.currentMachineInfo?.state === 'ready'
@@ -1075,7 +1101,34 @@ export const useAppStore = defineStore('app', {
                   title: approval.title || approval.tool,
                   content: approval.summary,
                   result: '',
-                  status: 'awaitingApproval'
+                  status: 'awaitingApproval',
+                  questions: approval.questions?.length ? approval.questions : undefined
+                })
+              }
+              // 事件里不再等的那些卡收掉（在这边/别处答了、批了、停了）；v2.45 的 resolved 带怎么结束的（answer 是给人看的一句）
+              const waiting = new Set(list.map((item) => item.eventID))
+              const resolutions = new Map((evt.resolved ?? []).map((item) => [item.eventID, item]))
+              for (const card of this.opCards) {
+                if (card.conversationID !== evt.conversationID || card.status !== 'awaitingApproval' || waiting.has(card.id)) continue
+                const outcome = resolutions.get(card.id)?.outcome
+                const answer = resolutions.get(card.id)?.answer
+                const result =
+                  outcome === 'answered'
+                    ? (answer || '已回答')
+                    : outcome === 'approved'
+                      ? '已批准'
+                      : outcome === 'denied'
+                        ? '已拒绝'
+                        : outcome === 'stopped'
+                          ? '已停止'
+                          : '已处理'
+                this.pushOp({
+                  id: card.id,
+                  conversationID: card.conversationID,
+                  title: card.title,
+                  content: card.content,
+                  result,
+                  status: outcome === 'denied' || outcome === 'stopped' ? 'denied' : 'succeeded'
                 })
               }
               break
@@ -1505,6 +1558,25 @@ export const useAppStore = defineStore('app', {
       await rpc(this.currentMachine, 'runner.resolveApproval', { eventID, approved })
     },
 
+    /** 回答 ask_user（REMOTE.md v2.13：runner.resolveApproval 带 answer）。answers 每题一条
+     *  （选项名，多选「、」连；自己写的原样；空 = 没选）；交了先把面板冻在「已交」，等 approval 事件收走 */
+    async answerQuestion(eventID: string, answer: { answers: string[]; reply?: string }) {
+      this.answeredAsks.add(eventID)
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'runner.resolveApproval', { eventID, approved: true, answer })
+    },
+
+    /** 跳过提问：不带 answer 的批准 = 服务端按推荐的做（ASK.md） */
+    async skipQuestion(eventID: string) {
+      this.answeredAsks.add(eventID)
+      await this.resolveApproval(eventID, true)
+    },
+
+    /** 置顶提问浮层里点「稍后再说」：这个不再弹，新问题来了照常弹 */
+    dismissAsk(eventID: string) {
+      this.dismissedAsks.add(eventID)
+    },
+
     async stopRunner(conversationID?: string) {
       const target = conversationID ?? this.activeConversationID
       if (!this.currentMachine || !target) return
@@ -1648,6 +1720,7 @@ export const useAppStore = defineStore('app', {
       result: string
       status: DesktopOp['status']
       toolName?: string
+      questions?: AskQuestion[]
     }) {
       // 已渐隐移除的卡不复活：后续补丁重walk到同一历史块时若重建，就会同一操作反复弹出
       if (this.fadedOps.has(card.id)) {
@@ -1668,6 +1741,7 @@ export const useAppStore = defineStore('app', {
         if (card.content) existing.content = card.content
         if (card.result) existing.result = card.result
         if (card.toolName) existing.toolName = card.toolName
+        if (card.questions) existing.questions = card.questions
         if (card.status !== 'running' || existing.status === 'running') existing.status = card.status
         if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
         return
@@ -1810,14 +1884,19 @@ export const useAppStore = defineStore('app', {
      *  看图/看视频到成功态：媒体同时归进桌面的图片叠/视频叠 */
     noteToolBlock(conversationID: string, event: ToolEvent | undefined) {
       if (!event?.id) return
+      // ask_user 等回答：把参数里的问题解析出来（activity 事件带解析好的 questions，这条是消息补丁的路，
+      // 两条路同一个 id 会并到同一张卡）；卡上展开成选项点选，不再是批准/拒绝
+      const parsed = event.name === 'ask_user' && event.status === 'awaitingApproval' ? parseAskQuestions(event.arguments ?? '') : []
       this.pushOp({
         id: event.id,
         conversationID,
         title: event.title || event.name || '操作',
-        content: event.arguments ?? '',
+        // ask_user 的卡不展示原始 JSON：题面就在下面的面板里，这里只留一句题面摘要
+        content: parsed.length ? (parsed[0]?.question ?? '') : (event.arguments ?? ''),
         result: event.result || '',
         status: event.status ?? 'running',
-        toolName: event.name ?? ''
+        toolName: event.name ?? '',
+        questions: parsed.length ? parsed : undefined
       })
       if (event.status === 'succeeded' && isMediaTool(event.name ?? '')) {
         this.addStackMedia(conversationID, event.name ?? '', event.arguments ?? '')
