@@ -371,9 +371,11 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 
 <template>
   <section class="assistant-chat" data-testid="assistant-chat">
+    <!-- 顶端雾化窗帘：绝对定位盖在滚动区顶上、从面板最顶缘（=滚动容器顶缘）开始雾化。
+         不能放在 .message-scroll 里用 sticky：sticky 被 content box 约束，够不到 padding-top 那几条，
+         顶缘会漏出一条未模糊的内容 -->
+    <div class="top-fade" :class="{ on: scrolledFromTop }" aria-hidden="true" />
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
-      <!-- 顶端雾化窗帘：内容滚入顶部 96px 时渐进模糊，替代旧的 scroller mask -->
-      <div class="top-fade" :class="{ on: scrolledFromTop }" aria-hidden="true" />
       <div ref="messagesEl" class="messages">
         <MessageItem v-for="entry in shownMessages" :key="entry.message.id" :message="entry.message" />
 
@@ -469,6 +471,7 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 
 <style scoped>
 .assistant-chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -638,20 +641,23 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
   min-height: 0;
   overflow-y: auto;
   padding: 6px 8px 12px;
-  /* 顶端渐隐改用 .top-fade 雾化窗帘：原先的 scroller mask 是祖先级 backdrop root，
-     会把消息里气泡的 backdrop-filter 困在滚动容器内（磨砂全失效，实测 blur 差 87→2） */
+  /* 顶端渐隐由 .top-fade 雾化窗帘负责（绝对定位盖在本容器顶上，不在本容器流内）：
+     不能给本容器加 mask —— 那是祖先级 backdrop root，会把消息里气泡的
+     backdrop-filter 困在滚动容器内（磨砂全失效，实测 blur 差 87→2） */
 }
 
-/* 顶端雾化窗帘：sticky 钉在滚动视口顶部、负 margin 不占流内空间；
-   自带 blur + 自身 mask 渐隐 → 顶部雾化最强、往下淡出（自身 mask 不影响自身 backdrop 采样范围），
-   被裁的旧消息从顶缘的雾里淡出。mask 方向别写反：顶部 #000 才显示窗帘，往下 transparent 收尾。
+/* 顶端雾化窗帘：绝对定位盖在滚动区顶上、top:0/left:0/right:0 从面板最顶缘开始，
+   不留 padding 漏缝；自带 blur + 自身 mask 渐隐 → 顶缘雾化最强、往下淡出
+  （自身 mask 不影响自身 backdrop 采样范围），被裁的旧消息从顶缘的雾里淡出。
+   mask 方向别写反：顶部 #000 才显示窗帘，往下 transparent 收尾。
    只在顶部真有内容被裁（scrollTop > 2）时显示，没有时视频从顶部完整透出 */
 .top-fade {
-  position: sticky;
+  position: absolute;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 2;
   height: 96px;
-  margin-bottom: -96px;
   pointer-events: none;
   display: none;
 }
