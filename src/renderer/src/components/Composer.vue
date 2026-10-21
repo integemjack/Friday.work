@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { EngineView } from '../stores/app.js'
 import type { PickedFile } from '../lib/host.js'
+import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
 
 const emit = defineEmits<{ submit: [text: string, attachments: Array<{ path: string; name: string }>] }>()
 
@@ -52,6 +53,7 @@ function toggleModelMenu() {
   modelOpen.value = !modelOpen.value
   if (modelOpen.value) {
     dirOpen.value = false
+    voiceMenuOpen.value = false
     switchError.value = ''
   }
 }
@@ -104,6 +106,7 @@ function toggleDirMenu() {
   dirOpen.value = !dirOpen.value
   if (dirOpen.value) {
     modelOpen.value = false
+    voiceMenuOpen.value = false
     dirError.value = ''
     browsing.value = false
     void store.refreshDirectories() // 打开时重拉：顺带重验最近目录还在不在（REMOTE.md）
@@ -149,6 +152,7 @@ function onDocClick(event: MouseEvent) {
   const target = event.target as Node
   if (modelOpen.value && modelWrap.value && !modelWrap.value.contains(target)) modelOpen.value = false
   if (dirOpen.value && dirWrap.value && !dirWrap.value.contains(target)) dirOpen.value = false
+  if (voiceMenuOpen.value && voiceWrap.value && !voiceWrap.value.contains(target)) voiceMenuOpen.value = false
 }
 onMounted(() => document.addEventListener('click', onDocClick))
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
@@ -269,6 +273,203 @@ async function newConversation(): Promise<void> {
   }
   textarea.value?.focus()
 }
+
+// MARK: 语音听写（Chrome 自带识别；发送键上方那颗麦克风，右键换模式/麦克风/语言）
+// 两种模式：hold=按住识别松开结束（默认）；click=按一下开始持续识别、再按一下结束
+const VOICE_LANGS: Array<{ value: string; label: string }> = [
+  { value: 'auto', label: '自动（跟随系统）' },
+  { value: 'zh-CN', label: '中文（简体）' },
+  { value: 'zh-TW', label: '中文（繁體）' },
+  { value: 'en-US', label: 'English (US)' },
+  { value: 'en-GB', label: 'English (UK)' },
+  { value: 'ja-JP', label: '日本語' },
+  { value: 'ko-KR', label: '한국어' },
+  { value: 'ru-RU', label: 'Русский' },
+  { value: 'fr-FR', label: 'Français' },
+  { value: 'de-DE', label: 'Deutsch' },
+  { value: 'es-ES', label: 'Español' }
+]
+
+function loadVoicePref(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? ''
+  } catch {
+    return ''
+  }
+}
+function saveVoicePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // localStorage 不可用：本次会话内生效即可
+  }
+}
+
+const voiceMode = ref<'hold' | 'click'>(loadVoicePref('voice.mode') === 'click' ? 'click' : 'hold')
+const voiceLang = ref(loadVoicePref('voice.lang') || 'auto')
+const voiceMicId = ref(loadVoicePref('voice.mic'))
+const voiceMenuOpen = ref(false)
+const voiceWrap = ref<HTMLDivElement | null>(null)
+const mics = ref<Array<{ deviceId: string; label: string }>>([])
+const micEnumError = ref('')
+const listening = ref(false)
+const transcribing = ref(false)
+const modelPrep = ref('')
+const voiceError = ref('')
+let voiceSession: SpeechInput | null = null
+
+const voiceTitle = computed(() =>
+  listening.value
+    ? voiceMode.value === 'click'
+      ? '正在听…再点一下结束'
+      : '正在听…松开结束'
+    : voiceMode.value === 'click'
+      ? '点一下开始持续识别 · 右键设置麦克风/语言'
+      : '按住说话，松开结束 · 右键设置麦克风/语言'
+)
+
+/** 列一遍输入设备（右键菜单里选）；Chrome 给 default/communications 两个别名，滤掉只留实体 */
+async function refreshMics(): Promise<void> {
+  micEnumError.value = ''
+  try {
+    let inputs = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (device) => device.kind === 'audioinput' && device.deviceId !== 'default' && device.deviceId !== 'communications'
+    )
+    // 没授权时 label 全空：开一次默认麦（顺便预热识别的权限）再列一遍拿名字
+    if (inputs.length > 0 && inputs.every((device) => !device.label)) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        stream.getTracks().forEach((track) => track.stop())
+        inputs = (await navigator.mediaDevices.enumerateDevices()).filter(
+          (device) => device.kind === 'audioinput' && device.deviceId !== 'default' && device.deviceId !== 'communications'
+        )
+      } catch {
+        micEnumError.value = '拿不到麦克风名字（未授权）'
+      }
+    }
+    mics.value = inputs.map((device) => ({ deviceId: device.deviceId, label: device.label }))
+  } catch {
+    micEnumError.value = '列不出麦克风'
+  }
+}
+
+function openVoiceMenu(): void {
+  voiceMenuOpen.value = !voiceMenuOpen.value
+  if (voiceMenuOpen.value) {
+    modelOpen.value = false
+    dirOpen.value = false
+    void refreshMics()
+  }
+}
+
+function setVoiceMode(mode: 'hold' | 'click'): void {
+  voiceMode.value = mode
+  saveVoicePref('voice.mode', mode)
+}
+
+function setVoiceLang(value: string): void {
+  voiceLang.value = value
+  saveVoicePref('voice.lang', value)
+}
+
+function chooseMic(deviceId: string): void {
+  voiceMicId.value = deviceId
+  saveVoicePref('voice.mic', deviceId)
+}
+
+async function startListen(): Promise<void> {
+  if (listening.value || busy.value) return
+  voiceError.value = ''
+  sessionBase = text.value
+  const session = new SpeechInput()
+  voiceSession = session
+  listening.value = true
+  await session.start(
+    {
+      lang:
+        voiceLang.value === 'auto'
+          ? navigator.language || undefined // 「自动」= 跟随系统：whisper 对短音频自己猜语言容易猜错（实测中文句被译成英文）
+          : voiceLang.value,
+      deviceId: voiceMicId.value || undefined,
+      onPhase: (phase: VoicePhase, detail?: string) => {
+        if (phase === 'listening') transcribing.value = false
+        else if (phase === 'transcribing') transcribing.value = true
+        // 模型准备进度由 onVoiceModelProgress 专门推送，这里不管 detail
+      },
+      onText: (recognized) => {
+        // whisper 是逐段落定追加：整段拼回输入框（开头保留用户已打的字）
+        const base = sessionBase
+        text.value = base ? base + recognized : recognized
+        void nextTick(resize)
+      },
+      onError: (code, message) => {
+        voiceError.value = message || `语音听写出错（${code}）`
+      },
+      onEnd: () => {
+        listening.value = false
+        transcribing.value = false
+        voiceSession = null
+      }
+    },
+    voiceMode.value === 'hold'
+  )
+  // 启动即失败（麦克风打不开）：onEnd 不会来，这里收掉
+  if (!session.active && voiceSession === session) {
+    listening.value = false
+    voiceSession = null
+  }
+}
+
+/** 本次听写的基座：开始时输入框里已有的文字，识别结果接在后面 */
+let sessionBase = ''
+
+function stopListen(): void {
+  voiceSession?.stop()
+}
+
+/* 左键按住（hold）／左键点一下切换（click）；右键（button=2）只开设置菜单 */
+function onVoicePointerDown(event: PointerEvent): void {
+  if (voiceMode.value !== 'hold' || event.button !== 0) return
+  // 抓住指针：按住期间挪出按钮再松开也能收到 pointerup
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+  void startListen()
+}
+
+function onVoicePointerUp(event: PointerEvent): void {
+  if (voiceMode.value !== 'hold' || event.button !== 0) return
+  stopListen()
+}
+
+function onVoiceClick(): void {
+  if (voiceMode.value !== 'click') return // hold 模式的 click 是按住后的松手，不算切换
+  if (listening.value) stopListen()
+  else void startListen()
+}
+
+/* 识别中 Esc 停止（焦点不在输入框时也要能停） */
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && listening.value) stopListen()
+}
+/* 主进程推模型准备进度（首次使用要下载 ~80MB）：显示在提示行 */
+let offModelProgress: (() => void) | null = null
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeydown)
+  offModelProgress = window.fridayBridge.onVoiceModelProgress((state) => {
+    if (state.phase === 'downloading') {
+      modelPrep.value =
+        typeof state.percent === 'number' ? `语音模型下载中 ${state.percent}%` : '语音模型下载中…'
+    } else if (state.phase === 'loading') {
+      modelPrep.value = '语音模型准备中…'
+    } else {
+      modelPrep.value = ''
+    }
+  })
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
+  stopListen() // 组件没了把识别会话一并收掉
+  offModelProgress?.()
+})
 </script>
 
 <template>
@@ -454,57 +655,133 @@ async function newConversation(): Promise<void> {
           </div>
         </div>
 
-        <span v-if="switchError" class="error">{{ switchError }}</span>
+        <span v-if="voiceError" class="error">{{ voiceError }}</span>
+        <span v-else-if="switchError" class="error">{{ switchError }}</span>
         <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
         <span v-else-if="dirError" class="error">{{ dirError }}</span>
         <span class="hint">{{
-          store.assistantChat
-            ? assistantReacting
-              ? '助手在说 · Enter 发下一句会打断重来 · Shift+Enter 换行'
-              : 'Enter 发给助手 · Shift+Enter 换行'
-            : sending
-              ? 'Enter 补充给智能体 · Shift+Enter 换行'
-              : 'Enter 发送 · Shift+Enter 换行'
+          modelPrep
+            ? modelPrep
+            : transcribing
+              ? '转写中…'
+              : listening
+                ? voiceMode === 'click'
+                  ? '正在听 · 再点一下结束 · Esc 停止'
+                  : '正在听 · 松开结束'
+                : store.assistantChat
+                  ? assistantReacting
+                    ? '助手在说 · Enter 发下一句会打断重来 · Shift+Enter 换行'
+                    : 'Enter 发给助手 · Shift+Enter 换行'
+                  : sending
+                    ? 'Enter 补充给智能体 · Shift+Enter 换行'
+                    : 'Enter 发送 · Shift+Enter 换行'
         }}</span>
         <span class="spacer" />
-        <!-- 生成中/助手在说：停止键；会话生成中还多一颗补充键（插入内容：做完当前这一步就交给它，qt 同款双键）。
-             助手在说时没有补充键：Enter 本来就是打断重来（REMOTE.md assistant.say） -->
-        <button
-          v-if="sending || assistantReacting"
-          class="round-btn stop"
-          :title="store.assistantChat ? '打断助手' : '停止生成'"
-          @click="stop"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="5" y="5" width="14" height="14" rx="2.5" />
-          </svg>
-        </button>
-        <button
-          v-if="sending && !store.assistantChat && canSend"
-          class="round-btn send insert"
-          title="补充给智能体：做完当前这一步就交给它 (Enter)"
-          :disabled="busy"
-          @click="send"
-        >
-          <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 19V5" />
-            <path d="M5 12l7-7 7 7" />
-          </svg>
-          <span v-else class="busy-dot" />
-        </button>
-        <button
-          v-else
-          class="round-btn send"
-          title="发送"
-          :disabled="busy || !canSend"
-          @click="send"
-        >
-          <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 19V5" />
-            <path d="M5 12l7-7 7 7" />
-          </svg>
-          <span v-else class="busy-dot" />
-        </button>
+        <!-- 发送键那组：语音键浮在发送键正上方（跟着发送键走，不占行高） -->
+        <div class="send-stack">
+          <!-- 语音听写（Chrome 自带识别）：默认按住说话松开结束；右键换「按一下持续识别」/麦克风/语言 -->
+          <div ref="voiceWrap" class="voice-wrap">
+            <button
+              class="round-btn voice"
+              :class="{ listening, transcribing: transcribing && !listening }"
+              :title="voiceTitle"
+              :aria-label="listening ? '结束语音输入' : '语音输入'"
+              @contextmenu.prevent="openVoiceMenu"
+              @pointerdown="onVoicePointerDown"
+              @pointerup="onVoicePointerUp"
+              @pointercancel="onVoicePointerUp"
+              @click="onVoiceClick"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <path d="M12 18v3" />
+              </svg>
+            </button>
+            <div v-if="voiceMenuOpen" class="model-menu voice-menu">
+              <button
+                class="model-item voice-mode-row"
+                title="开：点一下开始持续识别，再点一下结束；关：按住识别，松开结束"
+                @click="setVoiceMode(voiceMode === 'click' ? 'hold' : 'click')"
+              >
+                <span class="model-item-main">
+                  <span class="model-item-title">按一下持续识别</span>
+                  <span class="model-item-model">{{ voiceMode === 'click' ? '开：点一下开始，再点一下结束' : '关：按住识别，松开结束' }}</span>
+                </span>
+                <span class="voice-switch" :class="{ on: voiceMode === 'click' }"><i class="voice-knob" /></span>
+              </button>
+              <div class="dir-sep">麦克风</div>
+              <div v-if="micEnumError" class="model-empty">{{ micEnumError }}</div>
+              <button class="model-item" :class="{ current: !voiceMicId }" @click="chooseMic('')">
+                <span class="model-item-main"><span class="model-item-title">系统默认</span></span>
+                <span v-if="!voiceMicId" class="model-check">✓</span>
+              </button>
+              <button
+                v-for="(mic, index) in mics"
+                :key="mic.deviceId"
+                class="model-item"
+                :class="{ current: voiceMicId === mic.deviceId }"
+                :title="mic.label"
+                @click="chooseMic(mic.deviceId)"
+              >
+                <span class="model-item-main"><span class="model-item-title">{{ mic.label || `麦克风 ${index + 1}` }}</span></span>
+                <span v-if="voiceMicId === mic.deviceId" class="model-check">✓</span>
+              </button>
+              <div class="dir-sep">识别语言</div>
+              <button
+                v-for="lang in VOICE_LANGS"
+                :key="lang.value"
+                class="model-item"
+                :class="{ current: voiceLang === lang.value }"
+                @click="setVoiceLang(lang.value)"
+              >
+                <span class="model-item-main">
+                  <span class="model-item-title">{{ lang.label }}</span>
+                  <span v-if="lang.value !== 'auto'" class="model-item-model">{{ lang.value }}</span>
+                </span>
+                <span v-if="voiceLang === lang.value" class="model-check">✓</span>
+              </button>
+            </div>
+          </div>
+          <!-- 生成中/助手在说：停止键；会话生成中还多一颗补充键（插入内容：做完当前这一步就交给它，qt 同款双键）。
+               助手在说时没有补充键：Enter 本来就是打断重来（REMOTE.md assistant.say） -->
+          <button
+            v-if="sending || assistantReacting"
+            class="round-btn stop"
+            :title="store.assistantChat ? '打断助手' : '停止生成'"
+            @click="stop"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="5" y="5" width="14" height="14" rx="2.5" />
+            </svg>
+          </button>
+          <button
+            v-if="sending && !store.assistantChat && canSend"
+            class="round-btn send insert"
+            title="补充给智能体：做完当前这一步就交给它 (Enter)"
+            :disabled="busy"
+            @click="send"
+          >
+            <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19V5" />
+              <path d="M5 12l7-7 7 7" />
+            </svg>
+            <span v-else class="busy-dot" />
+          </button>
+          <button
+            v-else
+            class="round-btn send"
+            title="发送"
+            :disabled="busy || !canSend"
+            @click="send"
+          >
+            <svg v-if="!busy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19V5" />
+              <path d="M5 12l7-7 7 7" />
+            </svg>
+            <span v-else class="busy-dot" />
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -589,7 +866,8 @@ textarea {
   resize: none;
   border: none;
   outline: none;
-  padding: 9px 10px 3px;
+  /* 右侧给浮在发送键上方的语音键让位，文字不打到按钮底下 */
+  padding: 9px 44px 3px 10px;
   background: transparent;
   color: var(--text);
   line-height: 1.55;
@@ -915,6 +1193,98 @@ textarea::placeholder {
   flex: 1;
 }
 
+/* 发送键那组（停止/补充/发送 + 浮在上方的语音键） */
+.send-stack {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* 语音键：浮在发送键正上方、右对齐（跟着发送键走），不占行高；
+   录音中红色脉冲；右键弹设置菜单（菜单再往上浮） */
+.voice-wrap {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  z-index: 5;
+}
+
+.round-btn.voice {
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: transparent;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.round-btn.voice:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.round-btn.voice.listening {
+  border-color: var(--fail);
+  color: var(--fail);
+  animation: voice-pulse 1.5s ease-in-out infinite;
+}
+
+/* 松开后转写中：强调色呼吸（录音红、转写黄） */
+.round-btn.voice.transcribing {
+  border-color: var(--warn, #d59f0a);
+  color: var(--warn, #d59f0a);
+  animation: voice-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 12px color-mix(in srgb, var(--fail) 45%, transparent); }
+}
+
+.voice-menu {
+  left: auto;
+  right: 0;
+  min-width: 264px;
+}
+
+.voice-mode-row {
+  align-items: center;
+}
+
+/* 小开关胶囊（「按一下持续识别」那一行右侧） */
+.voice-switch {
+  flex: none;
+  position: relative;
+  width: 30px;
+  height: 17px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--chip);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.voice-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: left 0.15s, background 0.15s;
+}
+
+.voice-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.voice-switch.on .voice-knob {
+  left: 15px;
+  background: #fff;
+}
+
 /* 圆形发送 / 停止键（Friday 样式） */
 .round-btn {
   width: 32px;
@@ -1189,5 +1559,42 @@ textarea::placeholder {
 [data-theme='jarvis'] .busy-dot {
   background: var(--accent);
   box-shadow: 0 0 8px var(--accent-a80);
+}
+
+/* 语音键：常态随上面 .round-btn 的青色圆环；录音中转红色脉冲（照停止键那套） */
+[data-theme='jarvis'] .round-btn.voice.listening {
+  border-color: var(--fail-a65);
+  background: var(--fail-a12);
+  color: #ffc2cd;
+  animation: jarvis-voice-pulse 1.2s ease-in-out infinite;
+}
+
+[data-theme='jarvis'] .round-btn.voice.transcribing {
+  border-color: var(--accent-a55);
+  color: var(--accent);
+  animation: jarvis-voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes jarvis-voice-pulse {
+  50% { box-shadow: 0 0 22px var(--fail-a50); }
+}
+
+[data-theme='jarvis'] .voice-switch {
+  border-color: var(--accent-a30);
+  background: transparent;
+}
+
+[data-theme='jarvis'] .voice-knob {
+  background: var(--accent-a65);
+}
+
+[data-theme='jarvis'] .voice-switch.on {
+  background: var(--accent-a20);
+  border-color: var(--accent-a55);
+  box-shadow: 0 0 8px var(--accent-a25);
+}
+
+[data-theme='jarvis'] .voice-switch.on .voice-knob {
+  background: var(--accent);
 }
 </style>

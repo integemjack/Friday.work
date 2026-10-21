@@ -12,6 +12,11 @@ declare global {
       registerDrop(file: File): Promise<PickedFile | null>
       /** 一段录音交给主进程落盘（M3-A） */
       saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
+      /** 输入框语音听写：16 kHz 单声道采样送主进程本地 whisper 转写，返回文字 */
+      transcribeVoice(audio: Float32Array, lang?: string): Promise<{ text: string }>
+      onVoiceModelProgress(
+        listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
+      ): () => void
       /** 媒体叠本地缓存：媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack，
        *  文件名按「会话:类型:媒体源」确定性算出，供 friday-media:// 协议加载 */
       saveStackMedia(payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null>

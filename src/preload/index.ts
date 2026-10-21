@@ -27,6 +27,17 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   /** 一段录音（M3-A）：字节交给主进程落成临时文件、领句柄 */
   saveVoiceClip: (bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null> =>
     ipcRenderer.invoke('voice:save-clip', { bytes, mimeType }),
+  /** 输入框语音听写：16 kHz 单声道采样送主进程本地 whisper 转写，返回文字
+   *  （首次使用会先下载模型，进度经 onVoiceModelProgress 推送） */
+  transcribeVoice: (audio: Float32Array, lang?: string): Promise<{ text: string }> =>
+    ipcRenderer.invoke('voice:transcribe', { audio, lang }),
+  onVoiceModelProgress: (
+    listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
+  ): (() => void) => {
+    const handler = (_event: unknown, state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }): void => listener(state)
+    ipcRenderer.on('voice:model-progress', handler)
+    return () => ipcRenderer.removeListener('voice:model-progress', handler)
+  },
   /** 媒体叠本地缓存：把一份媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack */
   saveStackMedia: (payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null> =>
     ipcRenderer.invoke('media-stack:save', payload),

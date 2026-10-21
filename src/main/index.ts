@@ -5,6 +5,7 @@
 import { app, BrowserWindow, Menu, nativeTheme, protocol, screen, session, shell } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { registerWhisperIpc } from './WhisperService.js'
 import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
 import { handleMediaStackRequest } from './MediaStack.js'
@@ -183,6 +184,8 @@ app.whenReady().then(() => {
   protocolProcessHost.start()
   bridge = new IpcBridge(protocolProcessHost, () => mainWindow)
   bridge.register()
+  // 输入框语音听写（本地 whisper）：模型懒加载 + 转写 IPC
+  registerWhisperIpc()
   updater.register()
   updater.spawnInstallerOnQuit()
   updater.startAutoUpdate()
