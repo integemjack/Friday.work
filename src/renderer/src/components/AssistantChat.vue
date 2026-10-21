@@ -112,7 +112,9 @@ async function scrollToBottom(immediate = false) {
 
 watch(messages, () => void scrollToBottom(), { deep: false })
 
-// 助手模式：新的日志条（自己说的 user）强制贴底，流式增长跟随滚动（同会话那套规则）
+// 助手模式：新的日志条（自己说的 user）强制贴底，流式增长跟随滚动（同会话那套规则）。
+// deep 必须开：store 的 mergeAssistantEntry 用 splice 原地变异 assistantEntries，
+// getter watch 只 track 数组引用、引用不变就永不触发（播报不响的根因同此）
 watch(
   () => store.assistantEntries,
   (next, prev) => {
@@ -123,7 +125,8 @@ watch(
     } else {
       void scrollToBottom()
     }
-  }
+  },
+  { deep: true }
 )
 // 进/出助手模式：重置窗口化、回到底部
 watch(assistantChat, () => {
@@ -154,9 +157,13 @@ watch(queued, (next, prev) => {
 // 助手回复「完成」的那一刻朗读文本部分（代码块/链接等不念）；自己发言时先停掉正在播的，
 // 好比真人不会抢话。两种模式的完成信号：
 //   - 助手模式：日志条 streaming true → false（或新条目直接落地非流式）；
-//   - 会话模式：assistant 消息的 finishedAt 出现。
-// 打断的 / 出错的 / 静默的不播；订阅时的历史快照不补播。
+//   - 会话模式：所有会话的 assistant 消息 finishedAt 出现（后台会话出结果也播，不只当前会话）。
+// 打断的 / 出错的 / 静默的不播；会话首次进入监听时已完成的历史一律不补播
+//（切会话/重连加载快照不念旧账）。
 const seenEntryStreaming = new Map<string, { streaming?: boolean; interrupted?: boolean; spoken?: boolean }>()
+// deep 必须开：store 的 mergeAssistantEntry 用 splice 原地变异 assistantEntries（同 id 更新、
+// 新条目插入都不换数组引用），getter watch 只 track 引用、不开 deep 就永远等不到
+// 「streaming → 完成」的边沿——气泡照常渲染（渲染函数自己 track 了内容）但播报从不触发。
 watch(
   () => store.assistantEntries,
   (entries, prev) => {
@@ -164,7 +171,11 @@ watch(
     for (const entry of entries) {
       if (entry.kind === 'user') {
         if (entry.data?.silent) continue
-        if (!initial && !seenEntryStreaming.has(entry.id)) stopSpeaking() // 自己发言：打断播报
+        // 记入已见再判边沿：deep 之下每帧都会重跑这里，不记的话每帧都 stopSpeaking，
+        // 会把正在播的回复挦掉（打断只能发生在「新出现自己发言」那一帧）
+        const first = !seenEntryStreaming.has(entry.id)
+        seenEntryStreaming.set(entry.id, {})
+        if (!initial && first) stopSpeaking() // 自己发言：打断播报
         continue
       }
       if (entry.kind !== 'assistant') continue
@@ -180,31 +191,85 @@ watch(
       seenEntryStreaming.set(entry.id, { streaming: entry.streaming, spoken: mark?.spoken })
     }
   },
-  { immediate: true }
+  { immediate: true, deep: true }
 )
 
-// 会话模式：finishedAt 从无到有（含新消息直接落地完成态）→ 播报
+// 会话模式：监听所有会话的 assistant 完成态——后台会话出结果也播，不只当前会话；
+// 自己在当前会话发言时打断。getter 只产出完成态快照（role/finishedAt/标记 + 当前会话的
+// user 消息），不读 blocks：流式内容增长不触发回调，只有完成边沿、新消息、切会话才重跑，
+// 不需要 deep 递归。会话首次进入监听时已完成的消息当历史不播；已在监听里的会话，
+// 流式完成、整条落地完成都播。
+const seenConversations = new Set<string>()
 const seenMessageFinish = new Map<string, string | undefined>()
 watch(
-  messages,
+  () => {
+    const snapshot: Array<{
+      key: string
+      conv?: string
+      msgID?: string
+      user?: boolean
+      finishedAt?: string
+      stoppedByUser?: boolean
+      error?: string
+      notice?: string
+    }> = []
+    for (const conv of Object.keys(store.details)) {
+      const current = conv === conversationID.value
+      for (const { message } of store.details[conv]?.messages ?? []) {
+        if (message.role === 'user') {
+          if (current) snapshot.push({ key: `u:${conv}:${message.id}`, user: true })
+          continue
+        }
+        if (message.role !== 'assistant') continue
+        snapshot.push({
+          key: `a:${conv}:${message.id}`,
+          conv,
+          msgID: message.id,
+          finishedAt: message.finishedAt,
+          stoppedByUser: message.stoppedByUser,
+          error: message.error,
+          notice: message.notice
+        })
+      }
+    }
+    return snapshot
+  },
   (list, prev) => {
     const initial = prev === undefined
-    for (const { message } of list) {
-      if (message.role === 'user') {
-        if (!initial && !seenMessageFinish.has(message.id)) stopSpeaking() // 自己发言：打断播报
+    // 先统一登记本帧新出现的会话：其中已完成的消息全部当历史不播。
+    // （不能在遍历中边遇边登记——那样只有新会话的第一条享受到豁免，后面的照播）
+    const freshConvs = new Set<string>()
+    for (const item of list) {
+      if (item.conv !== undefined && !seenConversations.has(item.conv)) freshConvs.add(item.conv)
+    }
+    for (const conv of freshConvs) seenConversations.add(conv)
+    for (const item of list) {
+      if (item.user) {
+        // 记入已见再判边沿：快照每帧重跑这里，不记的话每帧都 stopSpeaking，
+        // 会把正在播的回复挦掉（打断只能发生在「新出现自己发言」那一帧）
+        const first = !seenMessageFinish.has(item.key)
+        seenMessageFinish.set(item.key, undefined)
+        if (!initial && first) stopSpeaking() // 自己发言：打断播报
         continue
       }
-      if (message.role !== 'assistant') continue
-      const before = seenMessageFinish.get(message.id)
-      const done = !!message.finishedAt
-      const speakable = !message.stoppedByUser && !message.error && !message.notice
-      if (!initial && done && !before && speakable && replySpeakEnabled.value) {
-        void speakText(textBlocksToSpeech(message.blocks))
+      if (item.conv === undefined || item.msgID === undefined) continue
+      // 本帧新登记会话里已完成的消息是历史，不播（否则切会话/重连会念旧账）；
+      // 未完成的照常记录，它们之后完成时照播
+      if (freshConvs.has(item.conv) && item.finishedAt) {
+        seenMessageFinish.set(item.key, item.finishedAt)
+        continue
       }
-      seenMessageFinish.set(message.id, message.finishedAt)
+      const before = seenMessageFinish.get(item.key)
+      const done = !!item.finishedAt
+      const speakable = !item.stoppedByUser && !item.error && !item.notice
+      if (!initial && done && !before && speakable && replySpeakEnabled.value) {
+        const entry = store.details[item.conv]?.messages.find((candidate) => candidate.message.id === item.msgID)
+        if (entry) void speakText(textBlocksToSpeech(entry.message.blocks))
+      }
+      seenMessageFinish.set(item.key, item.finishedAt)
     }
   },
-  { immediate: true, deep: true }
+  { immediate: true }
 )
 
 // 切会话/切换模式：窗口化的消息流变了，旧的完成边沿不重播，播报也停掉
