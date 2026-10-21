@@ -208,6 +208,10 @@ const CAST_Z_INTERVAL = 5000
 /** 置顶 tick 的 interval id（非响应式，模块级） */
 let castTimer = -1
 
+/** 浏览器帧合屏（非响应式，模块级）：最新一帧 + 是否已排了上屏回调（见 applyEvent 的 browser.frame） */
+let pendingBrowserFrame: { tab: string; data: string; viewport: [number, number] } | null = null
+let browserFrameFlushScheduled = false
+
 const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   terminals: { title: '终端', icon: '⌨' },
   files: { title: '文件', icon: '🗂' },
@@ -458,6 +462,8 @@ export const useAppStore = defineStore('app', {
     runnerState: null as RunnerState | null,
     /** 活动的浏览器帧（base64 jpeg）与它的视口 */
     browserFrame: null as { tab: string; data: string; viewport: [number, number] } | null,
+    /** 智能体 handOver 指名的标签（BrowserCard 认领后清掉，见 clearBrowserFocus） */
+    browserFocusTab: '',
     /** 这台机器的引擎（hello 快照 + engines 事件；输入框的模型选择器用） */
     engines: [] as EngineView[],
     /** 各家在线服务的余额 / 套餐用量（services.usage 查 + serviceUsage 事件推；
@@ -473,8 +479,6 @@ export const useAppStore = defineStore('app', {
     /** 这台的「/」命令（commands.list；输入框的命令菜单用）。null = 还没拉到或旧服务端没有
      *  feature commands：菜单不弹（REMOTE.md §6 命令）；记下是哪台机器按哪个目录拉的，换了作废重拉 */
     commands: null as { machineID: string; directory: string; items: CommandInfo[] } | null,
-    /** 当前在 watch 的浏览器标签（不看了就 unwatch） */
-    watchedTabID: '',
     /** 终端面板里选中的终端 id */
     activeTerminalID: '',
     /** 文件面板里选中的文件（null = 只开目录树） */
@@ -601,9 +605,8 @@ export const useAppStore = defineStore('app', {
     closeWindow(id: string) {
       const index = this.windows.findIndex((item) => item.id === id)
       if (index < 0) return
-      const item = this.windows[index]!
       this.windows.splice(index, 1)
-      if (item.kind === 'browser') void this.unwatchBrowser()
+      // 浏览器窗口关掉时 BrowserCard 卸载，它自己会 unwatch
     },
 
     focusWindow(id: string) {
@@ -957,28 +960,9 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 开始看某个标签的画面（browser.watch，方案 §5.6） */
-    async watchBrowser(tabID?: string) {
-      const tab =
-        (tabID ? this.browserTabs.find((item) => item.id === tabID) : undefined) ??
-        this.browserTabs.find((item) => item.conversationID === this.activeConversationID) ??
-        this.browserTabs[0]
-      if (!tab || !this.currentMachine) return
-      try {
-        await rpc(this.currentMachine, 'browser.watch', { tab: tab.id, width: 1280, height: 800 })
-        this.watchedTabID = tab.id
-      } catch (error) {
-        this.error = error instanceof Error ? error.message : String(error)
-      }
-    },
-
-    /** 停止推送画面（浏览器窗口关掉时） */
-    async unwatchBrowser() {
-      if (!this.watchedTabID || !this.currentMachine) return
-      const tab = this.watchedTabID
-      this.watchedTabID = ''
-      this.browserFrame = null
-      await rpc(this.currentMachine, 'browser.unwatch', { tab }).catch(() => {})
+    /** handOver 指名的标签被 BrowserCard 认领后清掉 */
+    clearBrowserFocus() {
+      this.browserFocusTab = ''
     },
 
     async connectMachine(id: string) {
@@ -1309,14 +1293,28 @@ export const useAppStore = defineStore('app', {
           break
         }
         case 'browser.frame': {
+          // 远端动画页会以很高频率推帧（变了就推），直接逐帧上屏会把渲染进程打满
+          //（实测主线程被饿死，窗口卡住）：攒最新一帧，按屏幕节奏上屏
           const frame = params as BrowserFrameParams
-          this.browserFrame = { tab: frame.tab, data: frame.data, viewport: frame.viewport }
+          pendingBrowserFrame = { tab: frame.tab, data: frame.data, viewport: frame.viewport }
+          if (browserFrameFlushScheduled) break
+          browserFrameFlushScheduled = true
+          const flush = (): void => {
+            browserFrameFlushScheduled = false
+            if (!pendingBrowserFrame) return
+            this.browserFrame = pendingBrowserFrame
+            pendingBrowserFrame = null
+          }
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush)
+          else setTimeout(flush, 16)
           break
         }
         case 'browser.handOver': {
-          // 智能体请用户在浏览器里做事：打开浏览器窗口（方案 §5.6）
+          // 智能体请用户在浏览器里做事：打开浏览器窗口并聚焦到它指名的那个标签
+          //（BrowserCard 认领后自己 watch；事件比标签快照先到时等快照里出现了再认领）
           this.openWindow('browser')
-          void this.watchBrowser()
+          const tab = (params as { tab?: string }).tab
+          if (tab) this.browserFocusTab = tab
           break
         }
         case 'team': {

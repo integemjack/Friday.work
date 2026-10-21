@@ -19,9 +19,22 @@ const QT_CONTROL = 0x04000000
 const QT_ALT = 0x08000000
 const QT_META = 0x10000000
 
+// 用户手选的标签（点过某个标签 / 自己开了新标签）；空 = 没手选，跟随最新
+const selectedTab = ref('')
+// 重试了几轮都等不到这个标签的帧：把「正在取画面…」换成实情提示
+const frameStalled = ref(false)
+
 const tab = computed<BrowserTab | undefined>(() => {
-  const inConversation = store.browserTabs.find((item) => item.conversationID === store.detail?.conversationID)
-  return inConversation ?? store.browserTabs[0]
+  const all = store.browserTabs
+  if (!all.length) return undefined
+  // 手选优先。没手选 → 活动会话最新的标签，再退到全局最新的（服务端把新标签追加在
+  // 尾部）：智能体刚开的标签正好是尾部那个，浏览器窗口弹出来看到的就是它的画面。
+  // 之前的写法永远取第一个（最老的）标签，点了别的标签高亮和地址栏也不动。
+  const selected = all.find((item) => item.id === selectedTab.value)
+  if (selected) return selected
+  const conversationID = store.detail?.conversationID
+  const inConversation = conversationID ? all.filter((item) => item.conversationID === conversationID) : []
+  return inConversation.length ? inConversation[inConversation.length - 1]! : all[all.length - 1]!
 })
 
 const frame = computed(() => (store.browserFrame && store.browserFrame.tab === watchedTab.value ? store.browserFrame : null))
@@ -116,15 +129,38 @@ async function watchTab(tabID: string): Promise<void> {
   try {
     await rpc(store.currentMachine, 'browser.watch', { tab: tabID, width, height })
     watchedTab.value = tabID
+    scheduleFrameRetry()
   } catch (error) {
     store.error = error instanceof Error ? error.message : String(error)
   }
+}
+
+// watch 成功后一小会儿还没等到这个标签的第一帧，就再 watch 一次：服务端「变了才推」，
+// 第一帧要是被通道积压丢掉，静态页就永远停在「正在取画面」；重 watch 会让服务端
+// 重启 screencast、立刻补一帧
+let frameRetryTimer: ReturnType<typeof setTimeout> | undefined
+let frameRetries = 0
+
+function scheduleFrameRetry(): void {
+  clearTimeout(frameRetryTimer)
+  frameRetryTimer = setTimeout(() => {
+    if (!watchedTab.value) return
+    if (store.browserFrame && store.browserFrame.tab === watchedTab.value) return
+    if (frameRetries++ < 3) {
+      void watchTab(watchedTab.value)
+    } else {
+      // 重试几轮都没等到：大概率不是丢帧，是远端真的不出画面（比如那台机器的
+      // 浏览器窗口关着，服务端抓不到图还不报错）。把「正在取画面」换成实情
+      frameStalled.value = true
+    }
+  }, 3000)
 }
 
 async function openTab(): Promise<void> {
   if (!store.currentMachine || !store.detail) return
   try {
     const result = (await rpc(store.currentMachine, 'browser.open', { conversationID: store.detail.conversationID })) as { tab: string }
+    selectedTab.value = result.tab
     await watchTab(result.tab)
   } catch (error) {
     store.error = error instanceof Error ? error.message : String(error)
@@ -148,6 +184,7 @@ async function goAddress(): Promise<void> {
 
 async function selectTab(tabID: string): Promise<void> {
   if (!store.currentMachine) return
+  selectedTab.value = tabID
   await rpc(store.currentMachine, 'browser.select', { tab: tabID }).catch(() => {})
   await watchTab(tabID)
 }
@@ -156,6 +193,8 @@ async function closeTab(tabID: string): Promise<void> {
   if (!store.currentMachine) return
   await rpc(store.currentMachine, 'browser.close', { tab: tabID }).catch(() => {})
   if (watchedTab.value === tabID) watchedTab.value = ''
+  // 关的是手选的标签：清掉手选，回落到「最新」（tab 一变下面的 watch 会接着换台）
+  if (selectedTab.value === tabID) selectedTab.value = ''
 }
 
 async function answerDialog(accept: boolean): Promise<void> {
@@ -191,6 +230,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   observer?.disconnect()
+  clearTimeout(frameRetryTimer)
   if (store.currentMachine && watchedTab.value) {
     void rpc(store.currentMachine, 'browser.unwatch', { tab: watchedTab.value }).catch(() => {})
   }
@@ -199,10 +239,46 @@ onBeforeUnmount(() => {
 watch(
   () => tab.value?.id,
   (id) => {
-    // 浏览器窗口一开就盯着当前标签（窗口可见，直接 watch）
-    if (id && id !== watchedTab.value) void watchTab(id)
+    // 浏览器窗口一开就盯着当前标签（窗口可见，直接 watch）；换了标签，
+    // 帧重试的预算重新算（新标签还没试过）
+    if (id && id !== watchedTab.value) {
+      frameRetries = 0
+      frameStalled.value = false
+      void watchTab(id)
+    }
   },
   { immediate: true }
+)
+
+// 等到画面了：帧重试的计数清零
+watch(
+  () => store.browserFrame?.tab,
+  (frameTab) => {
+    if (frameTab === watchedTab.value) {
+      frameRetries = 0
+      frameStalled.value = false
+      clearTimeout(frameRetryTimer)
+    }
+  }
+)
+
+// 智能体 handOver 指名某个标签（store.browserFocusTab）：聚焦到它——覆盖手选，
+// 因为那是「请你来操作这一页」；认领完清掉。标签列表更新时也试一次
+//（handOver 事件可能抢在带这个标签的快照前面到）
+function adoptFocus(): void {
+  const id = store.browserFocusTab
+  if (!id || !store.browserTabs.some((item) => item.id === id)) return
+  selectedTab.value = id
+  store.clearBrowserFocus()
+}
+watch(() => store.browserFocusTab, adoptFocus)
+watch(
+  () => store.browserTabs,
+  () => {
+    adoptFocus()
+    // 手选的标签被关掉了：清掉手选，回落到「最新」
+    if (selectedTab.value && !store.browserTabs.some((item) => item.id === selectedTab.value)) selectedTab.value = ''
+  }
 )
 
 watch(
@@ -268,7 +344,13 @@ watch(
       >
         <img v-if="frame" class="frame" :src="`data:image/jpeg;base64,${frame.data}`" alt="远程浏览器画面" draggable="false" />
         <div v-else class="waiting">
-          {{ tab ? '正在取画面…' : '这段会话还没有浏览器标签' }}
+          {{
+            !tab
+              ? '这段会话还没有浏览器标签'
+              : frameStalled
+                ? '一直等不到画面：多半是那台机器的浏览器窗口没开（在它上面打开 Friday 的浏览器窗口再试），或链路不通'
+                : '正在取画面…'
+          }}
         </div>
       </div>
 
