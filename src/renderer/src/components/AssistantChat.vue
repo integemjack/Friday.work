@@ -8,6 +8,14 @@ import { useAppStore } from '../stores/app.js'
 import type { ChatMessage } from '../../../protocol/rpc/protocol.js'
 import MessageItem from './MessageItem.vue'
 import AskPanel from './AskPanel.vue'
+import {
+  replySpeakEnabled,
+  speakText,
+  stopSpeaking,
+  textBlocksToSpeech,
+  ttsDetail,
+  ttsPhase
+} from '../lib/speechOutput.js'
 
 const store = useAppStore()
 const scrollEl = ref<HTMLDivElement | null>(null)
@@ -77,6 +85,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
+  stopSpeaking()
 })
 
 function onScroll() {
@@ -138,22 +147,106 @@ watch(queued, (next, prev) => {
   }
 })
 
+// MARK: 回复语音播报（本地 kokoro TTS，开关在设置 › 语音播报）：
+// 助手回复「完成」的那一刻朗读文本部分（代码块/链接等不念）；自己发言时先停掉正在播的，
+// 好比真人不会抢话。两种模式的完成信号：
+//   - 助手模式：日志条 streaming true → false（或新条目直接落地非流式）；
+//   - 会话模式：assistant 消息的 finishedAt 出现。
+// 打断的 / 出错的 / 静默的不播；订阅时的历史快照不补播。
+const seenEntryStreaming = new Map<string, { streaming?: boolean; interrupted?: boolean; spoken?: boolean }>()
+watch(
+  () => store.assistantEntries,
+  (entries, prev) => {
+    const initial = prev === undefined
+    for (const entry of entries) {
+      if (entry.kind === 'user') {
+        if (entry.data?.silent) continue
+        if (!initial && !seenEntryStreaming.has(entry.id)) stopSpeaking() // 自己发言：打断播报
+        continue
+      }
+      if (entry.kind !== 'assistant') continue
+      const mark = seenEntryStreaming.get(entry.id)
+      const done = !entry.streaming
+      const speakable =
+        !entry.data?.silent && !entry.interrupted && !entry.data?.error && entry.text.trim().length > 0
+      if (!initial && done && !mark?.spoken && (mark === undefined || mark.streaming) && speakable) {
+        seenEntryStreaming.set(entry.id, { streaming: entry.streaming, spoken: true })
+        if (replySpeakEnabled.value) void speakText(entry.text)
+        continue
+      }
+      seenEntryStreaming.set(entry.id, { streaming: entry.streaming, spoken: mark?.spoken })
+    }
+  },
+  { immediate: true }
+)
+
+// 会话模式：finishedAt 从无到有（含新消息直接落地完成态）→ 播报
+const seenMessageFinish = new Map<string, string | undefined>()
+watch(
+  messages,
+  (list, prev) => {
+    const initial = prev === undefined
+    for (const { message } of list) {
+      if (message.role === 'user') {
+        if (!initial && !seenMessageFinish.has(message.id)) stopSpeaking() // 自己发言：打断播报
+        continue
+      }
+      if (message.role !== 'assistant') continue
+      const before = seenMessageFinish.get(message.id)
+      const done = !!message.finishedAt
+      const speakable = !message.stoppedByUser && !message.error && !message.notice
+      if (!initial && done && !before && speakable && replySpeakEnabled.value) {
+        void speakText(textBlocksToSpeech(message.blocks))
+      }
+      seenMessageFinish.set(message.id, message.finishedAt)
+    }
+  },
+  { immediate: true, deep: true }
+)
+
+// 切会话/切换模式：窗口化的消息流变了，旧的完成边沿不重播，播报也停掉
+watch([conversationID, assistantChat], () => {
+  stopSpeaking()
+})
+
+/** 播报状态行文案（下载/解压/加载/播报中/出错）；叠加在常规状态后面 */
+const ttsStatusLine = computed(() => {
+  switch (ttsPhase.value) {
+    case 'downloading':
+      return ttsDetail.value || '语音模型下载中…（首次约 350MB）'
+    case 'extracting':
+      return '语音模型解压中…'
+    case 'loading':
+      return '语音模型加载中…'
+    case 'speaking':
+      return '播报中'
+    case 'error':
+      return `播报不可用：${ttsDetail.value || '出错'}`
+    default:
+      return ''
+  }
+})
+
 const statusLine = computed(() => {
+  let line = ''
   if (assistantChat.value) {
     if (store.assistantUnsupported) return '这台机器的 Friday 版本不带助手'
-    if (store.assistantState === null) return store.connected ? '正在拿助手日志…' : ''
-    if (store.assistantState.reacting) return '正在回复…'
-    if (!store.assistantState.enabled) return '助手关着：说的话只记日志、不会回'
-    return ''
+    if (store.assistantState === null) line = store.connected ? '正在拿助手日志…' : ''
+    else if (store.assistantState.reacting) line = '正在回复…'
+    else if (!store.assistantState.enabled) line = '助手关着：说的话只记日志、不会回'
+  } else {
+    const current = runtime.value
+    if (current) {
+      if (current.generating) line = current.queue.length > 0 ? `正在生成 · ${current.queue.length} 条待插入` : '正在生成…'
+      else if (current.stopping) line = '正在停止…'
+      else if (approvals.value.length > 0)
+        line = approvals.value.some((item) => item.questions?.length) ? '等你回答' : '等待你确认'
+      else if (current.queuePaused && current.queue.length > 0) line = '排队已暂停'
+      else if (current.queue.length > 0) line = `${current.queue.length} 条消息排队`
+    }
   }
-  const current = runtime.value
-  if (!current) return ''
-  if (current.generating) return current.queue.length > 0 ? `正在生成 · ${current.queue.length} 条待插入` : '正在生成…'
-  if (current.stopping) return '正在停止…'
-  if (approvals.value.length > 0) return approvals.value.some((item) => item.questions?.length) ? '等你回答' : '等待你确认'
-  if (current.queuePaused && current.queue.length > 0) return '排队已暂停'
-  if (current.queue.length > 0) return `${current.queue.length} 条消息排队`
-  return ''
+  if (line) return line
+  return ttsStatusLine.value
 })
 </script>
 

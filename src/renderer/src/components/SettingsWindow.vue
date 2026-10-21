@@ -1,12 +1,35 @@
 <script setup lang="ts">
-// 设置窗口（M4）：看这台远程机器的引擎、Agent 设置、服务状态（只读展示；方案 §10 M4「设置页（远程的 engines/settings 只读版）」）。
+// 设置窗口（M4）：两个 tab——「机器」（这台远程机器的引擎、Agent 设置、服务状态，只读）
+// 和「语音播报」（回复 TTS：开关、音色、自定义音色、模型下载）。
+// 语音播报是本机行为（本地 kokoro 模型合成），不依赖连接哪台机器。
 import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { loadTheme, setTheme, type UITheme } from '../lib/theme.js'
+import {
+  addCustomVoice,
+  CUSTOM_VOICE_GROUPS,
+  currentVoiceId,
+  customVoices,
+  PRESET_VOICES,
+  previewVoice,
+  prefetchTtsModel,
+  removeCustomVoice,
+  replySpeakEnabled,
+  setCurrentVoice,
+  setReplySpeak,
+  sidToVoiceCode,
+  stopSpeaking,
+  ttsDetail,
+  ttsPhase,
+  type VoiceOption
+} from '../lib/speechOutput.js'
 
 const store = useAppStore()
 const loading = ref(false)
 const error = ref('')
+
+// 设置分区：机器信息（原有内容）/ 语音播报（回复 TTS）
+const tab = ref<'machine' | 'speech'>('machine')
 
 // 界面主题（本机偏好，见 lib/theme.ts）：跟系统 / 贾维斯
 const theme = ref<UITheme>(loadTheme())
@@ -114,17 +137,71 @@ const serverRows = computed<Array<{ label: string; value: string }>>(() => {
 })
 
 onMounted(load)
+
+// MARK: 语音播报（tab=speech）：开关 / 音色 / 自定义音色 / 模型下载
+
+/** 自定义音色下拉的选项（分组：中文女 55 / 中文男 45 / 英文女 3） */
+const customVoiceOptions = CUSTOM_VOICE_GROUPS.map((group) => ({
+  label: group.label,
+  options: group.sids.map((sid) => ({ value: sid, label: `${sidToVoiceCode(sid)}（编号 ${sid}）` }))
+}))
+
+/** 全部可选音色：预置 10 个 + 用户自定义的（自定义的排后面，可删） */
+const allVoices = computed<VoiceOption[]>(() => [...PRESET_VOICES, ...customVoices.value])
+
+const draft = ref({ name: '', sid: 3, speed: 1.0 })
+const draftOpen = ref(false)
+
+function pickDraftVoice(sid: number): void {
+  draft.value.sid = sid
+}
+
+function previewDraft(): void {
+  previewVoice({ id: 'draft', name: draft.value.name || '新音色', tag: '', sid: draft.value.sid, speed: draft.value.speed })
+}
+
+function saveCustom(): void {
+  const name = draft.value.name.trim()
+  if (!name) return
+  const voice = addCustomVoice(name, draft.value.sid, draft.value.speed)
+  setCurrentVoice(voice.id)
+  draftOpen.value = false
+  draft.value = { name: '', sid: 3, speed: 1.0 }
+}
+
+/** 模型状态文案（下载/解压/加载/就绪/出错；首次使用自动下载约 150MB） */
+const modelStateText = computed(() => {
+  switch (ttsPhase.value) {
+    case 'downloading':
+      return ttsDetail.value || '语音模型下载中…'
+    case 'extracting':
+      return '语音模型解压中…'
+    case 'loading':
+      return '语音模型加载中…（首次约十几秒）'
+    case 'error':
+      return `模型出错：${ttsDetail.value || '未知原因'}`
+    default:
+      return ''
+  }
+})
+const modelReady = computed(() => ttsPhase.value === 'idle' || ttsPhase.value === 'speaking')
 </script>
 
 <template>
   <div class="settings">
     <div class="head">
-      <span class="title">来自 {{ machine?.name ?? '（未连接）' }} 的只读信息</span>
-      <button class="small-btn" :disabled="loading || !store.connected" @click="load">
+      <div class="tabs">
+        <button class="tab-btn" :class="{ active: tab === 'machine' }" @click="tab = 'machine'">机器</button>
+        <button class="tab-btn" :class="{ active: tab === 'speech' }" @click="tab = 'speech'">语音播报</button>
+      </div>
+      <button v-if="tab === 'machine'" class="small-btn" :disabled="loading || !store.connected" @click="load">
         {{ loading ? '读取中…' : '刷新' }}
       </button>
+      <button v-else-if="ttsPhase === 'speaking'" class="small-btn" @click="stopSpeaking()">停止试听</button>
     </div>
 
+    <template v-if="tab === 'machine'">
+    <div class="note" style="padding-top: 0">来自 {{ machine?.name ?? '（未连接）' }} 的只读信息。</div>
     <section>
       <h3>客户端更新</h3>
       <div class="row">
@@ -218,6 +295,95 @@ onMounted(load)
         <div class="note">这些值在远端 Friday 上改；这里只展示。</div>
       </section>
     </template>
+    </template>
+
+    <section v-else>
+      <h3>回复语音播报</h3>
+      <div class="row">
+        <span class="key">助手回复念出来</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: replySpeakEnabled }" @click="setReplySpeak(true)">开</button>
+          <button class="small-btn" :class="{ strong: !replySpeakEnabled }" @click="setReplySpeak(false)">关</button>
+        </span>
+      </div>
+      <div class="note">回复完成时用本地语音模型朗读文字部分（代码块、链接不念），完全离线、不联网。自己发言会自动打断播报。首次使用会下载约 350MB 模型（fp32，比 int8 快 3-4 倍），之后不再下载。</div>
+
+      <h3 class="sub">音色（默认 10 种，可自定义）</h3>
+      <div class="voice-grid">
+        <button
+          v-for="voice in allVoices"
+          :key="voice.id"
+          class="voice-item"
+          :class="{ active: currentVoiceId === voice.id }"
+          @click="setCurrentVoice(voice.id)"
+        >
+          <span class="voice-name">{{ voice.name }}</span>
+          <span class="voice-meta">{{ voice.tag }} · {{ voice.custom ? sidToVoiceCode(voice.sid) : voice.id }}</span>
+          <span class="voice-actions">
+            <span class="voice-mini" role="button" title="试听这个音色" @click.stop="previewVoice(voice)">试听</span>
+            <span
+              v-if="voice.custom"
+              class="voice-mini danger"
+              role="button"
+              title="删掉这个自定义音色"
+              @click.stop="removeCustomVoice(voice.id)"
+              >删除</span
+            >
+          </span>
+        </button>
+        <button class="voice-item add" @click="draftOpen = !draftOpen">
+          <span class="voice-name">+ 自定义音色</span>
+          <span class="voice-meta">在 100 个内置音色里起名保存</span>
+        </button>
+      </div>
+
+      <div v-if="draftOpen" class="voice-draft">
+        <div class="row">
+          <span class="key">名字</span>
+          <input v-model="draft.name" class="input" maxlength="12" placeholder="比如：沉稳男声" />
+        </div>
+        <div class="row">
+          <span class="key">底层音色</span>
+          <select class="input" :value="draft.sid" @change="pickDraftVoice(Number(($event.target as HTMLSelectElement).value))">
+            <optgroup v-for="group in customVoiceOptions" :key="group.label" :label="group.label">
+              <option v-for="option in group.options" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="row">
+          <span class="key">语速 {{ draft.speed.toFixed(2) }}×</span>
+          <input
+            v-model.number="draft.speed"
+            class="input range"
+            type="range"
+            min="0.6"
+            max="1.6"
+            step="0.05"
+          />
+        </div>
+        <div class="update-actions">
+          <button class="small-btn" @click="previewDraft">试听</button>
+          <button class="small-btn strong" :disabled="!draft.name.trim()" @click="saveCustom">保存并使用</button>
+        </div>
+      </div>
+
+      <h3 class="sub">本地语音模型</h3>
+      <div class="row">
+        <span class="key">模型</span>
+        <span class="value">kokoro v1.1 fp32（103 音色，中英）· 本机合成 · 实测比实时快 2-3 倍</span>
+      </div>
+      <div v-if="ttsPhase === 'downloading'" class="progress">
+        <div class="bar" :style="{ width: (ttsDetail.match(/(\d+)%/)?.[1] ?? 0) + '%' }" />
+      </div>
+      <div v-if="modelStateText" class="note">{{ modelStateText }}</div>
+      <div v-else-if="modelReady" class="note">模型已就绪（首次使用后不再下载）。</div>
+      <div class="update-actions">
+        <button v-if="ttsPhase === 'downloading' || ttsPhase === 'extracting' || ttsPhase === 'loading'" class="small-btn" disabled>
+          准备中…
+        </button>
+        <button v-else-if="!modelReady" class="small-btn" @click="prefetchTtsModel()">重试下载</button>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -240,9 +406,35 @@ onMounted(load)
   margin-bottom: 10px;
 }
 
-.title {
-  color: var(--text-2);
-  font-size: 12px;
+/* 设置分区 tab */
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.tab-btn {
+  font-size: 12.5px;
+  padding: 3px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.tab-btn:hover {
+  color: var(--text);
+}
+
+.tab-btn.active {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--chip);
+}
+
+[data-theme='jarvis'] .tab-btn.active {
+  color: var(--accent);
+  border-color: var(--accent-a55);
+  box-shadow: 0 0 10px var(--accent-a15);
 }
 
 .small-btn {
@@ -389,5 +581,104 @@ h3 {
 .error {
   color: var(--fail);
   padding: 6px 0;
+}
+
+/* 语音播报 tab */
+h3.sub {
+  margin-top: 14px;
+}
+
+.voice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.voice-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.voice-item:hover {
+  border-color: var(--text-3);
+}
+
+.voice-item.active {
+  border-color: var(--text-2);
+  box-shadow: 0 0 0 1px var(--text-3) inset;
+}
+
+[data-theme='jarvis'] .voice-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-a15);
+}
+
+.voice-name {
+  font-weight: 500;
+}
+
+.voice-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.voice-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.voice-mini {
+  font-size: 11px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
+.voice-mini:hover {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+.voice-mini.danger:hover {
+  color: var(--fail);
+  border-color: var(--fail);
+}
+
+.voice-draft {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.input {
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  min-width: 0;
+  flex: 1;
+}
+
+.input.range {
+  padding: 0;
+  border: none;
+  accent-color: var(--text-2);
+}
+
+[data-theme='jarvis'] .input.range {
+  accent-color: var(--accent);
 }
 </style>

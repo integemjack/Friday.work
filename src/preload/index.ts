@@ -38,6 +38,24 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('voice:model-progress', handler)
     return () => ipcRenderer.removeListener('voice:model-progress', handler)
   },
+  /** 助手回复语音播报（本地 kokoro TTS）：文本+音色送主进程合成，返回采样和采样率（渲染层 WebAudio 播放）。
+   *  首次使用会先下载模型（约 150MB），进度经 onTtsModelProgress 推送 */
+  speakReply: (payload: { text: string; sid: number; speed: number }): Promise<{ samples: Float32Array; sampleRate: number }> =>
+    ipcRenderer.invoke('voice:speak', payload),
+  /** 只触发 TTS 模型下载/加载（设置里的「立即下载」），不合成 */
+  prefetchTtsModel: (): void => {
+    ipcRenderer.send('voice:tts-prefetch')
+  },
+  onTtsModelProgress: (
+    listener: (state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }
+    ): void => listener(state)
+    ipcRenderer.on('voice:tts-progress', handler)
+    return () => ipcRenderer.removeListener('voice:tts-progress', handler)
+  },
   /** 媒体叠本地缓存：把一份媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack */
   saveStackMedia: (payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null> =>
     ipcRenderer.invoke('media-stack:save', payload),

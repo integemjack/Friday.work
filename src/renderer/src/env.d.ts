@@ -17,6 +17,15 @@ declare global {
       onVoiceModelProgress(
         listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
       ): () => void
+      /** 助手回复语音播报（本地 kokoro TTS）：主进程合成返回采样（渲染层 WebAudio 播放）；首次使用自动下载模型 */
+      speakReply(payload: { text: string; sid: number; speed: number }): Promise<{ samples: Float32Array; sampleRate: number }>
+      /** 只触发 TTS 模型下载/加载（设置里的「立即下载」） */
+      prefetchTtsModel(): void
+      onTtsModelProgress(
+        listener: (
+          state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }
+        ) => void
+      ): () => void
       /** 媒体叠本地缓存：媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack，
        *  文件名按「会话:类型:媒体源」确定性算出，供 friday-media:// 协议加载 */
       saveStackMedia(payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null>
