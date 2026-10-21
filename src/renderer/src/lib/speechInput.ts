@@ -13,8 +13,14 @@ const TARGET_RATE = 16000
 const SILENCE_MS = 600
 /** 单句最长（whisper 的舒适区，再长也强制切） */
 const MAX_UTTERANCE_MS = 12000
-/** 首句前的最长等待（等不到语音就报「没听到」） */
-const MAX_LEAD_SILENCE_MS = 20000
+/** 开口前的预滚缓冲：未说话期间一直保留最近这么久的音频，
+ *  一开口就把它们整段带上（首字的弱起音常低于阈值，不能从触发帧算起） */
+export const PRE_ROLL_MS = 300
+/** 送 whisper 的每段音频前面再垫这么久纯静音：whisper 对紧贴开头的音频
+ *  会丢首词（实测中文句被吃掉「今天」），有前导静音才稳 */
+const LEADING_PAD_MS = 150
+/** 断句时句尾留这么点静音，给 whisper 一点上下文 */
+const TAIL_PAD_MS = 100
 
 export type VoicePhase = 'listening' | 'model-loading' | 'transcribing'
 
@@ -34,10 +40,13 @@ export interface SpeechInputOptions {
 
 /** 会话期共享的分句器（纯函数部分抽出便于测试） */
 export class UtteranceSlicer {
+  /** 开口后的句缓冲（开头已含 pre-roll） */
   private buffer: Float32Array = new Float32Array(0)
-  private speechStart = -1
+  /** 未开口期间的预滚缓冲（最近 PRE_ROLL_MS，环形丢弃） */
+  private preroll: Float32Array = new Float32Array(0)
   private silenceSamples = 0
-  private totalSamples = 0
+  /** 开口后累积的样本数（从触发帧起算，不含 pre-roll） */
+  private speechSamples = 0
   inSpeech = false
   /** 静音阈值（RMS），可随噪声底估计动态调 */
   threshold: number
@@ -50,56 +59,65 @@ export class UtteranceSlicer {
 
   /** 喂一帧；返回切出的话段（可能为空——还没断句） */
   push(frame: Float32Array): Float32Array[] {
-    this.buffer = concat(this.buffer, frame)
-    this.totalSamples += frame.length
     const rms = frameRms(frame)
     const out: Float32Array[] = []
     if (!this.inSpeech) {
+      // 预滚：一直保留最近 PRE_ROLL_MS 的音频（含低于阈值的弱起音和环境声）
+      this.preroll = concat(this.preroll, frame)
+      const max = Math.round((PRE_ROLL_MS / 1000) * this.sampleRate)
+      if (this.preroll.length > max) this.preroll = this.preroll.subarray(this.preroll.length - max)
       if (rms >= this.threshold) {
+        // 开口：从预滚的开头算起（首字的弱起音在里面），不是从触发帧
         this.inSpeech = true
-        this.speechStart = Math.max(0, this.totalSamples - frame.length - keepPad(this.sampleRate))
+        this.buffer = this.preroll
+        this.preroll = new Float32Array(0)
         this.silenceSamples = 0
-      } else if (this.totalSamples > (MAX_LEAD_SILENCE_MS / 1000) * this.sampleRate) {
-        // 一直没人说话：把缓冲清了（避免无限占内存），继续等
-        this.buffer = new Float32Array(0)
-        this.totalSamples = 0
+        this.speechSamples = frame.length
       }
     } else {
+      this.buffer = concat(this.buffer, frame)
+      this.speechSamples += frame.length
       this.silenceSamples = rms < this.threshold ? this.silenceSamples + frame.length : 0
-      const speechLen = this.totalSamples - this.speechStart
-      const speechMs = (speechLen / this.sampleRate) * 1000
+      const speechMs = (this.speechSamples / this.sampleRate) * 1000
       if (this.silenceSamples >= (SILENCE_MS / 1000) * this.sampleRate || speechMs >= MAX_UTTERANCE_MS) {
-        const utterance = this.buffer.subarray(this.speechStart, this.totalSamples - this.silenceSamples + keepPad(this.sampleRate))
-        if (utterance.length > (0.2 * this.sampleRate)) out.push(copy(utterance))
+        const tailPad = Math.round((TAIL_PAD_MS / 1000) * this.sampleRate)
+        const end = Math.min(this.buffer.length, this.buffer.length - this.silenceSamples + tailPad)
+        const utterance = this.buffer.subarray(0, end)
+        if (utterance.length > 0.2 * this.sampleRate) out.push(copy(utterance))
+        // 断句后的静音期间同样要预滚（用户可能马上接下一句）
+        this.preroll = new Float32Array(0)
         this.buffer = new Float32Array(0)
-        this.totalSamples = 0
         this.inSpeech = false
-        this.speechStart = -1
         this.silenceSamples = 0
+        this.speechSamples = 0
       }
     }
     return out
   }
 
-  /** 收尾：把说了一半的话段吐出来 */
+  /** 收尾：把说了一半的话段吐出来（含开头 pre-roll） */
   flush(): Float32Array[] {
     if (!this.inSpeech) return []
-    const end = this.totalSamples - this.silenceSamples
-    const utterance = this.buffer.subarray(this.speechStart, end)
-    return utterance.length > (0.2 * this.sampleRate) ? [copy(utterance)] : []
+    const end = this.buffer.length - this.silenceSamples
+    return end > 0.2 * this.sampleRate ? [copy(this.buffer.subarray(0, end))] : []
   }
 }
 
-/** 断句时前后各留这么点静音，给 whisper 一点上下文（首音别切太狠） */
-function keepPad(rate: number): number {
-  return Math.round(rate * 0.1)
-}
-
+/** 断句时句尾留静音的量已并入 TAIL_PAD_MS */
 function concat(a: Float32Array, b: Float32Array): Float32Array {
   if (a.length === 0) return b
   const out = new Float32Array(a.length + b.length)
   out.set(a, 0)
   out.set(b, a.length)
+  return out
+}
+
+/** 音频前面垫一段静音（whisper 需要前导静音，否则首词容易被吃掉） */
+export function padSilence(audio: Float32Array, rate: number, ms: number): Float32Array {
+  const pad = new Float32Array(Math.round((ms / 1000) * rate))
+  const out = new Float32Array(pad.length + audio.length)
+  out.set(pad, 0)
+  out.set(audio, pad.length)
   return out
 }
 
@@ -122,6 +140,8 @@ export class SpeechInput {
   private whole: Float32Array = new Float32Array(0)
   private options: SpeechInputOptions | null = null
   private stopping = false
+  /** 还没开起来就被要求停（短按/误触）：开起来后立即收尾 */
+  private pendingStop = false
   /** 串行转写队列 */
   private queue: Float32Array[] = []
   private draining = false
@@ -129,17 +149,23 @@ export class SpeechInput {
   /** 还在录音（或队列没排空） */
   active = false
 
-  /** 开麦录音。hold=true 整段一次转写；hold=false VAD 分句流式追加 */
+  /** 开麦录音。hold=true 整段一次转写；hold=false VAD 分句流式追加。
+   *  「在听」状态（onPhase('listening')）等麦克风真正收到第一帧才发：
+   *  红灯早亮会让人抢在麦克风启动前开口，正好漏首字（getUserMedia 起设备要几百毫秒） */
   async start(options: SpeechInputOptions, hold: boolean): Promise<void> {
     if (this.active) return
     this.options = options
     this.stopping = false
+    this.pendingStop = false
     this.transcript = ''
     this.whole = new Float32Array(0)
     this.queue = []
     this.hold = hold
+    // AudioContext 不依赖设备，先建；和 getUserMedia 并行省点启动时间
+    const context = new AudioContext()
+    this.context = context
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: options.deviceId ? { exact: options.deviceId } : undefined,
           echoCancellation: true,
@@ -149,6 +175,7 @@ export class SpeechInput {
         },
         video: false
       })
+      this.stream = stream
     } catch (error) {
       const name = (error as DOMException)?.name ?? ''
       const hint =
@@ -157,23 +184,29 @@ export class SpeechInput {
           : name === 'NotAllowedError'
             ? '麦克风权限被拒'
             : '麦克风打不开'
+      void context.close().catch(() => {})
+      this.context = null
       options.onError?.('mic', hint)
       options.onEnd?.()
       return
     }
     this.active = true
-    this.context = new AudioContext()
-    const source = this.context.createMediaStreamSource(this.stream)
+    const source = context.createMediaStreamSource(this.stream)
     // ScriptProcessor 已废弃但到处能用（voiceMedia 同款），块大小 2048
-    this.processor = this.context.createScriptProcessor(2048, 1, 1)
+    this.processor = context.createScriptProcessor(2048, 1, 1)
     // 先用固定小阈值（安静环境够用）；未开口期间按实测噪声底自适应上调
     this.slicer = new UtteranceSlicer(TARGET_RATE, 0.006)
     let noiseFloor = 0
     let frames = 0
+    let announced = false
     this.processor.onaudioprocess = (event) => {
       if (!this.active) return
+      if (!announced) {
+        announced = true
+        options.onPhase?.('listening') // 第一帧到了才是真的在收音
+      }
       const input = event.inputBuffer.getChannelData(0)
-      const frame = resample(input, this.context!.sampleRate, TARGET_RATE)
+      const frame = resample(input, context.sampleRate, TARGET_RATE)
       if (this.hold) {
         this.whole = concat(this.whole, frame)
         // hold 模式最多留 30s（whisper 的舒适区），更早的截掉
@@ -192,16 +225,18 @@ export class SpeechInput {
     }
     source.connect(this.processor)
     // 不接 destination：ScriptProcessor 不连输出也会跑（Chrome 行为），只是别让声音外放
-    this.processor.connect(this.context.destination)
-    this.context.suspend?.()
-    this.context.resume?.()
-    options.onPhase?.('listening')
+    this.processor.connect(context.destination)
+    context.suspend?.()
+    context.resume?.()
+    // 麦没起来就被要求停了（短按）：现在起来了，立即收尾
+    if (this.pendingStop) this.stop()
   }
 
   private hold = true
 
   private enqueue(utterance: Float32Array): void {
-    this.queue.push(utterance)
+    // 前垫静音：whisper 对紧贴开头的音频丢首词（见 LEADING_PAD_MS 注释）
+    this.queue.push(padSilence(utterance, TARGET_RATE, LEADING_PAD_MS))
     void this.drain()
   }
 
@@ -233,13 +268,19 @@ export class SpeechInput {
 
   /** 停止录音；hold 模式把整段送转写，等队列排空后 onEnd */
   stop(): void {
-    if (!this.active || this.stopping) return
+    if (!this.active) {
+      // 还在开麦中就被要求停（短按/误触）：记下，开起来立即收尾
+      if (this.context !== null || this.queue.length > 0) this.pendingStop = true
+      return
+    }
+    if (this.stopping) return
     this.stopping = true
     this.active = false
     // 先把最后的半句吐进队列
     if (this.slicer) for (const utterance of this.slicer.flush()) this.enqueue(utterance)
     if (this.hold && this.whole.length > 0) {
-      this.queue.push(this.whole)
+      // hold 整段同样前垫静音（用户一按住就说话时，麦刚起的第一帧就贴着开头）
+      this.queue.push(padSilence(this.whole, TARGET_RATE, LEADING_PAD_MS))
       this.whole = new Float32Array(0)
       void this.drain()
     }

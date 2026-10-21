@@ -313,19 +313,22 @@ const voiceWrap = ref<HTMLDivElement | null>(null)
 const mics = ref<Array<{ deviceId: string; label: string }>>([])
 const micEnumError = ref('')
 const listening = ref(false)
+const starting = ref(false)
 const transcribing = ref(false)
 const modelPrep = ref('')
 const voiceError = ref('')
 let voiceSession: SpeechInput | null = null
 
 const voiceTitle = computed(() =>
-  listening.value
-    ? voiceMode.value === 'click'
-      ? '正在听…再点一下结束'
-      : '正在听…松开结束'
-    : voiceMode.value === 'click'
-      ? '点一下开始持续识别 · 右键设置麦克风/语言'
-      : '按住说话，松开结束 · 右键设置麦克风/语言'
+  starting.value
+    ? '正在开麦克风…'
+    : listening.value
+      ? voiceMode.value === 'click'
+        ? '正在听…再点一下结束'
+        : '正在听…松开结束'
+      : voiceMode.value === 'click'
+        ? '点一下开始持续识别 · 右键设置麦克风/语言'
+        : '按住说话，松开结束 · 右键设置麦克风/语言'
 )
 
 /** 列一遍输入设备（右键菜单里选）；Chrome 给 default/communications 两个别名，滤掉只留实体 */
@@ -378,12 +381,13 @@ function chooseMic(deviceId: string): void {
 }
 
 async function startListen(): Promise<void> {
-  if (listening.value || busy.value) return
+  if (listening.value || starting.value || busy.value) return
   voiceError.value = ''
   sessionBase = text.value
+  starting.value = true // 开麦中：麦真正收到音（onPhase('listening')）才亮「正在听」。
+  // 提前亮红会让人抢在麦克风启动前开口，首 1-2 个字正好落在没录到的那段里
   const session = new SpeechInput()
   voiceSession = session
-  listening.value = true
   await session.start(
     {
       lang:
@@ -392,8 +396,11 @@ async function startListen(): Promise<void> {
           : voiceLang.value,
       deviceId: voiceMicId.value || undefined,
       onPhase: (phase: VoicePhase, detail?: string) => {
-        if (phase === 'listening') transcribing.value = false
-        else if (phase === 'transcribing') transcribing.value = true
+        if (phase === 'listening') {
+          starting.value = false
+          listening.value = true
+          transcribing.value = false
+        } else if (phase === 'transcribing') transcribing.value = true
         // 模型准备进度由 onVoiceModelProgress 专门推送，这里不管 detail
       },
       onText: (recognized) => {
@@ -407,6 +414,7 @@ async function startListen(): Promise<void> {
       },
       onEnd: () => {
         listening.value = false
+        starting.value = false
         transcribing.value = false
         voiceSession = null
       }
@@ -416,6 +424,7 @@ async function startListen(): Promise<void> {
   // 启动即失败（麦克风打不开）：onEnd 不会来，这里收掉
   if (!session.active && voiceSession === session) {
     listening.value = false
+    starting.value = false
     voiceSession = null
   }
 }
@@ -442,7 +451,7 @@ function onVoicePointerUp(event: PointerEvent): void {
 
 function onVoiceClick(): void {
   if (voiceMode.value !== 'click') return // hold 模式的 click 是按住后的松手，不算切换
-  if (listening.value) stopListen()
+  if (listening.value || starting.value) stopListen() // 开麦中再点一下也停（取消）
   else void startListen()
 }
 
@@ -662,19 +671,21 @@ onBeforeUnmount(() => {
         <span class="hint">{{
           modelPrep
             ? modelPrep
-            : transcribing
-              ? '转写中…'
-              : listening
-                ? voiceMode === 'click'
-                  ? '正在听 · 再点一下结束 · Esc 停止'
-                  : '正在听 · 松开结束'
-                : store.assistantChat
-                  ? assistantReacting
-                    ? '助手在说 · Enter 发下一句会打断重来 · Shift+Enter 换行'
-                    : 'Enter 发给助手 · Shift+Enter 换行'
-                  : sending
-                    ? 'Enter 补充给智能体 · Shift+Enter 换行'
-                    : 'Enter 发送 · Shift+Enter 换行'
+            : starting
+              ? '正在开麦…等变红再说话'
+              : transcribing
+                ? '转写中…'
+                : listening
+                  ? voiceMode === 'click'
+                    ? '正在听 · 再点一下结束 · Esc 停止'
+                    : '正在听 · 松开结束'
+                  : store.assistantChat
+                    ? assistantReacting
+                      ? '助手在说 · Enter 发下一句会打断重来 · Shift+Enter 换行'
+                      : 'Enter 发给助手 · Shift+Enter 换行'
+                    : sending
+                      ? 'Enter 补充给智能体 · Shift+Enter 换行'
+                      : 'Enter 发送 · Shift+Enter 换行'
         }}</span>
         <span class="spacer" />
         <!-- 发送键那组：语音键浮在发送键正上方（跟着发送键走，不占行高） -->
@@ -683,7 +694,7 @@ onBeforeUnmount(() => {
           <div ref="voiceWrap" class="voice-wrap">
             <button
               class="round-btn voice"
-              :class="{ listening, transcribing: transcribing && !listening }"
+              :class="{ listening, starting: starting && !listening, transcribing: transcribing && !listening && !starting }"
               :title="voiceTitle"
               :aria-label="listening ? '结束语音输入' : '语音输入'"
               @contextmenu.prevent="openVoiceMenu"
@@ -1237,6 +1248,13 @@ textarea::placeholder {
   animation: voice-pulse 1.5s ease-in-out infinite;
 }
 
+/* 开麦中：还没真在收音，给个中性弱化态（提示「等变红再说话」） */
+.round-btn.voice.starting {
+  border-color: var(--text-3);
+  color: var(--text-3);
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+
 @keyframes voice-pulse {
   0%, 100% { box-shadow: 0 0 0 0 transparent; }
   50% { box-shadow: 0 0 12px color-mix(in srgb, var(--fail) 45%, transparent); }
@@ -1573,6 +1591,12 @@ textarea::placeholder {
   border-color: var(--accent-a55);
   color: var(--accent);
   animation: jarvis-voice-pulse 1.2s ease-in-out infinite;
+}
+
+[data-theme='jarvis'] .round-btn.voice.starting {
+  border-color: var(--accent-a30);
+  color: var(--accent-a65);
+  animation: jarvis-voice-pulse 1s ease-in-out infinite;
 }
 
 @keyframes jarvis-voice-pulse {
