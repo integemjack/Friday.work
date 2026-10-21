@@ -27,6 +27,10 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 
 服务端要求 ≥ 2.38（`callType "work"` 被叫支持）。
 
+## 字体
+
+界面正文使用 [MiSans](https://hyperos.mi.com/font/)（小米公司发布，免费商用；经 npm 包 `misans` 子集化 WOFF2 分片内置，无需系统安装）。依据《MiSans 字体知识产权许可协议》，在此特别注明：本软件使用了 MiSans 字体。代码块与 HUD 遥测数字仍用等宽字体（Cascadia Code / Consolas）。
+
 ## 窗口
 
 | 窗口 | 内容 |

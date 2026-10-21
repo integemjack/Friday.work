@@ -21,7 +21,7 @@ html {
 }
 
 body {
-  font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
+  font-family: 'MiSans', 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
   font-size: 14px;
   color: var(--text);
   background: var(--bg);
