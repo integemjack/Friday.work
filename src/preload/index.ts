@@ -38,10 +38,19 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('voice:model-progress', handler)
     return () => ipcRenderer.removeListener('voice:model-progress', handler)
   },
-  /** 助手回复语音播报（本地 kokoro TTS）：文本+音色送主进程合成，返回采样和采样率（渲染层 WebAudio 播放）。
-   *  首次使用会先下载模型（约 150MB），进度经 onTtsModelProgress 推送 */
-  speakReply: (payload: { text: string; sid: number; speed: number }): Promise<{ samples: Float32Array; sampleRate: number }> =>
-    ipcRenderer.invoke('voice:speak', payload),
+  /** 助手回复语音播报：文本+音色送主进程合成，返回采样和采样率（渲染层 WebAudio 播放）。
+   *  engine：'kokoro'（默认，CPU，按 sid 选 103 个音色）| 'cosyvoice3'（本机 GPU，服务端同款
+   *  模型，按 voice 选音色名、可带语气指令）；首次使用会先下载（进度经 onTtsModelProgress 推） */
+  speakReply: (
+    payload: { text: string; speed: number; sid?: number; engine?: 'kokoro' | 'cosyvoice3'; voice?: string; instruction?: string }
+  ): Promise<{ samples: Float32Array; sampleRate: number }> => ipcRenderer.invoke('voice:speak', payload),
+  /** CosyVoice3 引擎状态：本机平台有无对应包、是否已下好、服务是否在跑、可用音色名 */
+  cosyVoiceStatus: (): Promise<{ supported: boolean; installed: boolean; serving: boolean; voices: string[]; version: string }> =>
+    ipcRenderer.invoke('voice:cv3-status'),
+  /** 下载 / 启动 CosyVoice3 引擎（约 1.2GB，进度走 onTtsModelProgress），不合成 */
+  prefetchCosyVoice: (): Promise<void> => ipcRenderer.invoke('voice:cv3-prefetch'),
+  /** 打断当前这句合成（不等它念完） */
+  cancelCosyVoice: (): Promise<void> => ipcRenderer.invoke('voice:cv3-cancel'),
   /** 只触发 TTS 模型下载/加载（设置里的「立即下载」），不合成 */
   prefetchTtsModel: (): void => {
     ipcRenderer.send('voice:tts-prefetch')

@@ -7,12 +7,15 @@ import { useAppStore } from '../stores/app.js'
 import { loadTheme, setTheme, type UITheme } from '../lib/theme.js'
 import {
   addCustomVoice,
+  cosyVoiceReady,
+  cosyVoiceStatus,
   CUSTOM_VOICE_GROUPS,
   currentVoiceId,
   customVoices,
   PRESET_VOICES,
   previewVoice,
   prefetchTtsModel,
+  refreshCosyVoiceStatus,
   removeCustomVoice,
   replySpeakEnabled,
   setCurrentVoice,
@@ -186,6 +189,25 @@ const modelStateText = computed(() => {
   }
 })
 const modelReady = computed(() => ttsPhase.value === 'idle' || ttsPhase.value === 'speaking')
+
+// MARK: CosyVoice3（服务端同款本地模型）：状态 / 下载
+
+const cv3StateText = computed(() => {
+  const status = cosyVoiceStatus.value
+  if (!status) return '状态读取中…'
+  if (!status.supported) return '本机平台没有对应的引擎包'
+  if (!status.installed) return '未下载（约 1.2GB，本机 GPU 推理）'
+  if (status.serving) return '已就绪（引擎在跑）'
+  return `已下载（${status.voices.length} 个音色，念第一句时启动引擎）`
+})
+const cv3Downloaded = computed(() => cosyVoiceStatus.value?.installed ?? false)
+const cv3Supported = computed(() => cosyVoiceStatus.value?.supported ?? false)
+
+function downloadCosyVoice(): void {
+  void window.fridayBridge.prefetchCosyVoice?.().catch(() => {})
+}
+
+onMounted(() => void refreshCosyVoiceStatus())
 </script>
 
 <template>
@@ -319,9 +341,20 @@ const modelReady = computed(() => ttsPhase.value === 'idle' || ttsPhase.value ==
           <button class="small-btn" :class="{ strong: !replySpeakEnabled }" @click="setReplySpeak(false)">关</button>
         </span>
       </div>
-      <div class="note">回复完成时用本地语音模型朗读文字部分（代码块、链接不念），完全离线、不联网。自己发言会自动打断播报。首次使用会下载约 350MB 模型（fp32，比 int8 快 3-4 倍），之后不再下载。</div>
+      <div class="note">回复完成时用本地语音模型朗读文字部分（代码块、链接不念），完全离线、不联网。默认引擎 kokoro 首次使用会下载约 350MB 模型（fp32，比 int8 快 3-4 倍），之后不再下载。</div>
 
-      <h3 class="sub">音色（默认 10 种，可自定义）</h3>
+      <div class="row">
+        <span class="key">高质量引擎 CosyVoice3</span>
+        <span class="value">
+          <span>{{ cv3StateText }}</span>
+          <button v-if="cv3Supported && !cv3Downloaded" class="small-btn" :disabled="ttsPhase === 'downloading'" @click="downloadCosyVoice">
+            {{ ttsPhase === 'downloading' ? '下载中…' : '下载（约 1.2GB）' }}
+          </button>
+        </span>
+      </div>
+      <div class="note">服务端（Friday）用的同一套本地模型和加载方式：friday-voice 引擎 + Fun-CosyVoice3-0.5B，本机 GPU（Vulkan）推理。实测女声 RTF 0.52-0.74、首块 0.53-0.82s，韵律比 kokoro 自然、还能带语气指令。没下载时选它的音色会自动用 kokoro 念，不会不出声。</div>
+
+      <h3 class="sub">音色（CosyVoice3 5 种 + kokoro 10 种，可自定义）</h3>
       <div class="voice-grid">
         <button
           v-for="voice in allVoices"
@@ -331,7 +364,7 @@ const modelReady = computed(() => ttsPhase.value === 'idle' || ttsPhase.value ==
           @click="setCurrentVoice(voice.id)"
         >
           <span class="voice-name">{{ voice.name }}</span>
-          <span class="voice-meta">{{ voice.tag }} · {{ voice.custom ? sidToVoiceCode(voice.sid) : voice.id }}</span>
+          <span class="voice-meta">{{ voice.tag }} · {{ voice.engine === 'cosyvoice3' ? voice.voice : voice.custom ? sidToVoiceCode(voice.sid) : voice.id }}{{ voice.engine === 'cosyvoice3' && !cosyVoiceReady ? '（未下载，先拿 kokoro 念）' : '' }}</span>
           <span class="voice-actions">
             <span class="voice-mini" role="button" title="试听这个音色" @click.stop="previewVoice(voice)">试听</span>
             <span

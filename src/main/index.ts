@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerDictationIpc } from './Dictation.js'
 import { registerTtsIpc } from './TtsService.js'
+import { registerCosyVoiceIpc } from './CosyVoiceService.js'
 import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
 import { handleMediaStackRequest } from './MediaStack.js'
@@ -188,8 +189,9 @@ app.whenReady().then(() => {
   bridge.register()
   // 输入框语音听写：SenseVoice（主力）/ whisper（混合与多语言）按语言+菜单选择路由
   registerDictationIpc()
-  // 助手回复语音播报：kokoro v1.1 本地 TTS（103 音色，首次使用自动下载模型）
+  // 助手回复语音播报：kokoro v1.1（CPU、103 音色）+ CosyVoice3（本机 GPU、服务端同款模型）
   registerTtsIpc()
+  registerCosyVoiceIpc()
   updater.register()
   updater.spawnInstallerOnQuit()
   updater.startAutoUpdate()

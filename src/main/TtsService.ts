@@ -1,4 +1,9 @@
-// 助手回复的语音播报（TTS）：kokoro v1.1 多语言模型（sherpa-onnx 运行时，CPU 推理）。
+// 助手回复的语音播报（TTS）：两套引擎可选，入口同一个（ipcMain 'voice:speak' 按
+// payload.engine 分发）：
+//   - kokoro v1.1（本文件）：sherpa-onnx 运行时、CPU 推理，103 个音色、无需显卡、
+//     模型包约 350MB；默认引擎。
+//   - CosyVoice3（CosyVoiceService.ts）：服务端本地语音 Power 同款模型和加载方式，
+//     本机 GPU（Vulkan）推理，5 个音色 + 语气指令，音质更自然。
 //   - 103 个音色：sid 0-2 英文女声（af_maple/af_sol/bf_vale），3-57 中文女声
 //     （zf_001-zf_055），58-102 中文男声（zm_001-zm_045）——映射来自
 //     k2-fsa/sherpa-onnx PR #1942；中英文都能念，标点自带停顿。
@@ -25,6 +30,7 @@ import { createRequire } from 'node:module'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { GeneratedAudio, OfflineTts } from 'sherpa-onnx-node'
+import { synthesizeCosyVoice } from './CosyVoiceService.js'
 
 /** GitHub release 附件（tts-models tag）；直连失败换公共镜像（都指向同一附件） */
 const RELEASE_PATH = 'k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2'
@@ -219,12 +225,21 @@ export function registerTtsIpc(): void {
     'voice:speak',
     async (
       event: IpcMainInvokeEvent,
-      payload: { text?: string; sid?: number; speed?: number }
+      payload: { text?: string; sid?: number; speed?: number; engine?: string; voice?: string; instruction?: string }
     ): Promise<{ samples: Float32Array; sampleRate: number }> => {
       const text = (payload.text ?? '').trim()
       if (!text) return { samples: new Float32Array(0), sampleRate: 24000 }
-      const sid = Number.isInteger(payload.sid) && payload.sid! >= 0 ? payload.sid! : 44
       const speed = typeof payload.speed === 'number' && payload.speed > 0.2 && payload.speed < 4 ? payload.speed : 1.0
+      // 两套引擎同一入口：kokoro（CPU、103 音色、无需额外下载）/ cosyvoice3（本机 GPU、
+      // 服务端同款模型，见 CosyVoiceService）；返回格式一致，渲染层播放不用分叉
+      if (payload.engine === 'cosyvoice3') {
+        return synthesizeCosyVoice(event.sender, text, {
+          voice: payload.voice,
+          speed,
+          instruction: payload.instruction
+        })
+      }
+      const sid = Number.isInteger(payload.sid) && payload.sid! >= 0 ? payload.sid! : 44
       return synthesizeSpeech(event.sender, text, sid, speed)
     }
   )

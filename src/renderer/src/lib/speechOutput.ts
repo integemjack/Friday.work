@@ -1,16 +1,22 @@
 // 助手回复的语音播报（输出侧）：偏好（开关 / 音色 / 自定义音色）、回复文本的朗读清理、
-// WebAudio 播放与打断。合成在主进程（本地 kokoro TTS，见 main/TtsService.ts），这里只管
-// 「播什么、用哪个音色播、什么时候停」。
+// WebAudio 播放与打断。合成在主进程，这里只管「播什么、用哪个引擎和音色播、什么时候停」：
+//   - kokoro v1.1（main/TtsService.ts）：CPU 推理、103 个音色、模型包约 350MB，无需显卡；
+//   - CosyVoice3（main/CosyVoiceService.ts）：服务端本地语音 Power 同款模型和加载方式，
+//     本机 GPU（Vulkan）推理、5 个音色 + 语气指令，约 1.2GB、需显式下载。
+// 两者返回格式一致（Float32Array + sampleRate），播放不用分叉；选了 CosyVoice3 但引擎
+// 没下好 / 显卡不支持时自动回落 kokoro，不会因这个而静默。
 //
-// 音色模型 kokoro v1.1 共 103 个音色：sid 0-2 英文女声，3-57 中文女声（zf_001-zf_055），
-// 58-102 中文男声（zm_001-zm_045）。预置 10 个是按本机实测挑的「清亮」档（见下），
-// 其余 93 个走「自定义音色」。
+// kokoro v1.1 共 103 个音色：sid 0-2 英文女声，3-57 中文女声（zf_001-zf_055），
+// 58-102 中文男声（zm_001-zm_045）。预置里的 kokoro 档是按本机实测挑的「清亮」音：
+// 把 103 个 sid 用同一句话各合成一遍，逐帧量了基频 F0（自相关）和 3kHz 以上能量占比
+// （亮度）。中文女声 55 个里 F0 中位数 248Hz、最高 347Hz；旧预置（zf_001/010/020/035/050）
+// 音高只在中游（14-23 名）、亮度普遍倒数（zf_001、zf_050 的 3k+ 占比 0.6%，排 46/47 名），
+// 听着就是「低沉发闷」；现在换成音高 300Hz 上下 + 亮度前四的几档。
 //
-// 预置为什么是这几个：把 103 个 sid 用同一句话各合成一遍，逐帧量了基频 F0（自相关）
-// 和 3kHz 以上能量占比（亮度）。中文女声 55 个里 F0 中位数 248Hz、最高 347Hz；
-// 旧预置（zf_001/010/020/035/050）音高只在中游（14-23 名）、亮度普遍倒数
-// （zf_001、zf_050 的 3k+ 占比 0.6%，排 46/47 名），听着就是「低沉发闷」。现在换成
-// 音高 300Hz 上下 + 亮度前四的 zf_042/021/039/052/037/034/041，男声留两个音高最高的。
+// CosyVoice3 那五个的排序也是实测来的（RTX 2060、Vulkan、同一句 5 句连播）：
+// default / lively-female RTF 0.52-0.74、首块 0.53-0.82s（边播边合成完全跟得上）；
+// gentle-female RTF 1.04-1.08（临界）；两个男声 RTF 1.15-1.30（长句会断 0.3s）。
+// 同一句话在 CUDA 后端是 RTF 1.42-1.56、首块 1.6-1.8s（会断流），所以引擎走 Vulkan。
 //
 // 偏好落 localStorage（本机 UI 偏好，和主题一样：这台机器上的客户端行为，不随远程机器变）。
 
@@ -30,19 +36,34 @@ export function sidToVoiceCode(sid: number): string {
 }
 
 export interface VoiceOption {
-  /** 稳定 id（预置 = 音色代号；自定义 = custom:<uuid>） */
+  /** 稳定 id（预置 = 音色代号 / cv3:<音色名>；自定义 = custom:<uuid>） */
   id: string
   name: string
   /** 界面上标注的性别/语言 */
   tag: string
+  /** kokoro 的音色编号；CosyVoice3 音色用 voice 字段，这里给 -1 */
   sid: number
+  /** 合成引擎：缺省 = kokoro（CPU）；'cosyvoice3' = 本机 GPU、服务端同款模型 */
+  engine?: 'kokoro' | 'cosyvoice3'
+  /** CosyVoice3 的音色名（voices/<name>.gguf） */
+  voice?: string
+  /** CosyVoice3 独有的自然语言语气指令（空 = 平常念法） */
+  instruction?: string
   /** 语速倍率（1 = 原速；实测 speed 越大时长越短、说得越快：0.9/1.0/1.2 → 2.10s/1.87s/1.59s） */
   speed: number
   custom?: boolean
 }
 
-/** 预置 10 种：清亮女声 7、轻男声 2、英文女 1（代号一并展示，方便对照 kokoro 官方试听页） */
+/** CosyVoice3 未就绪 / 合成失败时的回落音色（kokoro 实测最清亮的一档） */
+const FALLBACK_SID = 44
+
+/** 预置：CosyVoice3（本机 GPU、音质最自然）5 个 + kokoro 清亮档 7 个 + 轻男声 2 个 + 英文女 1 个 */
 export const PRESET_VOICES: VoiceOption[] = [
+  { id: 'cv3:default', name: '素绢', tag: 'CosyVoice3 · 女声 · 默认', sid: -1, engine: 'cosyvoice3', voice: 'default', speed: 1.0 },
+  { id: 'cv3:lively-female', name: '朗晴', tag: 'CosyVoice3 · 女声 · 明快', sid: -1, engine: 'cosyvoice3', voice: 'lively-female', speed: 1.0 },
+  { id: 'cv3:gentle-female', name: '柔蓝', tag: 'CosyVoice3 · 女声 · 温柔', sid: -1, engine: 'cosyvoice3', voice: 'gentle-female', speed: 1.0 },
+  { id: 'cv3:young-male', name: '晓川', tag: 'CosyVoice3 · 男声', sid: -1, engine: 'cosyvoice3', voice: 'young-male', speed: 1.0 },
+  { id: 'cv3:calm-male', name: '砂青', tag: 'CosyVoice3 · 男声 · 沉稳', sid: -1, engine: 'cosyvoice3', voice: 'calm-male', speed: 1.0 },
   { id: 'zf_042', name: '莺晴', tag: '中文 · 女声 · 清亮', sid: 44, speed: 1.0 },
   { id: 'zf_021', name: '晓晴', tag: '中文 · 女声 · 高亮', sid: 23, speed: 1.0 },
   { id: 'zf_039', name: '云雀', tag: '中文 · 女声 · 最高亢', sid: 41, speed: 1.0 },
@@ -95,6 +116,21 @@ export const customVoices = ref<VoiceOption[]>(readCustom())
 
 /** 当前选中的音色 id */
 export const currentVoiceId = ref<string>(loadCurrentId())
+
+/** CosyVoice3 引擎是否可用（本机平台有包且已下好）；不可用时选它也会回落 kokoro */
+export const cosyVoiceReady = ref(false)
+export const cosyVoiceStatus = ref<{ supported: boolean; installed: boolean; serving: boolean; voices: string[]; version: string } | null>(null)
+
+/** 拉一次引擎状态（启动时、下载后、选 CosyVoice3 音色时调） */
+export async function refreshCosyVoiceStatus(): Promise<void> {
+  try {
+    const status = await window.fridayBridge.cosyVoiceStatus()
+    cosyVoiceStatus.value = status
+    cosyVoiceReady.value = status.supported && status.installed
+  } catch {
+    cosyVoiceReady.value = false
+  }
+}
 
 function loadEnabled(): boolean {
   try {
@@ -237,8 +273,10 @@ let speakToken = 0
  *  句子按先后接播，这才是「跟气泡实时」。 */
 let speechQueue: string[] = []
 let pumping = false
-/** 本轮泵的指定音色（试听时非空）；流式增量为空 → 每句跟当前选中的音色 */
+/** 本轮泵指定音色（试听时非空）；流式增量为空 → 每句跟当前选中的音色 */
 let pumpVoice: VoiceOption | undefined
+/** 当前正在等哪套引擎出声（stopSpeaking 靠它决定要不要 cancel CosyVoice3 的合成） */
+let activeEngine: 'kokoro' | 'cosyvoice3' = 'kokoro'
 
 /** 模型准备进度（主进程事件 → 状态行 / 设置页进度条） */
 export function initTtsProgressListener(): void {
@@ -254,15 +292,21 @@ export function initTtsProgressListener(): void {
     } else if (state.phase === 'ready') {
       // ready 只意味着模型就绪；此刻若没在播，状态回到 idle（合成很快，speaking 由播放端设置）
       if (ttsPhase.value !== 'speaking') ttsPhase.value = 'idle'
+      // CosyVoice3 下载/启动完成：刷新状态，选了它的音色就能真用上了
+      void refreshCosyVoiceStatus()
+    } else if (state.phase === 'error') {
+      ttsPhase.value = 'error'
     }
   })
 }
 
-/** 停掉当前播放并清空待播队列（新整条回复到来 / 开关关闭 / 手动停止时调用） */
+/** 停掉当前播放并清空待播队列（新整条回复到来 / 开关关闭 / 手动停止时调用）。
+ *  CosyVoice3 正在合成这句时一并 cancel（实测 7ms 就回 cancelled，不会让下一句排队等它）。 */
 export function stopSpeaking(): void {
   speakToken += 1
   speechQueue = []
   pumping = false
+  if (activeEngine === 'cosyvoice3') void window.fridayBridge.cancelCosyVoice?.().catch(() => {})
   if (activeSource) {
     try {
       activeSource.stop()
@@ -296,8 +340,10 @@ function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
 
 /** 分句：按句末标点/换行切，超长句再按逗号顿号切；返回非空片段（首句短、首音快）。
  *  片段逐句送主进程合成（串行队列保序），播放与下一句的合成并行——
- *  RTF 0.3-0.43 < 1（fp32 实测），播放始终追得上合成。 */
-export function splitForSpeech(clean: string): string[] {
+ *  kokoro RTF 0.30-0.43（fp32 实测）、CosyVoice3 女声 RTF 0.52-0.74（Vulkan 实测）都 < 1，
+ *  播放追得上合成。firstLimit：首句上限——CosyVoice3 是整句合成完才返回，首句切短
+ *  才能把开口压到 2-3 秒（kokoro 不用切那么细）。 */
+export function splitForSpeech(clean: string, firstLimit = 60): string[] {
   const parts: string[] = []
   for (const paragraph of clean.split(/\n+/)) {
     const trimmed = paragraph.trim()
@@ -305,15 +351,17 @@ export function splitForSpeech(clean: string): string[] {
     for (const sentence of trimmed.split(/(?<=[。！？!?；;])/)) {
       const s = sentence.trim()
       if (!s) continue
-      if (s.length <= 60) {
+      const limit = parts.length === 0 ? firstLimit : 60
+      if (s.length <= limit) {
         parts.push(s)
         continue
       }
       for (const clause of s.split(/(?<=[，,、])/)) {
         const c = clause.trim()
         if (!c) continue
-        // 兜底：没有逗号也超长的（罕见，比如一长串无标点文本），按 60 字硬切
-        for (let at = 0; at < c.length; at += 60) parts.push(c.slice(at, at + 60))
+        // 兜底：没有逗号也超长的（罕见，比如一长串无标点文本），按上限硬切（首句更短）
+        const limit = parts.length === 0 ? firstLimit : 60
+        for (let at = 0; at < c.length; at += limit) parts.push(c.slice(at, at + limit))
       }
     }
   }
@@ -326,7 +374,8 @@ export function splitForSpeech(clean: string): string[] {
  *  收尾的整条播报也不冲掉前面还没播完的句子。
  *  开关关着时不播（试听用 force 跳过）。 */
 export function speakText(text: string, options?: { voice?: VoiceOption; force?: boolean; append?: boolean }): void {
-  const parts = splitForSpeech(cleanForSpeech(text))
+  const voice = options?.voice ?? pumpVoice ?? activeVoice()
+  const parts = splitForSpeech(cleanForSpeech(text), voice.engine === 'cosyvoice3' ? 16 : 60)
   if (!parts.length) return
   if (!options?.force && !replySpeakEnabled.value) return
   if (!options?.append) {
@@ -347,9 +396,28 @@ async function pumpSpeech(): Promise<void> {
   pumping = true
   ttsPhase.value = 'loading'
   try {
-    const synth = (text: string) => {
+    const synth = async (text: string) => {
       const voice = pumpVoice ?? activeVoice()
-      return window.fridayBridge.speakReply({ text, sid: voice.sid, speed: voice.speed })
+      const cv3 = voice.engine === 'cosyvoice3'
+      if (cv3 && cosyVoiceReady.value) {
+        activeEngine = 'cosyvoice3'
+        try {
+          return await window.fridayBridge.speakReply({
+            text,
+            speed: voice.speed,
+            engine: 'cosyvoice3',
+            voice: voice.voice,
+            instruction: voice.instruction
+          })
+        } catch (error) {
+          // 显卡不支持 Vulkan / 引擎抱错：本轮改走 kokoro，并把原因显出来（不静默）
+          cosyVoiceReady.value = false
+          ttsDetail.value = `CosyVoice3 合成失败（${(error as Error).message}），已改用本地 kokoro 音色`
+        }
+      }
+      activeEngine = 'kokoro'
+      // 选了 CosyVoice3 但引擎没下好：用实测最清亮的 kokoro 档兜底，不至于不出声
+      return window.fridayBridge.speakReply({ text, sid: cv3 ? FALLBACK_SID : voice.sid, speed: voice.speed })
     }
     let next = speechQueue.length ? synth(speechQueue.shift()!) : null
     while (next) {

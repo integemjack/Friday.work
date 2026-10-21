@@ -17,10 +17,24 @@ declare global {
       onVoiceModelProgress(
         listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
       ): () => void
-      /** 助手回复语音播报（本地 kokoro TTS）：主进程合成返回采样（渲染层 WebAudio 播放）；首次使用自动下载模型 */
-      speakReply(payload: { text: string; sid: number; speed: number }): Promise<{ samples: Float32Array; sampleRate: number }>
+      /** 助手回复语音播报：主进程合成返回采样（渲染层 WebAudio 播放）；
+       *  engine 缺省 = kokoro（CPU），'cosyvoice3' = 本机 GPU、服务端同款模型 */
+      speakReply(payload: {
+        text: string
+        speed: number
+        sid?: number
+        engine?: 'kokoro' | 'cosyvoice3'
+        voice?: string
+        instruction?: string
+      }): Promise<{ samples: Float32Array; sampleRate: number }>
       /** 只触发 TTS 模型下载/加载（设置里的「立即下载」） */
       prefetchTtsModel(): void
+      /** CosyVoice3 引擎状态（支持/已装/在跑/音色名） */
+      cosyVoiceStatus(): Promise<{ supported: boolean; installed: boolean; serving: boolean; voices: string[]; version: string }>
+      /** 下载 / 启动 CosyVoice3 引擎（约 1.2GB，进度走 onTtsModelProgress） */
+      prefetchCosyVoice(): Promise<void>
+      /** 打断当前这句合成 */
+      cancelCosyVoice(): Promise<void>
       onTtsModelProgress(
         listener: (
           state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }

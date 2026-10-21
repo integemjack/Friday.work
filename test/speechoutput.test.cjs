@@ -1,6 +1,7 @@
 // 回复语音播报（speechOutput.ts）的纯函数部分：
-// 音色映射（kokoro v1.1 的 103 个 sid）、朗读清理（markdown/代码块/链接不进语音）、文本块提取。
-// 播放与 localStorage 偏好在渲染环境里，这里只锁「进模型的文本」和「sid 表」。
+// 音色映射（kokoro v1.1 的 103 个 sid）、两套引擎的预置表（kokoro sid / CosyVoice3 音色名）、
+// 朗读清理（markdown/代码块/链接不进语音）、分句、文本块提取。
+// 播放与 localStorage 偏好在渲染环境里，这里只锁「进模型的文本」和音色表。
 const test = require('node:test')
 const assert = require('node:assert')
 
@@ -25,15 +26,40 @@ test('sid → 音色代号：0-2 英文女、3-57 中文女、58-102 中文男�
   assert.equal(sidToVoiceCode(103), 'sid_103')
 })
 
-test('预置 10 种音色：sid 全部落在合法区间且互不重复', () => {
-  assert.equal(PRESET_VOICES.length, 10)
-  const sids = PRESET_VOICES.map((voice) => voice.sid)
-  assert.equal(new Set(sids).size, 10, 'sid 不重复')
+test('预置音色：kokoro 10 个 sid 合法不重复 + CosyVoice3 5 个带音色名', () => {
+  const kokoro = PRESET_VOICES.filter((voice) => voice.engine !== 'cosyvoice3')
+  const cv3 = PRESET_VOICES.filter((voice) => voice.engine === 'cosyvoice3')
+  assert.equal(kokoro.length, 10, 'kokoro 预置 10 个')
+  assert.equal(cv3.length, 5, 'CosyVoice3 预置 5 个（服务端同一批 voices/*.gguf）')
+  const sids = kokoro.map((voice) => voice.sid)
+  assert.equal(new Set(sids).size, sids.length, 'sid 不重复')
   for (const sid of sids) assert.ok(sid >= 0 && sid <= 102, `sid ${sid} 合法`)
-  for (const voice of PRESET_VOICES) {
+  for (const voice of kokoro) {
     assert.ok(voice.id === sidToVoiceCode(voice.sid), `${voice.name} 的 id 与 sid 对应`)
     assert.ok(voice.speed > 0.2 && voice.speed < 4, '语速在安全区间')
   }
+  // CosyVoice3 靠音色名（voices/<name>.gguf）选，sid 给 -1 占位
+  const names = cv3.map((voice) => voice.voice)
+  assert.equal(new Set(names).size, names.length, 'CV3 音色名不重复')
+  for (const voice of cv3) {
+    assert.ok(typeof voice.voice === 'string' && voice.voice.length > 0, `${voice.name} 有音色名`)
+    assert.equal(voice.sid, -1, `${voice.name} 不走 sid`)
+    assert.equal(voice.id, `cv3:${voice.voice}`, `${voice.name} 的 id 带 cv3: 前缀`)
+  }
+  assert.deepEqual(
+    names,
+    ['default', 'lively-female', 'gentle-female', 'young-male', 'calm-male'],
+    'CV3 音色名和引擎包里的文件一致'
+  )
+})
+
+test('分句：首句上限可调（CosyVoice3 整句合成完才返回，首句要切短）', () => {
+  const long = '这是一句没有标点会一直往下说的很长的话'.repeat(4)
+  const normal = splitForSpeech(long)
+  const shortFirst = splitForSpeech(long, 16)
+  assert.ok(normal[0].length > 16, '默认首句可以到 60 字')
+  assert.ok(shortFirst[0].length <= 16, `给 firstLimit=16 时首句不超过 16 字（实际 ${shortFirst[0].length}）`)
+  assert.equal(shortFirst.join(''), normal.join(''), '只是切法不同，字不丢')
 })
 
 test('自定义音色分组：55 女 + 45 男 + 3 英文女 = 103', () => {
