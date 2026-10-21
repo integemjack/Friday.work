@@ -27,6 +27,8 @@ export type VoicePhase = 'listening' | 'model-loading' | 'transcribing'
 export interface SpeechInputOptions {
   /** 识别语言（菜单值：'auto' | 'zh-CN' | …；空 = 跟随系统，都交给主进程映射 whisper 语言） */
   lang?: string
+  /** 识别模型（菜单值：'auto' | 'sensevoice' | 'whisper-small' | 'whisper-base'；主进程路由） */
+  model?: string
   /** 指定麦克风（deviceId；空 = 系统默认） */
   deviceId?: string
   /** 状态变化（含模型下载进度 detail） */
@@ -248,7 +250,7 @@ export class SpeechInput {
         const utterance = this.queue.shift()!
         this.options?.onPhase?.('transcribing')
         try {
-          const out = await window.fridayBridge.transcribeVoice(utterance, this.options?.lang)
+          const out = await window.fridayBridge.transcribeVoice(utterance, this.options?.lang, this.options?.model)
           const text = out.text
           if (text) {
             this.transcript += (this.transcript && !this.transcript.endsWith(' ') ? ' ' : '') + text

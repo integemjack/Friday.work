@@ -12,8 +12,8 @@ declare global {
       registerDrop(file: File): Promise<PickedFile | null>
       /** 一段录音交给主进程落盘（M3-A） */
       saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
-      /** 输入框语音听写：16 kHz 单声道采样送主进程本地 whisper 转写，返回文字 */
-      transcribeVoice(audio: Float32Array, lang?: string): Promise<{ text: string }>
+      /** 输入框语音听写：16 kHz 单声道采样送主进程本地模型转写（SenseVoice/whisper），返回文字 */
+      transcribeVoice(audio: Float32Array, lang?: string, model?: string): Promise<{ text: string }>
       onVoiceModelProgress(
         listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
       ): () => void

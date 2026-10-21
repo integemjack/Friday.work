@@ -1,18 +1,22 @@
-// 输入框语音听写的本地转写引擎（whisper，onnxruntime-node，CPU 推理）：
-//   渲染进程送来 16 kHz 的音频采样（Float32），这里转成文字送回。
-//   模型用 onnx-community/whisper-base 的 q8 量化（约 80MB），首次使用时
-//   下载到用户数据目录（whisper-models/），之后完全离线；下载进度经
-//   'voice:model-progress' 事件推给渲染进程显示。模型加载和推理都在主进程，
-//   渲染进程照旧接触不到模型与凭据。
+// 输入框语音听写的 whisper 引擎（transformers.js + onnxruntime-node，CPU 推理）：
+//   - 负责「中英混合」（mix）与俄/法/德/西等 SenseVoice 不支持的语言；
+//   - 「识别模型」菜单可选尺寸：base 约 80MB（小、快）/ small 约 240MB（准）。
+//     注意 base 对中文麦克风音频近音错误率高（实测「今天星期几」在电话带宽+轻噪
+//     下错成「今天星期天」这类同音替换，且常出繁体），中文主力是 SenseVoice
+//     （见 SenseVoiceService.ts）；路由见 Dictation.ts。
+//   - 模型首次使用时下载到用户数据目录（whisper-models/），之后完全离线；下载进度
+//     经 'voice:model-progress' 事件推给渲染进程。模型加载和推理都在主进程。
 //
 // 为什么不用 Chrome 自带的 SpeechRecognition：Electron 的开源 Chromium 没有
 // Chrome/Edge 正式构建内置的 Google 专有识别服务，官方确认不会支持
 // （electron/electron#46143），实测 start() 即 not-allowed。
 
-import { app, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { app, type WebContents } from 'electron'
 import { join } from 'node:path'
 
-/** 菜单里的语言值 → whisper 的语言全名（不传 = 让 whisper 自己检测） */
+/** 菜单里的语言值 → whisper 的语言全名。注意 transformers.js 不传 language
+ *  不会自动检测，而是默认按英语转写（实测中文会被硬套成英文）；
+ *  渲染层「自动」档已传 navigator.language（中文系统 = zh-CN）规避 */
 const WHISPER_LANGS: Record<string, string> = {
   'zh-CN': 'chinese',
   'zh-TW': 'chinese',
@@ -26,7 +30,13 @@ const WHISPER_LANGS: Record<string, string> = {
   'es-ES': 'spanish'
 }
 
-const MODEL_ID = 'onnx-community/whisper-base'
+/** 「识别模型」菜单值 → 模型仓库（都走 q8 量化） */
+const WHISPER_MODELS = {
+  base: 'onnx-community/whisper-base',
+  small: 'onnx-community/whisper-small'
+} as const
+
+export type WhisperSize = keyof typeof WHISPER_MODELS
 
 type PipelineFactory = (
   task: 'automatic-speech-recognition',
@@ -38,9 +48,15 @@ type Transcriber = (
   options: { language?: string; task?: 'transcribe' }
 ) => Promise<{ text: string }>
 
-let loading: Promise<Transcriber> | null = null
+/** 每个尺寸一份懒加载 Promise（同一时刻同一尺寸只加载一份） */
+const transcribers = new Map<WhisperSize, Promise<Transcriber>>()
 
-function pushProgress(to: WebContents, phase: 'downloading' | 'loading' | 'ready', percent?: number, detail?: string): void {
+function pushProgress(
+  to: WebContents,
+  phase: 'downloading' | 'loading' | 'ready',
+  percent?: number,
+  detail?: string
+): void {
   try {
     to.send('voice:model-progress', { phase, percent, detail })
   } catch {
@@ -48,93 +64,93 @@ function pushProgress(to: WebContents, phase: 'downloading' | 'loading' | 'ready
   }
 }
 
-/** 懒加载模型（含首次下载）；同一时刻只加载一份，重复调用共用同一个 Promise */
-function loadTranscriber(to: WebContents): Promise<Transcriber> {
-  if (loading) return loading
-  loading = (async () => {
+function loadTranscriber(to: WebContents, size: WhisperSize): Promise<Transcriber> {
+  const cached = transcribers.get(size)
+  if (cached) return cached
+  const loading = (async () => {
     const mod = (await import('@huggingface/transformers')) as {
       pipeline: PipelineFactory
       env: { cacheDir: string; remoteHost?: string; allowRemoteModels: boolean }
     }
     mod.env.cacheDir = join(app.getPath('userData'), 'whisper-models')
+    const modelId = WHISPER_MODELS[size]
     const onProgress = (info: { status: string; progress?: number; file?: string }): void => {
       if (info.status === 'progress' && info.file) {
         // progress 按文件各算各的：只在下载大文件（模型本体）时报百分比
-        if ((info.file.endsWith('.onnx') || info.file.endsWith('.onnx_data')) && typeof info.progress === 'number') {
+        if (
+          (info.file.endsWith('.onnx') || info.file.endsWith('.onnx_data')) &&
+          typeof info.progress === 'number'
+        ) {
           pushProgress(to, 'downloading', Math.round(info.progress))
         }
       } else if (info.status === 'ready') {
         pushProgress(to, 'ready')
       }
     }
-    try {
-      pushProgress(to, 'loading', undefined, MODEL_ID)
-      return await mod.pipeline('automatic-speech-recognition', MODEL_ID, {
+    const make = () =>
+      mod.pipeline('automatic-speech-recognition', modelId, {
         dtype: 'q8',
         device: 'cpu',
         progress_callback: onProgress
       })
+    try {
+      pushProgress(to, 'loading', undefined, modelId)
+      return await make()
     } catch (first) {
       // 官方源（huggingface.co）连不上很常见：换国内镜像 hf-mirror 再试一次
       mod.env.remoteHost = 'https://hf-mirror.com'
       try {
-        return await mod.pipeline('automatic-speech-recognition', MODEL_ID, {
-          dtype: 'q8',
-          device: 'cpu',
-          progress_callback: onProgress
-        })
+        return await make()
       } catch (second) {
-        loading = null // 让下次按键能重试
-        throw new Error(`语音模型加载失败：${String((second as Error)?.message ?? second)}（首次失败原因：${String((first as Error)?.message ?? first)}）`)
+        throw new Error(
+          `语音模型加载失败：${String((second as Error)?.message ?? second)}（首次失败原因：${String(
+            (first as Error)?.message ?? first
+          )}）`
+        )
       }
     }
-  })()
+  })().catch((error: unknown) => {
+    // 失败了清掉缓存，让下次按键能重试
+    transcribers.delete(size)
+    throw error
+  })
+  transcribers.set(size, loading)
   return loading
 }
 
-/**
- * 注册听写 IPC。audio 为 16 kHz 单声道采样：
- *   - Float32Array（[-1,1]，ipc 结构化克隆直接传）
- *   - 或 ArrayBuffer（16 位小端 PCM，渲染侧 voiceMedia.toPcm16 的产物）
- */
-export function registerWhisperIpc(): void {
-  ipcMain.handle(
-    'voice:transcribe',
-    async (
-      event: IpcMainInvokeEvent,
-      payload: { audio: Float32Array | ArrayBuffer; lang?: string }
-    ): Promise<{ text: string }> => {
-      const raw = payload.audio
-      const audio =
-        raw instanceof Float32Array ? raw : pcm16ToFloat32(raw)
-      if (audio.length < 1600) {
-        // 不足 0.1 秒：当没说话
-        return { text: '' }
-      }
-      const transcriber = await loadTranscriber(event.sender)
-      const out = await transcriber(audio, {
-        language: whisperLang(payload.lang),
-        task: 'transcribe'
-      })
-      return { text: (out.text ?? '').trim() }
-    }
-  )
+/** 转写一段 16 kHz 单声道采样（语言不传时 transformers.js 会默认按英语，见上方注释） */
+export async function transcribeWithWhisper(
+  to: WebContents,
+  audio: Float32Array,
+  lang: string | undefined,
+  size: WhisperSize
+): Promise<{ text: string }> {
+  const transcriber = await loadTranscriber(to, size)
+  const out = await transcriber(audio, { language: lang, task: 'transcribe' })
+  return { text: (out.text ?? '').trim() }
 }
 
-/** 菜单语言值 → whisper 语言名；不传（或认不出）= 让 whisper 自己检测。
+/** 菜单语言值 → whisper 语言名；不传（或认不出）= undefined。渲染层「自动」
+ *  会传 navigator.language，所以正常到不了 undefined；万一到了（旧会话缓存等），
+ *  宁可退回系统语言也不要让 transformers.js 默认按英语转写。
  *  系统语言可能是 zh、zh-Hans-CN 这类变体：先精确再按主标签回退 */
-function whisperLang(value?: string): string | undefined {
-  if (!value) return undefined
-  if (WHISPER_LANGS[value]) return WHISPER_LANGS[value]
-  const prefix = value.split('-')[0]?.toLowerCase()
+export function whisperLang(value?: string): string | undefined {
+  if (value && WHISPER_LANGS[value]) return WHISPER_LANGS[value]
+  if (value) {
+    const prefix = value.split('-')[0]?.toLowerCase()
+    for (const [key, name] of Object.entries(WHISPER_LANGS)) {
+      if (key.split('-')[0] === prefix) return name
+    }
+  }
+  const locale = (app.getLocale() || 'en').toLowerCase()
   for (const [key, name] of Object.entries(WHISPER_LANGS)) {
-    if (key.split('-')[0] === prefix) return name
+    if (key.split('-')[0] === locale.split('-')[0]) return name
   }
   return undefined
 }
 
 /** 16 位小端 PCM → Float32 [-1,1]（和渲染侧 voiceMedia 的约定一致） */
-function pcm16ToFloat32(buffer: ArrayBuffer): Float32Array {
+export function pcm16ToFloat32(buffer: ArrayBuffer): Float32Array {
   const view = new DataView(buffer)
   const out = new Float32Array(buffer.byteLength / 2)
   for (let i = 0; i < out.length; i += 1) out[i] = view.getInt16(i * 2, true) / 0x8000
