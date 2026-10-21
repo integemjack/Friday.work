@@ -226,6 +226,32 @@ function removeAttachment(index: number) {
 function stop() {
   void store.stopRunner()
 }
+
+// MARK: 和助手开新会话（默认和助手对话：没选中会话时，输入本来就直接开一段新的和助手聊；
+// 这个键把「开新会话」放到输入框旁边，不用去左上角会话列表找「＋ 新建」）
+const newChatBusy = ref(false)
+async function newConversation(): Promise<void> {
+  if (!store.connected || newChatBusy.value) return
+  // 当前已经是一段空着、没在跑的新会话：不再多开一段（连点几下也不攒空会话），直接聚焦输入
+  const current = props.conversationId
+  const detail = current ? store.details[current] : undefined
+  const runtime = detail?.runtime
+  const alreadyFresh =
+    detail !== undefined &&
+    detail.messages.length === 0 &&
+    !runtime?.generating &&
+    !runtime?.stopping &&
+    (runtime?.queue?.length ?? 0) === 0
+  if (!alreadyFresh) {
+    newChatBusy.value = true
+    try {
+      await store.createConversation()
+    } finally {
+      newChatBusy.value = false
+    }
+  }
+  textarea.value?.focus()
+}
 </script>
 
 <template>
@@ -252,6 +278,20 @@ function stop() {
       />
 
       <div class="row">
+        <!-- 和助手开新会话：默认没选会话时输入就会开新的一段，这个键显式开 -->
+        <button
+          class="icon-btn"
+          title="和助手开新会话"
+          aria-label="和助手开新会话"
+          :disabled="!store.connected || newChatBusy"
+          @click="newConversation"
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            <path d="M12 7v6" />
+            <path d="M9 10h6" />
+          </svg>
+        </button>
         <button class="icon-btn" title="添加附件" @click="pick">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -518,7 +558,12 @@ textarea::placeholder {
   flex: none;
 }
 
-.icon-btn:hover {
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-btn:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
 }

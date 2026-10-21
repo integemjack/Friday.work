@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 右栏下半段常驻的「与助手聊天」面板：叠在视频上面，顶端顶到视频中点、向上渐隐。
-// 作用在当前选中的会话上（左侧会话列表切换），流式输出同时以气泡投到桌面。
+// 作用在当前选中的会话上（左侧会话列表切换）；没选中时默认就是和助手的新对话（直接输入就开一段新的），流式输出同时以气泡投到桌面。
 // 消息流（顶端渐隐）/ 审批横幅 / 信息行；输入框已挪到中间桌面底部（App.vue 挂 Composer）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -89,7 +89,7 @@ const statusLine = computed(() => {
       <div ref="messagesEl" class="messages">
         <MessageItem v-for="entry in messages" :key="entry.message.id" :message="entry.message" />
         <div v-if="!conversationID" class="hint">
-          {{ store.connected ? '选一段会话，或直接说话（会自动开一段新的）' : '先连上机器' }}
+          {{ store.connected ? '直接说话，和助手开一段新对话' : '先连上机器' }}
         </div>
       </div>
     </div>
@@ -108,7 +108,8 @@ const statusLine = computed(() => {
 
     <header class="head">
       <span class="head-title">助手</span>
-      <span v-if="summary" class="session-name" :title="summary.title">{{ summary.title || '（无标题）' }}</span>
+      <!-- 没选会话时也占位显示「新对话」：默认态就是和助手的新对话 -->
+      <span class="session-name" :title="summary?.title">{{ conversationID ? summary?.title || '（无标题）' : '新对话' }}</span>
       <span v-if="statusLine" class="status-line">{{ statusLine }}</span>
       <span class="spacer" />
       <button v-if="runtime?.generating" class="stop-btn" @click="store.stopRunner(conversationID)">停止</button>
