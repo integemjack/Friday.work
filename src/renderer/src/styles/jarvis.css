@@ -17,10 +17,9 @@ html[data-theme='jarvis'] body {
     var(--bg);
 }
 
-/* ---- 标题栏下缘发丝线 ---- */
-html[data-theme='jarvis'] .titlebar {
-  border-bottom: 1px solid var(--accent-a18);
-}
+/* ---- 标题栏下缘发丝线 ----
+   用 box-shadow 画线（见 TitleBar.vue .titlebar 注释）：border 占高会让 44px 标题栏的内容区只剩 43px、整行偏上 0.5px；
+   颜色（accent-a28）由 TitleBar.vue 里 scoped 的主题覆写给出，这里不再声明 border */
 
 /* 输入框 / 文本域：透明青底（聚焦不加边框/辉光，用户要求去掉；键盘焦点走全局 :focus-visible） */
 html[data-theme='jarvis']

@@ -173,7 +173,9 @@ const bridge = window.fridayBridge
   gap: 14px;
   padding: 0 14px;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  /* 下缘发丝线用 box-shadow 画（不占布局高）：border-bottom 会在 44px 的 height（border-box）里吃掉 1px，
+     flex 内容区只剩 43px，整行内容全都偏上 0.5px（CDP 实测 .machine top 9.5、中心 21.5 ≠ 可视中线 22） */
+  box-shadow: inset 0 -1px 0 var(--border);
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -278,6 +280,9 @@ const bridge = window.fridayBridge
 
 .machine-name {
   font-weight: 500;
+  /* 中文字形在行框里偏下约 1px（MiSans/雅黑：inkAscent 11 / inkDescent 3，墨迹中心比行盒中心低 1，
+     CDP canvas 实测），往上提 1，才和旁边的状态字、圆点、箭头落在同一条中线上（同 Qt 版 MachineBar 的做法） */
+  transform: translateY(-1px);
 }
 
 .machine-state {
@@ -448,7 +453,8 @@ const bridge = window.fridayBridge
 /* 贾维斯界面：顶部标题栏变成 HUD 主控条——几乎全透（只留 blur 和两端青色辉光），不像一块盖在上面的板 */
 [data-theme='jarvis'] .titlebar {
   position: relative;
-  border-bottom-color: var(--accent-a28);
+  /* 发丝线改用 box-shadow（不占高，见 .titlebar 注释）；border 方案会让内容区剩 43px、整行偏上 0.5px */
+  box-shadow: inset 0 -1px 0 var(--accent-a28);
   background:
     linear-gradient(90deg, var(--accent-a9), transparent 28%, transparent 72%, var(--accent-a9)),
     var(--panel-a22);
