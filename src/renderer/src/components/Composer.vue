@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，文本区左边「开新会话」「和助手说」分段式按钮组，底行左侧附件、右侧圆形发送键；
 // 生成中发送键变成停止。附件（对话框 + 拖放，经主进程背书上传）。
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { EngineView } from '../stores/app.js'
+import type { CommandInfo } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
 
@@ -239,6 +240,39 @@ async function send() {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  // 命令菜单开着：↑↓ 选、Return / Tab 填进来、Esc 关（照桌面端 GrowingTextView.keyFilter；
+  // 带修饰键的 Return / Tab 不拦，Shift+Enter 照常换行）
+  if (commandMenuOpen.value) {
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveCommand(-1)
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveCommand(1)
+      return
+    }
+    if (
+      event.key === 'Tab' ||
+      (event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.isComposing)
+    ) {
+      event.preventDefault()
+      acceptCommand()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      commandMenuOpen.value = false
+      commandDismissed.value = true
+      return
+    }
+  }
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
     void send()
@@ -247,6 +281,70 @@ function onKeydown(event: KeyboardEvent) {
 
 function removeAttachment(index: number) {
   attachments.value.splice(index, 1)
+}
+
+// MARK: 「/」命令菜单（照 Friday 桌面端 v2.16 CommandMenu + ComposerView.updateCommandMenu）：
+// 正文是「/」加一段没有空白的名字时弹在输入台上方，列出对得上的命令（名字、参数提示、用途、来源）；
+// ↑↓ 选、Return / Tab 填成「/名字 」（接着写参数）、Esc 关。不抢输入框焦点（照常打字过滤）。
+// 和助手说不弹（桌面端助手时间线没有菜单）。展开在服务端做：发出去的「/名字 参数」会换成命令正文
+// 再交给模型，对话里照旧显示打的原文（docs/COMMANDS.md §1）。
+const commandMenuOpen = ref(false)
+const commandIndex = ref(0)
+/** 用户按 Esc 关过菜单：在途的 commands.list 回执到了也不自动重开；再打字（prefix 变）才复位 */
+const commandDismissed = ref(false)
+/** 「/」后面的名字前缀；null = 正文不是「/名字」形态（不是 / 开头、中间有空白 / 已带参数），菜单收起 */
+const commandPrefix = computed<string | null>(() => {
+  if (store.assistantChat) return null
+  const match = /^\/(\S*)$/.exec(text.value)
+  return match ? match[1] : null
+})
+watch(commandPrefix, () => {
+  commandDismissed.value = false
+})
+const commandItems = computed<CommandInfo[]>(() => {
+  const prefix = commandPrefix.value
+  if (prefix === null) return []
+  return store.matchCommands(prefix)
+})
+watchEffect(() => {
+  const prefix = commandPrefix.value
+  const items = commandItems.value
+  if (prefix === null) {
+    commandMenuOpen.value = false
+    return
+  }
+  // 刚打出「/」（菜单还关着、没被 Esc 关过）时重列一遍这台的命令（当前会话的工作目录，空 = 默认的；
+  // 结果到了 items 重算，这里自动重开——照桌面端 Commands.load 的时机）
+  if (prefix === '' && !commandMenuOpen.value && !commandDismissed.value)
+    void store.refreshCommands(currentWorkdir.value || undefined)
+  if (commandDismissed.value) return
+  if (items.length === 0) {
+    commandMenuOpen.value = false
+    return
+  }
+  commandMenuOpen.value = true
+  commandIndex.value = 0
+})
+
+function moveCommand(delta: number) {
+  const count = commandItems.value.length
+  if (count === 0) return
+  commandIndex.value = (commandIndex.value + delta + count) % count
+}
+
+/** 选中一条：填成「/名字 」（接着写参数），光标到末尾；正文带空格后不再匹配命令形态，watchEffect 会收起菜单 */
+function chooseCommand(name: string) {
+  text.value = `/${name} `
+  void nextTick(() => {
+    textarea.value?.focus()
+    const end = text.value.length
+    textarea.value?.setSelectionRange(end, end)
+  })
+}
+
+function acceptCommand() {
+  const chosen = commandItems.value[commandIndex.value]
+  if (chosen) chooseCommand(chosen.name)
 }
 
 function stop() {
@@ -517,6 +615,27 @@ onBeforeUnmount(() => {
 <template>
   <div class="composer" @drop.prevent="onDrop" @dragover.prevent>
     <div class="composer-card" :class="{ focused }">
+      <!-- 「/」命令菜单：正文是「/」+ 没空白的名字时弹在输入台上方（照 Friday 桌面端 v2.16 CommandMenu） -->
+      <div v-if="commandMenuOpen && commandItems.length > 0" class="command-menu">
+        <button
+          v-for="(command, index) in commandItems"
+          :key="command.name"
+          class="command-item"
+          :class="{ current: index === commandIndex }"
+          :title="command.description || `/${command.name}`"
+          @mouseenter="commandIndex = index"
+          @click="chooseCommand(command.name)"
+        >
+          <span class="command-line">
+            <span class="command-name">/{{ command.name }}</span>
+            <span v-if="command.argumentHint" class="command-hint">{{ command.argumentHint }}</span>
+            <span class="command-spacer" />
+            <span v-if="command.sourceTitle" class="command-source">{{ command.sourceTitle }}</span>
+          </span>
+          <span v-if="command.description" class="command-desc">{{ command.description }}</span>
+        </button>
+      </div>
+
       <!-- 附件 chips：卡片内、文本区上方 -->
       <div v-if="attachments.length > 0" class="attachments">
         <div v-for="(attachment, index) in attachments" :key="attachment.handle" class="attachment">
@@ -850,6 +969,7 @@ onBeforeUnmount(() => {
 }
 
 .composer-card {
+  position: relative;
   max-width: 760px;
   margin: 0 auto;
   border: 1px solid var(--border);
@@ -1252,6 +1372,86 @@ textarea::placeholder {
   flex: none;
   color: var(--accent);
   font-size: 13px;
+}
+
+/* ---- 「/」命令菜单（照 Friday 桌面端 CommandMenu.qml；弹在输入台上方，质感同 model-menu） ---- */
+.command-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.command-item {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.command-item:hover {
+  background: var(--hover);
+}
+
+.command-item.current {
+  background: var(--selected);
+}
+
+.command-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.command-name {
+  flex: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.command-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.command-spacer {
+  flex: 1;
+}
+
+.command-source {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.command-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-3);
 }
 
 .error {

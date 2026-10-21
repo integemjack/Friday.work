@@ -214,6 +214,25 @@ export interface DirectoriesState {
   recent: { path: string; exists: boolean }[]
 }
 
+/** commands.list 的一条命令（REMOTE.md §6「命令」：.friday/commands/、.claude/commands/、数据目录 Commands/、插件的 Markdown 命令） */
+export interface CommandInfo {
+  name: string
+  description?: string
+  argumentHint?: string
+  file?: string
+  source?: string
+  sourceTitle?: string
+  plugin?: string
+}
+
+/** commands.list 的回执（REMOTE.md：这台的命令和现成的子智能体；directory 是会话的工作目录，空 = 默认的） */
+export interface CommandsListResult {
+  commands: CommandInfo[]
+  agents: CommandInfo[]
+  commandsDirectory?: string
+  agentsDirectory?: string
+}
+
 export interface TerminalInfo {
   id: string
   conversationID: Uuid

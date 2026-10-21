@@ -27,6 +27,8 @@ import {
   type BrowserFrameParams,
   type BrowserTab,
   type ChatMessage,
+  type CommandInfo,
+  type CommandsListResult,
   type Conversation,
   type ConversationSummary,
   type DirectoriesState,
@@ -445,6 +447,9 @@ export const useAppStore = defineStore('app', {
     /** 当前机器最近选择的工作目录（hello 快照 + directories 事件；输入框的目录选择器用）。
      *  null = 旧服务端没有 directories：菜单里不列最近、选了也不记（REMOTE.md §5 DirectoriesState） */
     recentDirectories: null as Array<{ path: string; exists: boolean }> | null,
+    /** 这台的「/」命令（commands.list；输入框的命令菜单用）。null = 还没拉到或旧服务端没有
+     *  feature commands：菜单不弹（REMOTE.md §6 命令）；记下是哪台机器按哪个目录拉的，换了作废重拉 */
+    commands: null as { machineID: string; directory: string; items: CommandInfo[] } | null,
     /** 当前在 watch 的浏览器标签（不看了就 unwatch） */
     watchedTabID: '',
     /** 终端面板里选中的终端 id */
@@ -845,6 +850,7 @@ export const useAppStore = defineStore('app', {
       this.teamRuns = []
       this.runnerState = null
       this.recentDirectories = null
+      this.commands = null
       this.browserFrame = null
       this.activeTerminalID = ''
       this.activeFile = null
@@ -1664,6 +1670,43 @@ export const useAppStore = defineStore('app', {
     async browseDirectory(path?: string): Promise<FsListResult | undefined> {
       if (!this.currentMachine) return
       return (await rpc(this.currentMachine, 'fs.list', path ? { path } : {})) as FsListResult
+    },
+
+    /** 拉这台机器的「/」命令（REMOTE.md commands.list；directory 是会话的工作目录，空 = 默认）。
+     *  刚打出「/」时调；旧服务端没有 feature commands：置 null，命令菜单不弹 */
+    async refreshCommands(directory?: string) {
+      const machine = this.currentMachine
+      if (!machine) return
+      try {
+        const result = (await rpc(machine, 'commands.list', directory ? { directory } : {})) as CommandsListResult
+        // 等结果时换了机器、或按别的目录又拉过一份：这份作废（照桌面端 CommandsModel）
+        if (this.currentMachine !== machine) return
+        this.commands = {
+          machineID: machine,
+          directory: directory ?? '',
+          items: result.commands ?? []
+        }
+      } catch {
+        if (this.currentMachine === machine) this.commands = null
+      }
+    },
+
+    /** 「/」后面打到 prefix 时菜单里列哪些（照桌面端 CommandsModel::matching：
+     *  名字以打的开头的在前——插件的按短名字「插件名:」后面的也算开头，名字里有的在后；不分区大小写） */
+    matchCommands(prefix: string): CommandInfo[] {
+      const view = this.commands
+      if (!view || view.machineID !== this.currentMachine) return []
+      const wanted = prefix.trim().toLowerCase()
+      const starts: CommandInfo[] = []
+      const contains: CommandInfo[] = []
+      for (const command of view.items) {
+        const name = command.name.toLowerCase()
+        const colon = name.lastIndexOf(':')
+        const shortName = colon >= 0 ? name.slice(colon + 1) : name
+        if (wanted === '' || name.startsWith(wanted) || shortName.startsWith(wanted)) starts.push(command)
+        else if (name.includes(wanted)) contains.push(command)
+      }
+      return [...starts, ...contains]
     },
 
     async resolveApproval(eventID: string, approved: boolean) {
