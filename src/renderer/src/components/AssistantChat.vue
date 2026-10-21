@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// 右栏下半段常驻的「与助手聊天」面板：叠在视频上面，顶端顶到视频中点、向上渐隐。
+// 右栏的「与助手聊天」面板：默认占满整栏；拨打视频/语音时缩到下 2/3（上 1/3 是通话面板）。
 // 默认作用在当前选中的会话上（左侧会话列表切换）；「和助手说」开着时改在所连机器的助手日志上
 // （assistant.say 发、assistant.entry 流式回，REMOTE.md §6），此时不碰会话。
-// 消息流（顶端渐隐）/ 审批横幅 / 信息行；输入框已挪到中间桌面底部（App.vue 挂 Composer）。
+// 消息流（顶端雾化渐隐）/ 审批横幅 / 信息行 / 视频·语音拨打入口；输入框已挪到中间桌面底部（App.vue 挂 Composer）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { ChatMessage } from '../../../protocol/rpc/protocol.js'
@@ -316,6 +316,26 @@ const statusLine = computed(() => {
   if (line) return line
   return ttsStatusLine.value
 })
+
+// MARK: 拨打视频/语音（空闲时的入口；通话面板只在通话中出现，挂断后用这里重拨）
+const CALL_ICONS = {
+  cam: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'
+} as const
+
+/** 与助手 bot 拨视频/语音（bot 取 store.assistantBotID，和自动拨号同一份） */
+async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
+  const botID = store.assistantBotID
+  if (!botID) {
+    store.error = '找不到助手机器人'
+    return
+  }
+  try {
+    await store.callDial(botID, callType)
+  } catch (err) {
+    store.error = `拨打失败：${err instanceof Error ? err.message : String(err)}`
+  }
+}
 </script>
 
 <template>
@@ -395,6 +415,14 @@ const statusLine = computed(() => {
       }}</span>
       <span v-if="statusLine" class="status-line">{{ statusLine }}</span>
       <span class="spacer" />
+      <template v-if="store.connected && !store.calling">
+        <button class="call-btn" title="与助手视频通话" @click="dialAssistant('video')">
+          <svg viewBox="0 0 24 24" v-html="CALL_ICONS.cam" />
+        </button>
+        <button class="call-btn" title="与助手语音通话" @click="dialAssistant('audio')">
+          <svg viewBox="0 0 24 24" v-html="CALL_ICONS.phone" />
+        </button>
+      </template>
       <button
         v-if="assistantChat"
         class="stop-btn"
@@ -474,6 +502,36 @@ const statusLine = computed(() => {
 .stop-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+/* 拨打视频/语音：空闲时的小圆图标钮（与通话面板控制钮同一套 Feather 线性图标） */
+.call-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-2, var(--fg));
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.call-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.call-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .approval-bar {

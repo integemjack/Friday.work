@@ -2,7 +2,7 @@
 // 桌面（2026-10 布局改版第二期）：不再有会话/语音/机器人聊天/助手时间线/活动总览/机器与会话窗口——
 //   左栏   ：会话列表（常驻）+ 文件面板（会话用到才展开，可折叠）
 //   中间   ：桌面主区（气泡 / 操作卡投在这里的随机位置）+ 底部终端面板
-//   右栏   ：视频通话面板（常驻顶部，没有挂断）+ 浏览器面板（用到才展开）+ 与助手聊天（常驻底部）
+//   右栏   ：与助手聊天（默认占满整栏）；拨打视频/语音时顶部让出 1/3 给通话面板、聊天缩到 2/3
 // 会话的思考/文本以气泡投在桌面随机处（5 秒渐隐）；操作以极简终端卡投在桌面（有结果 5 秒后渐隐）。
 // 剩下的浮动窗口只有子 Agent / 设置，入口在标题栏。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -145,6 +145,9 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
   }
   await store.submitText(text, attachments)
 }
+
+// 通话中（来电/呼出/接通中/通话中）：右栏顶部给通话面板让出 1/3、聊天缩到 2/3；空闲时聊天占满整栏
+const calling = computed(() => store.calling)
 </script>
 
 <template>
@@ -178,8 +181,8 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
         </div>
       </section>
 
-      <!-- 右栏：视频通话铺满整栏 + 聊天叠在下半段（顶端顶到视频中点、向上渐隐），不放别的 -->
-      <aside class="side side-right">
+      <!-- 右栏：与助手聊天默认占满整栏；拨打视频/语音时（calling）顶部 1/3 通话面板 + 底部 2/3 聊天 -->
+      <aside class="side side-right" :class="{ calling }">
         <CallWidget />
         <div class="side-chat"><AssistantChat /></div>
       </aside>
@@ -312,22 +315,26 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
   pointer-events: auto;
 }
 
-/* ---- 右栏 ---- */
+/* ---- 右栏：聊天默认占满整栏；通话时（calling）顶部 1/3 通话面板 + 底部 2/3 聊天 ---- */
 .side-right {
   grid-area: right;
-  /* 聊天是覆盖层：叠在视频下半段上面，右栏自身只留视频在流内 */
-  position: relative;
 }
 
+/* 聊天占份数可过渡：空闲 1 份 = 整栏，通话时 2 份（对面通话面板 1 份）= 下 2/3 */
 .side-chat {
-  /* 聊天叠在右栏下半段：顶端从视频中点起、向上渐隐，视频从聊天底下透出来；
-     栏太矮时保住 280px 最低高度（顶端略微上探越过中点） */
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: min(50%, calc(100% - 280px));
-  z-index: 2;
+  flex: 1 1 0;
+  min-height: 0;
+  transition: flex-grow 0.25s ease;
+}
+
+/* 通话面板（CallWidget 根元素，v-show 控制）：只在通话中占位，收起时 display:none 不留空 */
+.side-right.calling :deep(.call-widget) {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.side-right.calling .side-chat {
+  flex-grow: 2;
 }
 
 /* 没连机器时提示铺满（盖在面板上层） */

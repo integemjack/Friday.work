@@ -1,8 +1,7 @@
 <script setup lang="ts">
-// 通话面板（常驻版，右栏）：进入工作台（机器连上）就自动与助手 bot 建立实时视频通话，
-// 可以直接开口对话；视频从右栏顶部按比例自适应显示、下半段被聊天覆盖层（顶端渐隐）叠盖——
-//   通话中：远端画面（视频通话）+ 本端小窗 + 静麦 / 静扬声器 / 摄像头开关 / 挂断
-//   未接通：显示原因 + 「接通」按钮（结束后不自动重拨，点它重拨；断线弄断的除外）
+// 通话面板（右栏顶部）：拨打视频/语音时才占右栏上部 1/3（聊天缩到 2/3）；空闲/挂断后整个收起、
+// 聊天占满整栏。进入工作台（机器连上）会自动与助手 bot 建立实时视频通话，可以直接开口对话；
+// 挂断后不自动重拨——用聊天面板头部的视频/语音按钮重拨（断线弄断的除外，会自动补接）。
 // 媒体引擎（WebRTC PC / getUserMedia / 音视频渲染）全在这里；信令在协议进程（schat-ws p2p_*）。
 // 音频口径：Opus 48 kHz 单声道；对方没摄像头时退回头像 + 电平脉冲。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -24,11 +23,9 @@ const endedReason = computed(() => String((store.schat.call as { endedReason?: s
 const callType = computed(() => String((store.schat.call as { callType?: string }).callType ?? 'audio'))
 
 const inCall = computed(() => phase.value === 'incoming' || phase.value === 'outgoing' || phase.value === 'connecting' || phase.value === 'active')
-/** 挂件常驻：进了工作台（机器连着）就一直在；没进工作台时只在通话中出现，结束几秒后收起 */
-const visible = computed(() => store.connected || inCall.value || phase.value === 'ended')
-
-/** 空闲态（工作台里没在通话）：给出接通入口 */
-const idleState = computed(() => store.connected && !inCall.value && phase.value !== 'incoming')
+/** 只在通话中出现（来电/呼出/接通中/通话中）；空闲/挂断后整个收起，聊天占满右栏。
+ *  v-show 而不是 v-if：组件要常驻——自动拨号、busy 重拨、断线补接的 watch 全挂在这 */
+const visible = computed(() => inCall.value)
 
 const seconds = ref(0)
 const iceState = ref('')
@@ -379,21 +376,14 @@ function toggleCamera(): void {
 
 // MARK: 进工作台 → 自动与助手视频通话
 
-/** 当前机器对应的助手 bot（work:<botID>） */
-const assistantBotID = computed<number>(() => {
-  const target = String(store.currentMachineInfo?.targetText ?? '')
-  const matched = /^work:(\d+)$/.exec(target)
-  if (matched) return Number(matched[1])
-  const bots = (store.schat as { bots?: Array<{ id: number }> }).bots ?? []
-  return bots[0]?.id ?? 0
-})
+// 助手 bot（work:<botID>）的取法在 store.assistantBotID（聊天头部的手动拨打入口也用同一份）
 
 /** 哪台机器这次连接会话已经自动拨过了（断开重连算新会话，会再拨） */
 let autoDialedMachine = ''
 
-/** 主动接通（自动进工作台/挂件上的「接通」按钮共用） */
+/** 主动拨号（进工作台后自动拨那通用的就是它） */
 async function startAssistantCall(): Promise<void> {
-  const botID = assistantBotID.value
+  const botID = store.assistantBotID
   if (!botID) {
     error.value = '找不到助手机器人'
     return
@@ -510,7 +500,7 @@ onBeforeUnmount(() => clearInterval(unwatch))
 
 <template>
   <div
-    v-if="visible"
+    v-show="visible"
     class="call-widget"
     data-testid="call-widget"
     :title="stateTip"
@@ -521,12 +511,12 @@ onBeforeUnmount(() => clearInterval(unwatch))
     <div class="media">
       <video v-show="remoteVideoLive" ref="remoteVideoEl" class="remote-video" autoplay playsinline />
       <div v-if="!remoteVideoLive" class="avatar" :class="{ live: phase === 'active' }">
-        <span class="avatar-glyph">{{ idleState ? '💤' : peerName.slice(0, 1) }}</span>
+        <span class="avatar-glyph">{{ peerName.slice(0, 1) }}</span>
         <span class="pulse" :style="{ transform: `scale(${1 + level * 0.5})`, opacity: 0.25 + level * 0.6 }" />
       </div>
       <video v-show="remoteVideoLive && localVideoLive && cameraOn" ref="localVideoEl" class="local-video" autoplay playsinline muted />
 
-      <!-- 控制按钮（盖在画面顶部，底部半段被聊天叠盖）：来电=拒接/接听；空闲=接通；通话中=静麦/静扬声器/摄像头 -->
+      <!-- 控制按钮（盖在画面顶部）：来电=拒接/接听；通话中=静麦/静扬声器/摄像头/挂断 -->
       <div class="controls">
         <template v-if="phase === 'incoming'">
           <button class="cbtn reject" title="拒接" @click="reject">
@@ -534,11 +524,6 @@ onBeforeUnmount(() => clearInterval(unwatch))
           </button>
           <button class="cbtn accept" title="接听" @click="accept">
             <svg viewBox="0 0 24 24" v-html="ICONS.phone" />
-          </button>
-        </template>
-        <template v-else-if="idleState">
-          <button class="cbtn connect" title="与助手接通实时视频通话" @click="startAssistantCall">
-            <svg viewBox="0 0 24 24" v-html="ICONS.cam" />
           </button>
         </template>
         <template v-else>
@@ -579,12 +564,12 @@ onBeforeUnmount(() => clearInterval(unwatch))
 </template>
 
 <style scoped>
-/* 画面区：视频从顶部按比例自适应（宽度撑满、高度随视频比例），
-   下半段被聊天覆盖层（顶端渐隐）叠在上面，控制按钮放画面顶部 */
+/* 画面区：视频按比例自适应（宽度撑满、高度随视频比例），控制按钮盖在画面顶部 */
 .call-widget {
   position: relative;
-  /* 画面随右栏整栏拉伸（聊天是覆盖层不在流内，不再分上下两段） */
-  flex: 1 1 auto;
+  /* 通话中占右栏上部 1/3：flex 份数由 App.vue 的 .side-right.calling 统一配（聊天 2 份、这里 1 份）；
+     v-show 收起时 display:none 不占位，聊天回到整栏 */
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -597,7 +582,8 @@ onBeforeUnmount(() => clearInterval(unwatch))
 .media {
   position: relative;
   flex: 1;
-  min-height: 200px;
+  /* 1/3 栏高可能不高：不设最低高度，完全随面板比例走（溢出会被裁剪） */
+  min-height: 0;
   border-radius: 12px;
   /* 无底色：右栏融进桌面背景（圆角留着裁视频画面的四角）；有画面时视频帧自己盖住 */
   background: transparent;

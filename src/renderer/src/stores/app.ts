@@ -523,6 +523,18 @@ export const useAppStore = defineStore('app', {
     connected(): boolean {
       return this.currentMachineInfo?.state === 'ready'
     },
+    /** 正在通话（来电/呼出/接通中/通话中）：右栏顶部让出 1/3 给通话面板、聊天缩到 2/3；空闲时聊天占满整栏 */
+    calling(state): boolean {
+      const phase = state.schat.call.phase
+      return phase === 'incoming' || phase === 'outgoing' || phase === 'connecting' || phase === 'active'
+    },
+    /** 当前机器对应的助手 bot（work:<botID>）；取不到时退回第一个 bot——自动拨号和聊天头部的手动拨打都用它 */
+    assistantBotID(): number {
+      const target = String(this.currentMachineInfo?.targetText ?? '')
+      const matched = /^work:(\d+)$/.exec(target)
+      if (matched) return Number(matched[1])
+      return this.schat.bots[0]?.id ?? 0
+    },
     runtime(state): Runtime | null {
       return state.details[state.activeConversationID]?.runtime ?? null
     },
