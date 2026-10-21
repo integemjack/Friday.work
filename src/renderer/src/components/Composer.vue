@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，文本区左边「开新会话」「和助手说」两键，底行左侧附件、右侧圆形发送键；
+// 输入框（方案 §5.3，样式照 Friday 桌面端）：圆角卡片内嵌文本区，文本区左边「开新会话」「和助手说」分段式按钮组，底行左侧附件、右侧圆形发送键；
 // 生成中发送键变成停止。附件（对话框 + 拖放，经主进程背书上传）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -493,35 +493,37 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 输入区：文本区左边挂「开新会话」「和助手说」两键（显眼位置，不藏在底行一排按钮里）；
+      <!-- 输入区：文本区左边挂「开新会话」「和助手说」按钮组（分段式一体，显眼位置，不藏在底行一排按钮里）；
            默认没选会话时输入就会自动开新的一段会话，「和助手说」把输入切到机器上的助手（不经会话） -->
       <div class="input-zone">
-        <button
-          class="icon-btn new-chat-btn"
-          title="开新会话"
-          aria-label="开新会话"
-          :disabled="!store.connected || newChatBusy"
-          @click="newConversation"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            <path d="M12 7v6" />
-            <path d="M9 10h6" />
-          </svg>
-        </button>
-        <button
-          class="icon-btn assistant-say-btn"
-          :class="{ active: store.assistantChat }"
-          title="和助手说：直接跟这台机器上的助手聊，不开会话"
-          aria-label="和助手说"
-          :disabled="!store.connected"
-          @click="toggleAssistantChat"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 3.5l1.8 4.2 4.2 1.8-4.2 1.8L11 15.5l-1.8-4.2L5 9.5l4.2-1.8z" />
-            <path d="M18.5 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" />
-          </svg>
-        </button>
+        <div class="chat-mode-group" role="group" aria-label="输入去向">
+          <button
+            class="icon-btn new-chat-btn"
+            title="开新会话"
+            aria-label="开新会话"
+            :disabled="!store.connected || newChatBusy"
+            @click="newConversation"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              <path d="M12 7v6" />
+              <path d="M9 10h6" />
+            </svg>
+          </button>
+          <button
+            class="icon-btn assistant-say-btn"
+            :class="{ active: store.assistantChat }"
+            title="和助手说：直接跟这台机器上的助手聊，不开会话"
+            aria-label="和助手说"
+            :disabled="!store.connected"
+            @click="toggleAssistantChat"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 3.5l1.8 4.2 4.2 1.8-4.2 1.8L11 15.5l-1.8-4.2L5 9.5l4.2-1.8z" />
+              <path d="M18.5 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" />
+            </svg>
+          </button>
+        </div>
         <textarea
           ref="textarea"
           v-model="text"
@@ -877,8 +879,8 @@ textarea {
   resize: none;
   border: none;
   outline: none;
-  /* 右侧给浮在发送键上方的语音键让位，文字不打到按钮底下 */
-  padding: 9px 44px 3px 10px;
+  /* 右侧给浮在发送键上方的语音键让位，文字不打到按钮底下；上下对称 padding 让单行文字垂直居中 */
+  padding: 8px 44px 8px 10px;
   background: transparent;
   color: var(--text);
   line-height: 1.55;
@@ -890,10 +892,10 @@ textarea::placeholder {
   color: var(--text-3);
 }
 
-/* 输入区：文本域 + 左边「和助手开新会话」；多行时按钮钉在左下角 */
+/* 输入区：文本域 + 左边「开新会话 / 和助手说」按钮组；按钮组、文本行、浮在右上的语音键垂直居中对齐 */
 .input-zone {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .input-zone textarea {
@@ -901,11 +903,35 @@ textarea::placeholder {
   min-width: 0;
 }
 
-.new-chat-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  margin: 3px 2px 3px 6px;
+/* 「开新会话」「和助手说」拼成分段式按钮组：整组一圈描边 + 统一圆角，与单行文本域同高（36px） */
+.chat-mode-group {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+}
+
+.chat-mode-group .icon-btn {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+/* 中缝细分隔线（画在后一键左缘外的空隙里，不吃按钮 hover 底色） */
+.chat-mode-group .icon-btn + .icon-btn::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--border);
 }
 
 .row {
@@ -1214,10 +1240,11 @@ textarea::placeholder {
 }
 
 /* 语音键：浮在发送键正上方、右对齐（跟着发送键走），不占行高；
+   bottom 4.8px 是实测值：让语音键中心线和输入行中心线完全重合（输入行高 37.7px、组高 36px）；
    录音中红色脉冲；右键弹设置菜单（菜单再往上浮） */
 .voice-wrap {
   position: absolute;
-  bottom: calc(100% + 4px);
+  bottom: calc(100% + 4.8px);
   right: 0;
   display: flex;
   z-index: 5;
@@ -1434,35 +1461,28 @@ textarea::placeholder {
   text-shadow: 0 0 8px var(--accent-a60);
 }
 
-/* 开新会话键在输入框左边独占一位：常态也给一圈淡青描边，不靠悬停才被看见 */
-[data-theme='jarvis'] .new-chat-btn {
-  color: var(--accent);
-  border: 1px solid var(--accent-a30);
+/* 按钮组整体：贾维斯主题常态一圈淡青描边 + 淡青底（不靠悬停才被看见）；小圆角的方HUD 感（照模型 chip） */
+[data-theme='jarvis'] .chat-mode-group {
+  border-color: var(--accent-a30);
   background: var(--accent-a10);
+  border-radius: 5px;
 }
 
-[data-theme='jarvis'] .new-chat-btn:hover:not(:disabled) {
-  border-color: var(--accent-a60);
-  background: var(--accent-a20);
-}
-
-/* 和助手说：贾维斯主题同样给常态淡青描边（和开新会话键一致，不靠悬停才被看见）；
-   开着时（输入目标就是助手）描边和底色都加重 + 一圈微光 */
-[data-theme='jarvis'] .assistant-say-btn {
+[data-theme='jarvis'] .chat-mode-group .icon-btn {
   color: var(--accent);
-  border: 1px solid var(--accent-a30);
-  background: transparent;
+  border-radius: 3px;
 }
 
-[data-theme='jarvis'] .assistant-say-btn:hover:not(:disabled) {
-  border-color: var(--accent-a60);
-  background: var(--accent-a10);
-}
-
+/* 和助手说开着时（输入目标就是助手）：底色加重 + 一圈微光 */
 [data-theme='jarvis'] .assistant-say-btn.active {
-  border-color: var(--accent-a60);
+  color: var(--accent);
   background: var(--accent-a20);
   box-shadow: 0 0 10px var(--accent-a25);
+}
+
+/* 中缝分隔线也用淡青：深底上 var(--border) 灰线看不清 */
+[data-theme='jarvis'] .chat-mode-group .icon-btn + .icon-btn::before {
+  background: var(--accent-a30);
 }
 
 /* 系统主题：开着时给个明确的选中态 */
