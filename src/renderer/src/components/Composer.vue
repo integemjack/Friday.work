@@ -493,6 +493,27 @@ const modelPrep = ref('')
 const voiceError = ref('')
 let voiceSession: SpeechInput | null = null
 
+// 底行提示的右缘渐隐只在真被挤时挂：hint 宽度随内容收缩（flex 0 1 auto），mask 锚在元素
+// 自身宽度上，无条件挂会把没到发送键的提示尾巴无辜渐隐（会话名行没事是因为它 flex:1 撑满，
+// 渐隐带落在空白里）。ResizeObserver 盯着提示元素，内容宽超过盒宽（被底行挤了）才算被挤。
+const hintEl = ref<HTMLSpanElement | null>(null)
+const hintSqueezed = ref(false)
+let hintResizeObserver: ResizeObserver | null = null
+function syncHintSqueeze(): void {
+  const el = hintEl.value
+  // +1 容差：subpixel 文本宽取整会把差不到 1px 的假溢出当真
+  hintSqueezed.value = !!el && el.scrollWidth > el.clientWidth + 1
+}
+watch(hintEl, (el) => {
+  hintResizeObserver?.disconnect()
+  hintResizeObserver = null
+  if (!el) return
+  hintResizeObserver = new ResizeObserver(syncHintSqueeze) // observe 自带首帧回调
+  hintResizeObserver.observe(el)
+  syncHintSqueeze()
+})
+onBeforeUnmount(() => hintResizeObserver?.disconnect())
+
 const voiceTitle = computed(() =>
   starting.value
     ? '正在开麦克风…'
@@ -877,7 +898,12 @@ onBeforeUnmount(() => {
         <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
         <span v-else-if="dirError" class="error">{{ dirError }}</span>
         <!-- 键盘提示（Enter/Shift+Enter）已并进 textarea 的 placeholder，这行只在语音/模型下载等临时状态时出现 -->
-        <span v-else-if="modelPrep || starting || transcribing || listening" class="hint">{{
+        <span
+          v-else-if="modelPrep || starting || transcribing || listening"
+          ref="hintEl"
+          class="hint"
+          :class="{ squeezed: hintSqueezed }"
+        >{{
           modelPrep
             ? modelPrep
             : starting
@@ -1540,10 +1566,15 @@ textarea::placeholder {
   font-size: 10.5px;
   color: var(--text-3);
   white-space: nowrap;
-  /* 底行空间不够时自己收缩、超出的部分右缘渐隐（照会话名行的做法），不把发送/语音键顶出输入台 */
+  /* 底行空间不够时自己收缩，不把发送/语音键顶出输入台 */
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
+}
+
+/* 真被挤（内容宽 > 盒宽）才右缘渐隐：mask 锚在元素自身宽度上，
+   不挤时挂上去会把没到发送键的提示尾巴无辜渐隐 */
+.hint.squeezed {
   -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
   mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
 }
