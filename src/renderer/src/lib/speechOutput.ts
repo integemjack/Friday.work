@@ -225,6 +225,14 @@ let audioContext: AudioContext | null = null
 let activeSource: AudioBufferSourceNode | null = null
 let speakToken = 0
 
+/** 待播片段队列 + 播放泵：整条播报（新回复 / 试听）先清队再入队（后到的优先）；
+ *  流式增量（append）只接到队尾、不打断正在播的——回复气泡的文本一片片来，
+ *  句子按先后接播，这才是「跟气泡实时」。 */
+let speechQueue: string[] = []
+let pumping = false
+/** 本轮泵的指定音色（试听时非空）；流式增量为空 → 每句跟当前选中的音色 */
+let pumpVoice: VoiceOption | undefined
+
 /** 模型准备进度（主进程事件 → 状态行 / 设置页进度条） */
 export function initTtsProgressListener(): void {
   window.fridayBridge?.onTtsModelProgress?.((state) => {
@@ -243,9 +251,11 @@ export function initTtsProgressListener(): void {
   })
 }
 
-/** 停掉当前播放（新回复到来 / 开关关闭 / 手动停止时调用） */
+/** 停掉当前播放并清空待播队列（新整条回复到来 / 开关关闭 / 手动停止时调用） */
 export function stopSpeaking(): void {
   speakToken += 1
+  speechQueue = []
+  pumping = false
   if (activeSource) {
     try {
       activeSource.stop()
@@ -304,21 +314,41 @@ export function splitForSpeech(clean: string): string[] {
 }
 
 /** 播一段文本（用当前选中的音色；分句流水线：首句 1-2 秒出声，后续句边播边合成）。
- *  已在播的会被打断（新的回复优先）；开关关着时不播（试听用 force 跳过）。 */
-export async function speakText(text: string, options?: { voice?: VoiceOption; force?: boolean }): Promise<void> {
+ *  整条播报（默认）：停掉并清空正在播的再入队（新回复 / 试听优先）。
+ *  流式增量（append: true）：只把片段接到队尾不打断——回复气泡边显示边念，
+ *  收尾的整条播报也不冲掉前面还没播完的句子。
+ *  开关关着时不播（试听用 force 跳过）。 */
+export function speakText(text: string, options?: { voice?: VoiceOption; force?: boolean; append?: boolean }): void {
   const parts = splitForSpeech(cleanForSpeech(text))
   if (!parts.length) return
   if (!options?.force && !replySpeakEnabled.value) return
-  const voice = options?.voice ?? activeVoice()
-  stopSpeaking() // 先停旧的，再取新 token：此后任何新打断都会使 token 失配
-  const token = ++speakToken
+  if (!options?.append) {
+    stopSpeaking() // 先停旧的、清空队列，再取新 token：此后任何新打断都会使 token 失配
+    pumpVoice = options?.voice
+  } else if (!pumping) {
+    pumpVoice = options?.voice // 泵停着（刚被打断 / 上一轮播完）：这次 append 启动新一轮
+  }
+  speechQueue.push(...parts)
+  if (!pumping) void pumpSpeech()
+}
+
+/** 播放泵：逐句「合成下一句与播放并行」地消费队列（RTF 0.3-0.43 < 1，播放始终
+ *  追得上合成）；流式增量随时往队尾加。token 失配（被 stopSpeaking 打断）即退出，
+ *  残留队列已由 stopSpeaking 清空。 */
+async function pumpSpeech(): Promise<void> {
+  const token = speakToken
+  pumping = true
   ttsPhase.value = 'loading'
   try {
-    let next = window.fridayBridge.speakReply({ text: parts[0], sid: voice.sid, speed: voice.speed })
-    for (let i = 0; i < parts.length; i++) {
+    const synth = (text: string) => {
+      const voice = pumpVoice ?? activeVoice()
+      return window.fridayBridge.speakReply({ text, sid: voice.sid, speed: voice.speed })
+    }
+    let next = speechQueue.length ? synth(speechQueue.shift()!) : null
+    while (next) {
       const audio = await next
-      if (token !== speakToken) return // 等待期间被打断（来了更新的回复或手动停止）
-      if (i + 1 < parts.length) next = window.fridayBridge.speakReply({ text: parts[i + 1], sid: voice.sid, speed: voice.speed })
+      if (token !== speakToken) return // 等待期间被打断（来了更新的整条回复或手动停止）
+      next = speechQueue.length ? synth(speechQueue.shift()!) : null
       if (!audio.samples.length) continue
       ttsPhase.value = 'speaking'
       await playSamples(audio.samples, audio.sampleRate)
@@ -329,6 +359,49 @@ export async function speakText(text: string, options?: { voice?: VoiceOption; f
     if (token === speakToken) {
       ttsPhase.value = 'error'
       ttsDetail.value = error instanceof Error ? error.message : String(error)
+    }
+  } finally {
+    // 自然播完才归还泵；被打断的（token 失配）不动 pumping——stopSpeaking 已把它复位，
+    // 免得旧泵迟到的 finally 把新一轮泵的标志清掉（那会让后续增量只排队不出声）
+    if (token === speakToken) pumping = false
+  }
+}
+
+// MARK: 流式增量游标（回复气泡的实时播报）
+
+/** 流式增量攒到句边界再入队：增量片常在句中截断，直接播会一字一顿；攒到句末
+ *  标点 / 换行才成句送播（append 接队），长时间没有句末标点（无标点长文）就
+ *  兜底直送（splitForSpeech 会按逗号 / 60 字硬切，不会憋着不出声）。 */
+export interface SpeechIncrement {
+  /** 流式又来了一片：接进缓冲，攒出完整句就送播 */
+  push(chunk: string): void
+  /** 结束（消息完成）：把还没等到句末标点的尾巴整段播完 */
+  flush(): void
+}
+
+const SENTENCE_END = '。！？!?；;\n'
+
+export function createSpeechIncrement(): SpeechIncrement {
+  let buffer = ''
+  return {
+    push(chunk: string) {
+      if (!chunk) return
+      buffer += chunk
+      for (let i = buffer.length - 1; i >= 0; i--) {
+        if (SENTENCE_END.includes(buffer[i])) {
+          speakText(buffer.slice(0, i + 1), { append: true })
+          buffer = buffer.slice(i + 1)
+          break
+        }
+      }
+      if (buffer.length >= 120) {
+        speakText(buffer, { append: true })
+        buffer = ''
+      }
+    },
+    flush() {
+      if (buffer.trim()) speakText(buffer, { append: true })
+      buffer = ''
     }
   }
 }

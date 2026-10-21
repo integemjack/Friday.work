@@ -121,3 +121,90 @@ test('文本块提取：text 是裸字符串（无 _0 包装）也能取', () =>
   ]
   assert.equal(textBlocksToSpeech(blocks), '直接字符串\n包装字符串')
 })
+
+// ---- 流式实时播报（队列 + 句缓冲）：受控 mock，不依赖真实计时 ----
+// mock 桥把每次合成挂成手动放行的 pending promise，空 samples 让泵跳过播放
+// （不碰 AudioContext），这样断言的就是「哪些句子被送进合成队列、什么顺序、什么时机」。
+const speech = require('../.tmp/speechoutput.cjs')
+
+function mockBridge() {
+  const calls = []
+  const pending = []
+  globalThis.window = {
+    fridayBridge: {
+      speakReply: ({ text }) => {
+        calls.push(text)
+        return new Promise((resolve) => pending.push(resolve))
+      }
+    }
+  }
+  const flushMicro = async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+  const release = (value) => {
+    ;(pending.shift() ?? (() => {}))(value ?? { samples: new Float32Array(0), sampleRate: 24000 })
+  }
+  const restore = () => {
+    speech.stopSpeaking()
+    for (const resolve of pending.splice(0)) resolve({ samples: new Float32Array(0), sampleRate: 24000 })
+    delete globalThis.window
+  }
+  return { calls, release, flushMicro, restore }
+}
+
+test('队列：流式增量 append 接在队尾不打断；整条播报打断并清队', async () => {
+  const { calls, release, flushMicro, restore } = mockBridge()
+  try {
+    speech.speakText('第一句。', { force: true })
+    await flushMicro()
+    assert.deepEqual(calls, ['第一句。'], '首句立即送合成')
+
+    speech.speakText('接在后面的句子。', { force: true, append: true })
+    await flushMicro()
+    assert.deepEqual(calls, ['第一句。'], 'append 只入队，不打断正在合成的句子')
+
+    release() // 放行第一句 → 泵取走队尾那句
+    await flushMicro()
+    assert.deepEqual(calls, ['第一句。', '接在后面的句子。'], '前一句完成后增量按序接播')
+
+    speech.speakText('还没轮到就被作废。', { force: true, append: true })
+    await flushMicro()
+    speech.speakText('新整条回复。', { force: true }) // 整条：打断清队
+    await flushMicro()
+    assert.ok(!calls.includes('还没轮到就被作废。'), '被打断时未取走的增量作废')
+    assert.deepEqual(calls.slice(-1), ['新整条回复。'])
+  } finally {
+    restore()
+  }
+})
+
+test('句缓冲：增量攒到句末才送播、flush 播尾巴、无标点长文兕底直送', async () => {
+  const { calls, release, flushMicro, restore } = mockBridge()
+  try {
+    const inc = speech.createSpeechIncrement()
+    inc.push('你好，我是')
+    await flushMicro()
+    assert.deepEqual(calls, [], '句中不送')
+
+    inc.push('助手。')
+    await flushMicro()
+    assert.deepEqual(calls, ['你好，我是助手。'], '到句末成句送播')
+    release()
+    await flushMicro()
+
+    inc.push('没等到的尾巴')
+    await flushMicro()
+    assert.equal(calls.length, 1, '尾巴继续攒')
+    inc.flush()
+    await flushMicro()
+    assert.deepEqual(calls.slice(-1), ['没等到的尾巴'], 'flush 把尾巴整段送播')
+    release()
+    await flushMicro()
+
+    inc.push('一'.repeat(200)) // 无任何句末标点：超过 120 字兕底直送（splitForSpeech 硬切）
+    await flushMicro()
+    assert.ok(calls.length >= 3, '无标点长文不憋着不出声')
+  } finally {
+    restore()
+  }
+})
