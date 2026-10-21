@@ -467,17 +467,20 @@ function saveVoicePref(key: string, value: string): void {
   }
 }
 
-// 识别模型：默认按语言自动选（中文等 → SenseVoice，混合/其他 → whisper）；也可手动锁定某一款
+// 识别模型：默认按语言自动选（中文等 → SenseVoice，混合/其他 → Qwen3-ASR）；也可手动锁定某一款。
+// whisper 已从菜单移除（2026-10 被 Qwen3-ASR 替换，本机实测质量更好），仅在主进程作回退引擎
 const VOICE_MODELS: Array<{ value: string; label: string; note: string }> = [
-  { value: 'auto', label: '自动（按语言选，推荐）', note: '中文→SenseVoice，混合/小语种→Whisper' },
+  { value: 'auto', label: '自动（按语言选，推荐）', note: '中文→SenseVoice，混合/小语种→Qwen3-0.6B' },
   { value: 'sensevoice', label: 'SenseVoice', note: '约230MB · 中文最快最准、抗噪' },
-  { value: 'whisper-small', label: 'Whisper Small', note: '约240MB · 中英混合稳，较慢' },
-  { value: 'whisper-base', label: 'Whisper Base', note: '约80MB · 最小，中文易错' }
+  { value: 'qwen3', label: 'Qwen3-ASR 0.6B', note: '约840MB · 30语种+22方言，混合/小语种更准，稍慢' },
+  { value: 'qwen3-1.7b', label: 'Qwen3-ASR 1.7B', note: '约2.4GB · 最准，明显更慢' }
 ]
 
 const voiceMode = ref<'hold' | 'click'>(loadVoicePref('voice.mode') === 'click' ? 'click' : 'hold')
 const voiceLang = ref(loadVoicePref('voice.lang') || 'auto')
-const voiceModel = ref(loadVoicePref('voice.model') || 'auto')
+const voiceModel = ref(loadVoicePref('voice.model'))
+// 旧缓存可能是已移除的 whisper-*：不在菜单里就回「自动」（主进程也会把旧值迁到 Qwen3）
+if (!VOICE_MODELS.some((m) => m.value === voiceModel.value)) voiceModel.value = 'auto'
 const voiceMicId = ref(loadVoicePref('voice.mic'))
 const voiceMenuOpen = ref(false)
 const voiceWrap = ref<HTMLDivElement | null>(null)

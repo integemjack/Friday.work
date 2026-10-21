@@ -27,7 +27,7 @@ export type VoicePhase = 'listening' | 'model-loading' | 'transcribing'
 export interface SpeechInputOptions {
   /** 识别语言（菜单值：'auto' | 'zh-CN' | …；空 = 跟随系统，都交给主进程映射 whisper 语言） */
   lang?: string
-  /** 识别模型（菜单值：'auto' | 'sensevoice' | 'whisper-small' | 'whisper-base'；主进程路由） */
+  /** 识别模型（菜单值：'auto' | 'sensevoice' | 'qwen3' | 'qwen3-1.7b'；主进程路由） */
   model?: string
   /** 指定麦克风（deviceId；空 = 系统默认） */
   deviceId?: string
