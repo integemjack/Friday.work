@@ -47,9 +47,9 @@ const speedText = computed(() => {
 
 // 窗口启动器：只剩子 Agent / 设置两个浮动窗口——
 // 终端/文件/浏览器是桌面面板（会话用到才展开），会话列表/聊天/通话都是常驻面板，不在这里
-const launchers: Array<{ kind: WindowKind; label: string; icon: string }> = [
-  { kind: 'agents', label: '子 Agent', icon: '◈' },
-  { kind: 'settings', label: '设置', icon: '⚙' }
+const launchers: Array<{ kind: WindowKind; label: string }> = [
+  { kind: 'agents', label: '子 Agent' },
+  { kind: 'settings', label: '设置' }
 ]
 
 function launch(kind: WindowKind) {
@@ -78,7 +78,14 @@ const bridge = window.fridayBridge
         :title="entry.label"
         @click="launch(entry.kind)"
       >
-        {{ entry.icon }}
+        <svg v-if="entry.kind === 'agents'" class="ico" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+          <path d="M7 4.8 9.2 7 7 9.2 4.8 7Z" fill="currentColor" />
+        </svg>
+        <svg v-else class="ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" />
+        </svg>
       </button>
     </nav>
 
@@ -86,7 +93,9 @@ const bridge = window.fridayBridge
       <span class="dot" :class="stateDot" />
       <span class="machine-name">{{ store.currentMachineInfo?.name ?? (hasNoMachine ? '还没有机器' : '选一台机器') }}</span>
       <span class="machine-state">{{ stateText }}</span>
-      <span class="chevron">▾</span>
+      <svg class="chevron" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M2.8 4.6 6 7.8l3.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
     </div>
     <div class="spacer" />
     <!-- 实时运行指示（右上角）：智能体数 + token 速度；点击开子 Agent 窗口看详情 -->
@@ -98,7 +107,13 @@ const bridge = window.fridayBridge
       @click="launch('agents')"
     >
       <span class="dot" :class="agentCount > 0 ? 'run' : 'off'" />
-      <span class="live-agents">◈ {{ agentCount }} 智能体</span>
+      <span class="live-agents">
+        <svg class="ico" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+          <path d="M7 4.8 9.2 7 7 9.2 4.8 7Z" fill="currentColor" />
+        </svg>
+        {{ agentCount }} 智能体
+      </span>
       <span class="live-sep">·</span>
       <span class="live-speed">{{ speedText }} tok/s</span>
     </button>
@@ -107,11 +122,23 @@ const bridge = window.fridayBridge
       <span class="dot off" />
       未登录 · 扫码
     </button>
-    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区） -->
+    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区）——三个图标同 viewBox/同尺寸/同描边，大小严格一致 -->
     <div class="win-controls">
-      <button class="win-btn" title="最小化" @click="bridge.winMinimize()">─</button>
-      <button class="win-btn" title="最大化 / 还原" @click="bridge.winMaximizeToggle()">▢</button>
-      <button class="win-btn close" title="关闭" @click="bridge.winClose()">×</button>
+      <button class="win-btn" title="最小化" @click="bridge.winMinimize()">
+        <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M2.2 6h7.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+        </svg>
+      </button>
+      <button class="win-btn" title="最大化 / 还原" @click="bridge.winMaximizeToggle()">
+        <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <rect x="2.6" y="2.6" width="6.8" height="6.8" rx="1" stroke="currentColor" stroke-width="1.3" />
+        </svg>
+      </button>
+      <button class="win-btn close" title="关闭" @click="bridge.winClose()">
+        <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M3.1 3.1l5.8 5.8M8.9 3.1 3.1 8.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+        </svg>
+      </button>
     </div>
 
     <teleport to="body">
@@ -142,6 +169,7 @@ const bridge = window.fridayBridge
   flex: none;
   display: flex;
   align-items: center;
+  line-height: 1;
   gap: 14px;
   padding: 0 14px;
   background: var(--panel);
@@ -170,10 +198,15 @@ const bridge = window.fridayBridge
   border: none;
   border-radius: 8px;
   background: transparent;
-  font-size: 13px;
   opacity: 0.62;
   cursor: pointer;
   transition: background 0.12s, opacity 0.12s, box-shadow 0.12s;
+}
+
+.launch-btn .ico {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
 .launch-btn:hover {
@@ -199,10 +232,18 @@ const bridge = window.fridayBridge
   display: grid;
   place-items: center;
   border: none;
+  padding: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-2);
-  font-size: 13px;
+  cursor: pointer;
+}
+
+/* 窗控图标：同一 viewBox、同一渲染尺寸、同一描边粗细——三个一样大，grid 精确居中 */
+.win-btn .ico {
+  width: 10px;
+  height: 10px;
+  display: block;
 }
 
 .win-btn:hover {
@@ -245,8 +286,10 @@ const bridge = window.fridayBridge
 }
 
 .chevron {
+  width: 10px;
+  height: 10px;
+  flex: none;
   color: var(--text-3);
-  font-size: 11px;
 }
 
 .spacer {
@@ -319,6 +362,17 @@ const bridge = window.fridayBridge
   50% {
     opacity: 0.35;
   }
+}
+
+.live-agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.live-agents .ico {
+  width: 10px;
+  height: 10px;
 }
 
 .live-sep {
