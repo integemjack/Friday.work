@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 通话面板（右栏顶部）：拨打视频/语音时才占右栏上部 1/3（聊天缩到 2/3）；空闲/挂断后整个收起、
-// 聊天占满整栏。进入工作台（机器连上）会自动与助手 bot 建立实时视频通话，可以直接开口对话；
-// 挂断后不自动重拨——用聊天面板头部的视频/语音按钮重拨（断线弄断的除外，会自动补接）。
+// 聊天占满整栏。进入工作台（机器连上）默认不自动拨打（lib/autoCall.ts 的开关，默认关）——
+// 想通话用聊天面板头部的视频/语音按钮；设置 › 通话里打开开关后恢复自动拨。
 // 媒体引擎（WebRTC PC / getUserMedia / 音视频渲染）全在这里；信令在协议进程（schat-ws p2p_*）。
 // 音频口径：Opus 48 kHz 单声道；对方没摄像头时退回头像 + 电平脉冲。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import { autoCallEnabled } from '../lib/autoCall.js'
 
 const store = useAppStore()
 
@@ -374,11 +375,12 @@ function toggleCamera(): void {
   for (const track of tracks) track.enabled = cameraOn.value
 }
 
-// MARK: 进工作台 → 自动与助手视频通话
+// MARK: 进工作台 → 自动与助手视频通话（默认关，设置 › 通话里开）
 
 // 助手 bot（work:<botID>）的取法在 store.assistantBotID（聊天头部的手动拨打入口也用同一份）
 
-/** 哪台机器这次连接会话已经自动拨过了（断开重连算新会话，会再拨） */
+/** 哪台机器这次连接会话已经自动拨过了（断开重连算新会话，会再拨；开关关着时不标记，
+ *  这样中途打开开关也能立刻按当前会话补拨） */
 let autoDialedMachine = ''
 
 /** 主动拨号（进工作台后自动拨那通用的就是它） */
@@ -396,7 +398,7 @@ async function startAssistantCall(): Promise<void> {
   }
 }
 
-/** 自动接通：机器连上后缓 3 秒再拨——工作通道刚握手时机器人那头还占着会话，立刻拨会回 busy；
+/** 自动接通（开关开着时）：机器连上后缓 3 秒再拨——工作通道刚握手时机器人那头还占着会话，立刻拨会回 busy；
  *  被 busy/超时拒掉的话同一连接会话里再补一次（挂断后不自动重拨，点挂件上的接通） */
 let autoTimer = 0
 let autoRetries = 0
@@ -409,6 +411,8 @@ function scheduleAutoDial(delayMs: number): void {
 }
 
 async function tryAutoDial(): Promise<void> {
+  // 开关关着（默认）一切自动拨号都不打：进工作台不拨、busy/断线的补拨也到这为止
+  if (!autoCallEnabled.value) return
   // 登录页盖着（换账号/重新扫码）时不自动打；通话已在进行也不用打
   if (!store.connected || store.loginOverlay || !store.workbenchReady) return
   if (store.schat.phase !== 'online') return
@@ -417,7 +421,7 @@ async function tryAutoDial(): Promise<void> {
 }
 
 watch(
-  [() => store.connected, () => store.schat.phase],
+  [() => store.connected, () => store.schat.phase, autoCallEnabled],
   () => {
     if (!store.connected) {
       autoDialedMachine = ''
@@ -426,6 +430,7 @@ watch(
       window.clearTimeout(autoTimer)
       return
     }
+    if (!autoCallEnabled.value) return // 默认关：进工作台不自动拨（也不标记，开开关时能补拨）
     if (autoDialedMachine === store.currentMachine) return
     if (store.schat.phase !== 'online') return
     autoDialedMachine = store.currentMachine
@@ -438,6 +443,7 @@ watch(
 
 // 自动那通被拒（busy/没人接）：同一连接会话里再补一次；
 // 断线弄断的（schat-ws 掉线把通话一并结束，endedCode=disconnected）：连接恢复后自动接回来，最多两次
+// （都在开关开着时才有；关着时 tryAutoDial 直接返回）
 watch(phase, (now, before) => {
   if (now !== 'ended' || before === 'idle') return
   if (!store.connected || autoDialedMachine !== store.currentMachine) return

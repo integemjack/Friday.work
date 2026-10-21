@@ -23,6 +23,7 @@ import {
   ttsPhase,
   type VoiceOption
 } from '../lib/speechOutput.js'
+import { autoCallEnabled, setAutoCall } from '../lib/autoCall.js'
 
 const store = useAppStore()
 const loading = ref(false)
@@ -253,6 +254,18 @@ const modelReady = computed(() => ttsPhase.value === 'idle' || ttsPhase.value ==
         </button>
       </div>
       <div class="note">贾维斯是本机界面偏好（深空黑 + 电光青全息风），与远程机器无关。</div>
+    </section>
+
+    <section>
+      <h3>通话</h3>
+      <div class="row">
+        <span class="key">进入工作台自动视频通话</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: autoCallEnabled }" @click="setAutoCall(true)">开</button>
+          <button class="small-btn" :class="{ strong: !autoCallEnabled }" @click="setAutoCall(false)">关</button>
+        </span>
+      </div>
+      <div class="note">默认关：连上机器不自动拨打，想通话用聊天头部的视频/语音按钮。打开后进入工作台会自动与助手 bot 建立视频通话，挂断不重拨，断线弄断的会自动接回。</div>
     </section>
 
     <div v-if="error" class="error">{{ error }}</div>
