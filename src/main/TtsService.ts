@@ -191,7 +191,11 @@ export function synthesizeSpeech(
 ): Promise<{ samples: Float32Array; sampleRate: number }> {
   const run = async (): Promise<{ samples: Float32Array; sampleRate: number }> => {
     const engine = await loadTts(to)
-    const audio: GeneratedAudio = await engine.generateAsync({ text, sid, speed })
+    // enableExternalBuffer: false —— Electron 44 的 Node 运行时禁止创建外部 ArrayBuffer
+    // （sherpa 默认用它零拷贝返回音频：同步路径直接抛「External buffers are not allowed」，
+    // 异步路径在收尾时抛、被 addon 吞成「TTS settlement failed」）。改为拷入 JS 内存，
+    // 每句只多拷几百 KB；结果本来就要经 IPC 结构化克隆发给渲染层，无额外代价。
+    const audio: GeneratedAudio = await engine.generateAsync({ text, sid, speed, enableExternalBuffer: false })
     return { samples: audio.samples, sampleRate: audio.sampleRate }
   }
   const next = queueTail.then(run, run)

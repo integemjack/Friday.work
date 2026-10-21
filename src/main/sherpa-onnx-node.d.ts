@@ -24,7 +24,7 @@ declare module 'sherpa-onnx-node' {
     constructor(config: unknown)
     numSpeakers: number
     sampleRate: number
-    generate(req: { text: string; sid?: number; speed?: number }): GeneratedAudio
-    generateAsync(req: { text: string; sid?: number; speed?: number }): Promise<GeneratedAudio>
+    generate(req: { text: string; sid?: number; speed?: number; enableExternalBuffer?: boolean }): GeneratedAudio
+    generateAsync(req: { text: string; sid?: number; speed?: number; enableExternalBuffer?: boolean }): Promise<GeneratedAudio>
   }
 }
