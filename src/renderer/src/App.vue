@@ -26,6 +26,7 @@ import DesktopBubbles from './components/DesktopBubbles.vue'
 import DesktopOps from './components/DesktopOps.vue'
 import DesktopMediaStacks from './components/DesktopMediaStacks.vue'
 import MediaLightbox from './components/MediaLightbox.vue'
+import UpdateOverlay from './components/UpdateOverlay.vue'
 import CenterScene from './components/CenterScene.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
@@ -222,6 +223,9 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
 
     <!-- 媒体灯箱：叠里点单张图片放大 / 视频大窗播放（盖过登录页，Esc/点背景关） -->
     <MediaLightbox />
+
+    <!-- 桌面更新浮层：自动更新管线把进度直接摆到桌面右下角（下载进度/倒计时/安装中） -->
+    <UpdateOverlay />
 
     <!-- 全局错误横幅 -->
     <div v-if="store.error" class="error-toast" @click="store.error = ''">

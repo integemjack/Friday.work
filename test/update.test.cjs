@@ -1,7 +1,32 @@
 // 客户端更新判断逻辑的单元测试（src/shared/update.ts，主进程与渲染层共用）。
 const test = require('node:test')
 const assert = require('node:assert')
-const { compareVersions, isUpdateAvailable, updatePlatformKey, pickUpdatePackage } = require('../.tmp/update.cjs')
+const {
+  compareVersions,
+  emptyUpdateState,
+  isUpdateAvailable,
+  isUpdateBusy,
+  updatePlatformKey,
+  pickUpdatePackage
+} = require('../.tmp/update.cjs')
+
+test('初始状态：auto/restartAt 字段在（浮层和主进程都依赖）', () => {
+  const state = emptyUpdateState('0.1.0', 'abc', 'win32')
+  assert.equal(state.auto, false)
+  assert.equal(state.restartAt, 0)
+  assert.equal(state.phase, 'idle')
+})
+
+test('阶段在忙：查/下/装中（定时器看到就跳过，不叠加）', () => {
+  assert.equal(isUpdateBusy('checking'), true)
+  assert.equal(isUpdateBusy('downloading'), true)
+  assert.equal(isUpdateBusy('installing'), true)
+  assert.equal(isUpdateBusy('idle'), false)
+  assert.equal(isUpdateBusy('available'), false)
+  assert.equal(isUpdateBusy('ready'), false)
+  assert.equal(isUpdateBusy('uptodate'), false)
+  assert.equal(isUpdateBusy('error'), false)
+})
 
 test('版本比较：逐段数字比，缺段补 0', () => {
   assert.equal(compareVersions('0.2.0', '0.1.0'), 1)

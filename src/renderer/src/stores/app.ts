@@ -430,7 +430,7 @@ export const useAppStore = defineStore('app', {
     activeFile: null as null | { path: string; name: string },
     /** 全局提示（错误横幅） */
     error: '',
-    /** 客户端更新状态（主进程 ClientUpdate 推送；设置窗口展示） */
+    /** 客户端更新状态（主进程 ClientUpdate 推送；设置窗口 + 桌面浮层展示） */
     update: {
       phase: 'idle',
       currentVersion: '',
@@ -440,6 +440,8 @@ export const useAppStore = defineStore('app', {
       commit: '',
       builtAt: '',
       progress: 0,
+      auto: false,
+      restartAt: 0,
       note: '',
       error: ''
     } as UpdateState
@@ -1864,6 +1866,28 @@ export const useAppStore = defineStore('app', {
       if (!bridge) return
       try {
         this.update = await bridge.updateInstall()
+      } catch (error) {
+        this.update = { ...this.update, phase: 'error', error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+
+    /** 推迟自动重启：回到退出时静默安装（桌面浮层的「稍后」） */
+    async postponeUpdate(): Promise<void> {
+      const bridge = window.fridayBridge
+      if (!bridge) return
+      try {
+        this.update = await bridge.updatePostpone()
+      } catch {
+        // 推迟失败不打扰：倒计时到点主进程照样会装
+      }
+    },
+
+    /** 立即安装并重启（桌面浮层的「立即重启」） */
+    async applyUpdateNow(): Promise<void> {
+      const bridge = window.fridayBridge
+      if (!bridge) return
+      try {
+        this.update = await bridge.updateApply()
       } catch (error) {
         this.update = { ...this.update, phase: 'error', error: error instanceof Error ? error.message : String(error) }
       }

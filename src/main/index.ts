@@ -90,7 +90,7 @@ app.whenReady().then(() => {
   bridge.register()
   updater.register()
   updater.spawnInstallerOnQuit()
-  updater.autoCheck()
+  updater.startAutoUpdate()
   createWindow()
 
   app.on('activate', () => {

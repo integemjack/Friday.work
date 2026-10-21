@@ -9,6 +9,8 @@
 |---|---|
 | `run-tests.cjs` | `npm test` 的入口：esbuild 打包协议层为 cjs，再 `node --test test/` |
 | `make-update-manifest.cjs` | CI 的 release job 用：扫产物目录生成 latest.json（客户端自动更新的数据源） |
+| `serve-fake-update.cjs` | 本地假更新源（latest.json + 指向本机小 exe 的安装包），端到端验证自动更新管线用 |
+| `check-auto-update.cjs` | 自动更新管线端到端探针（CDP）：盯桌面浮层走完 发现→下载→倒计时→稍后→立即重启 并断言 |
 
 ## 真机联调（协议层）
 

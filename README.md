@@ -63,9 +63,14 @@ npm run dist       # NSIS 安装包 + 便携 zip（dist/）
 - 桌面窗口范式、任务栏、多会话窗口并存
 - M3-A 语音（录音消息 + 本地朗读，识别与理解在远端）
 - M4：多机器后台常连、密码添加 SSH、二维码配对、自动安装/升级远程 friday-server、设置页、打包（NSIS + zip）
-- 客户端自动更新（M4 的「再议」项）：CI 在每个 Release 里放 latest.json（version/commit + 各平台安装包的 SHA-256），
-  客户端启动静默查一次、设置页手动查/下载；Windows 退出时静默安装（NSIS `/S`），mac/Linux 定位安装包交用户；
-  rolling 通道靠构建 commit 识别「版本没动但构建新了」（`src/main/ClientUpdate.ts` + `src/shared/update.ts`，5 单测）
+- 客户端自动更新（M4 的「再议」项，已做成全自动）：CI 在每个 Release 里放 latest.json（version/commit +
+  各平台安装包的 SHA-256），rolling 通道靠构建 commit 识别「版本没动但构建新了」（`src/main/ClientUpdate.ts` +
+  `src/shared/update.ts`，单测 `test/update.test.cjs`）。启动 6s 后查一次 + 每 30 分钟定时查
+  （`FRIDAY_WORK_UPDATE_INTERVAL_MIN` 可调）→ 发现新版本 Windows 下自动下载（SHA-256 校验）→ 下载进度显示在
+  桌面浮层（`UpdateOverlay.vue`：进度条 / 8s 倒计时，可「稍后」或「立即重启」）→ 到点静默安装并自动拉起新版本
+  （`--updated /S --force-run`，参数同 electron-updater 的 doInstall）；「退出时静默装」仍是兜底，设置页手动
+  查/下载照旧。mac/Linux 没有无头静默安装的路，自动管线只到发现新版本，下载安装仍由用户触发。
+  dev 里 `FRIDAY_WORK_AUTO_UPDATE=1` 打开自动管线联调（`scripts/serve-fake-update.cjs` + `check-auto-update.cjs` 端到端验证）。
 - 窗口布局持久化：关掉重开后窗口的开关/位置/大小/层叠/最小化/最大化原样回来；
   会话窗口在机器连上后自动重新订阅补开（会话已删则丢弃）；存 localStorage（方案 §2 允许的「UI 偏好」），通话窗口不恢复
 - M1.5 客户端侧：扫码登录（生产 chatserver 真实建码 + 轮询 + 批准）、schat-ws 连接、机器人列表（按备注显示）、和 bot 对话与流式拼装（凭据经 safeStorage 加密）

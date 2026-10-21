@@ -58,10 +58,12 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('friday-open-conversation', handler)
     return () => ipcRenderer.removeListener('friday-open-conversation', handler)
   },
-  /** 客户端更新：拉当前状态 / 手动检查 / 下载并装（状态变化经 onUpdateState 推送） */
+  /** 客户端更新：拉当前状态 / 手动检查 / 下载并装；自动管线的重启可推迟/立即执行（状态变化经 onUpdateState 推送） */
   updateState: (): Promise<UpdateState> => ipcRenderer.invoke('update:state'),
   updateCheck: (): Promise<UpdateState> => ipcRenderer.invoke('update:check'),
   updateInstall: (): Promise<UpdateState> => ipcRenderer.invoke('update:install'),
+  updatePostpone: (): Promise<UpdateState> => ipcRenderer.invoke('update:postpone'),
+  updateApply: (): Promise<UpdateState> => ipcRenderer.invoke('update:apply'),
   onUpdateState: (listener: (state: UpdateState) => void): (() => void) => {
     const handler = (_event: unknown, state: UpdateState): void => listener(state)
     ipcRenderer.on('update:state', handler)

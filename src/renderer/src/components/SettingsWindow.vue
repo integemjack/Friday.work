@@ -31,9 +31,12 @@ const server = ref<Record<string, unknown> | null>(null)
 
 const machine = computed(() => store.currentMachineInfo)
 
-// 客户端更新（主进程 ClientUpdate；状态在 store.update，启动时主进程自动查过一次）
+// 客户端更新（主进程 ClientUpdate；状态在 store.update。自动管线：定时查到新版本会自动下载，
+// Windows 下载完倒计时自动安装重启；进度另在桌面右下角浮层 UpdateOverlay 播报）
 const update = computed(() => store.update)
-const updateBusy = computed(() => update.value.phase === 'checking' || update.value.phase === 'downloading')
+const updateBusy = computed(
+  () => update.value.phase === 'checking' || update.value.phase === 'downloading' || update.value.phase === 'installing'
+)
 const canInstall = computed(() => update.value.phase === 'available' || update.value.phase === 'ready')
 const installLabel = computed(() =>
   update.value.phase === 'ready' ? '重新下载' : update.value.platform === 'win32' ? '下载并安装' : '下载安装包'
@@ -138,6 +141,8 @@ onMounted(load)
         <div class="bar" :style="{ width: percentText }" />
       </div>
       <div v-if="update.phase === 'uptodate'" class="note">已是最新版本。</div>
+      <div v-if="update.phase === 'installing'" class="note">正在静默安装，应用即将重启…</div>
+      <div class="note">每 30 分钟自动检查；Windows 下发现更新会自动下载并重启安装，下载进度也显示在桌面右下角。</div>
       <div v-if="update.note" class="note">{{ update.note }}</div>
       <div v-if="update.error" class="error">{{ update.error }}</div>
       <div class="update-actions">

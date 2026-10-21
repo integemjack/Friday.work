@@ -29,10 +29,14 @@ declare global {
       winClose(): void
       /** 点通知回会话 */
       onOpenConversation(listener: (conversationID: string) => void): () => void
-      /** 客户端更新（设置窗口展示；状态变化由主进程推送） */
+      /** 客户端更新（设置窗口 + 桌面浮层展示；状态变化由主进程推送） */
       updateState(): Promise<UpdateState>
       updateCheck(): Promise<UpdateState>
       updateInstall(): Promise<UpdateState>
+      /** 推迟自动重启（回到退出时静默安装） */
+      updatePostpone(): Promise<UpdateState>
+      /** 立即安装并重启 */
+      updateApply(): Promise<UpdateState>
       onUpdateState(listener: (state: UpdateState) => void): () => void
     }
   }

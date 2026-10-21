@@ -19,7 +19,9 @@ export interface UpdateManifest {
   client?: Record<string, UpdatePackage>
 }
 
-export type UpdatePhase = 'idle' | 'checking' | 'available' | 'uptodate' | 'downloading' | 'ready' | 'error'
+// downloading 后 Windows 有两条路：手动下载 → 退出时装（auto=false）；
+// 自动管线 → ready 挂倒计时 → installing（拉起安装器并退出，--force-run 装完拉起新版本）。
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'uptodate' | 'downloading' | 'ready' | 'installing' | 'error'
 
 export interface UpdateState {
   phase: UpdatePhase
@@ -33,6 +35,10 @@ export interface UpdateState {
   builtAt: string
   /** 下载进度 0–1（downloading 时有） */
   progress: number
+  /** 这一轮是不是自动管线（定时检查发现后自动下载安装）：桌面浮层/设置页据此挑文案 */
+  auto: boolean
+  /** 自动重启的时刻（epoch ms；> 0 表示 ready 后挂了倒计时，到点主进程装并重启）。推迟后归 0 */
+  restartAt: number
   /** 给人看的一句话（mac / linux 的手动安装提示等） */
   note: string
   error: string
@@ -48,9 +54,16 @@ export function emptyUpdateState(currentVersion = '', currentCommit = '', platfo
     commit: '',
     builtAt: '',
     progress: 0,
+    auto: false,
+    restartAt: 0,
     note: '',
     error: ''
   }
+}
+
+/** 阶段在忙（查 / 下 / 装中）：自动定时器看到忙就跳过这一轮，不叠加 */
+export function isUpdateBusy(phase: UpdatePhase): boolean {
+  return phase === 'checking' || phase === 'downloading' || phase === 'installing'
 }
 
 /** 平台键：process.platform/arch → latest.json 里 client 的键 */
