@@ -643,7 +643,8 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 }
 
 /* 顶端雾化窗帘：sticky 钉在滚动视口顶部、负 margin 不占流内空间；
-   自带 blur + 自身 mask 渐显 → 顶部锐利、往下渐进模糊（自身 mask 不影响自身 backdrop 采样范围）。
+   自带 blur + 自身 mask 渐隐 → 顶部雾化最强、往下淡出（自身 mask 不影响自身 backdrop 采样范围），
+   被裁的旧消息从顶缘的雾里淡出。mask 方向别写反：顶部 #000 才显示窗帘，往下 transparent 收尾。
    只在顶部真有内容被裁（scrollTop > 2）时显示，没有时视频从顶部完整透出 */
 .top-fade {
   position: sticky;
@@ -659,8 +660,8 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
   display: block;
   -webkit-backdrop-filter: blur(18px) saturate(1.4);
   backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 96px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, transparent 96px);
+  mask-image: linear-gradient(to bottom, #000 0, transparent 96px);
 }
 
 .messages {
