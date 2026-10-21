@@ -41,13 +41,22 @@ const currentEngineID = computed(
   () => store.summaries.find((summary) => summary.id === props.conversationId)?.engineID ?? ''
 )
 const currentEngine = computed(() => availableEngines.value.find((engine) => engine.id === currentEngineID.value))
-/** 没选过时显示新对话默认引擎的标题（REMOTE.md：engineID 空 = 跟随默认） */
-const currentEngineTitle = computed(
-  () =>
-    currentEngine.value?.title ??
-    availableEngines.value.find((engine) => engine.id === store.defaultEngineID)?.title ??
-    '默认模型'
+/** 没选过时跟随新对话默认引擎（REMOTE.md：engineID 空 = 跟随默认） */
+const effectiveEngine = computed(
+  () => currentEngine.value ?? availableEngines.value.find((engine) => engine.id === store.defaultEngineID)
 )
+/** 选择器上显示实际使用的模型名（engine.model；title 是服务商名，挪到悬停提示里） */
+const currentEngineLabel = computed(
+  () => effectiveEngine.value?.model || effectiveEngine.value?.title || '默认模型'
+)
+const currentEngineTip = computed(() => {
+  const engine = effectiveEngine.value
+  const text =
+    !engine || engine.model === engine.title
+      ? engine?.title || '默认模型'
+      : `${engine.title} · ${engine.model}`
+  return `当前模型：${text}`
+})
 
 function toggleModelMenu() {
   modelOpen.value = !modelOpen.value
@@ -163,8 +172,18 @@ const sending = computed(() => {
   return runtime?.generating ?? false
 })
 
-/** 助手模式下换占位文案 */
-const placeholder = computed(() => (store.assistantChat ? '和助手说点什么…' : '有什么可以帮你？'))
+/** 占位文案：Enter/Shift+Enter 键盘提示并进 placeholder（不占底行位置）；助手模式/生成中换对应文案 */
+const placeholder = computed(() => {
+  const base = store.assistantChat ? '和助手说点什么…' : '有什么可以帮你？'
+  const enterHint = store.assistantChat
+    ? store.assistantState?.reacting
+      ? 'Enter 发下一句会打断重来'
+      : 'Enter 发给助手'
+    : sending.value
+      ? 'Enter 补充给智能体'
+      : 'Enter 发送'
+  return `${base} · ${enterHint} · Shift+Enter 换行`
+})
 
 const canSend = computed(() => Boolean(text.value.trim()) || attachments.value.length > 0)
 
@@ -548,10 +567,10 @@ onBeforeUnmount(() => {
           <button
             class="model-chip"
             :class="{ open: modelOpen }"
-            :title="switchError || `当前模型：${currentEngineTitle}`"
+            :title="switchError || currentEngineTip"
             @click="toggleModelMenu"
           >
-            <span class="model-name">{{ currentEngineTitle }}</span>
+            <span class="model-name">{{ currentEngineLabel }}</span>
             <span class="model-caret">▾</span>
           </button>
           <div v-if="modelOpen" class="model-menu">
@@ -561,12 +580,12 @@ onBeforeUnmount(() => {
               :key="engine.id"
               class="model-item"
               :class="{ current: engine.id === currentEngineID }"
-              :title="engine.model"
+              :title="engine.model && engine.model !== engine.title ? `${engine.title} · ${engine.model}` : engine.model || engine.title"
               @click="chooseEngine(engine)"
             >
               <span class="model-item-main">
-                <span class="model-item-title">{{ engine.title }}</span>
-                <span v-if="engine.model && engine.model !== engine.title" class="model-item-model">{{ engine.model }}</span>
+                <span class="model-item-title">{{ engine.model || engine.title }}</span>
+                <span v-if="engine.model && engine.title && engine.model !== engine.title" class="model-item-model">{{ engine.title }}</span>
               </span>
               <span v-if="engine.id === currentEngineID" class="model-check">✓</span>
             </button>
@@ -670,24 +689,17 @@ onBeforeUnmount(() => {
         <span v-else-if="switchError" class="error">{{ switchError }}</span>
         <span v-else-if="uploadError" class="error">{{ uploadError }}</span>
         <span v-else-if="dirError" class="error">{{ dirError }}</span>
-        <span class="hint">{{
+        <!-- 键盘提示（Enter/Shift+Enter）已并进 textarea 的 placeholder，这行只在语音/模型下载等临时状态时出现 -->
+        <span v-else-if="modelPrep || starting || transcribing || listening" class="hint">{{
           modelPrep
             ? modelPrep
             : starting
               ? '正在开麦…等变红再说话'
               : transcribing
                 ? '转写中…'
-                : listening
-                  ? voiceMode === 'click'
-                    ? '正在听 · 再点一下结束 · Esc 停止'
-                    : '正在听 · 松开结束'
-                  : store.assistantChat
-                    ? assistantReacting
-                      ? '助手在说 · Enter 发下一句会打断重来 · Shift+Enter 换行'
-                      : 'Enter 发给助手 · Shift+Enter 换行'
-                    : sending
-                      ? 'Enter 补充给智能体 · Shift+Enter 换行'
-                      : 'Enter 发送 · Shift+Enter 换行'
+                : voiceMode === 'click'
+                  ? '正在听 · 再点一下结束 · Esc 停止'
+                  : '正在听 · 松开结束'
         }}</span>
         <span class="spacer" />
         <!-- 发送键那组：语音键浮在发送键正上方（跟着发送键走，不占行高） -->
