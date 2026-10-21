@@ -285,10 +285,10 @@ export class CallService {
     }
   }
 
-  /** 连接断了：通话一并结束 */
+  /** 连接断了：通话一并结束（disconnected 码让渲染层知道这是断线弄断的，恢复后可自动重拨） */
   onDisconnected(): void {
     if (this.state.phase === 'idle' || this.state.phase === 'ended') return
-    this.end('连接断了')
+    this.end('连接断了', 'disconnected')
   }
 
   private end(reason: string, code = ''): void {

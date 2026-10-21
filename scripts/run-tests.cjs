@@ -19,6 +19,7 @@ run('npx', ['esbuild', 'src/protocol/schat/http.ts', '--bundle', '--platform=nod
 run('npx', ['esbuild', 'src/protocol/rpc/protocol.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/protocol.cjs'])
 run('npx', ['esbuild', 'src/protocol/rpc/ConversationPath.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/path.cjs'])
 run('npx', ['esbuild', 'src/protocol/schat/Login.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/login.cjs'])
+run('npx', ['esbuild', 'src/protocol/schat/SchatService.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/schatservice.cjs'])
 run('npx', ['esbuild', 'src/protocol/work/WorkSignaling.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/worksignaling.cjs'])
 run('npx', ['esbuild', 'src/protocol/session/MachineManager.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/machinemanager.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/workFramer.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/workframer.cjs'])
