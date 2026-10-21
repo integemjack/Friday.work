@@ -142,7 +142,7 @@ onMounted(load)
       </div>
       <div v-if="update.phase === 'uptodate'" class="note">已是最新版本。</div>
       <div v-if="update.phase === 'installing'" class="note">正在静默安装，应用即将重启…</div>
-      <div class="note">每 30 分钟自动检查；Windows 下发现更新会自动下载并重启安装，下载进度也显示在桌面右下角。</div>
+      <div class="note">每 1 分钟自动检查（发布频繁）；Windows 下发现更新会自动下载并重启安装，下载进度也显示在桌面右下角。</div>
       <div v-if="update.note" class="note">{{ update.note }}</div>
       <div v-if="update.error" class="error">{{ update.error }}</div>
       <div class="update-actions">

@@ -7,7 +7,7 @@
 //   macOS / Linux 下载核对后打开镜像 / 定位安装包，装的动作交给用户（没有无头静默安装的路）。
 // 状态经 IPC 推给渲染层（设置窗口 + 桌面浮层 UpdateOverlay 展示进度）。
 // 自动管线（仅打包版；FRIDAY_WORK_AUTO_UPDATE=1 可在 dev 里打开调试）：
-//   启动 6s 后查一次，之后每 30 分钟（FRIDAY_WORK_UPDATE_INTERVAL_MIN 可调）再查；
+//   启动 6s 后查一次，之后每 1 分钟（FRIDAY_WORK_UPDATE_INTERVAL_MIN 可调，单位分钟）再查；
 //   发现更新 → 自动下载（进度推给浮层）→ ready 挂 8s 倒计时（可推迟）→ 到点拉起安装器
 //   （--updated /S --force-run，参数同 electron-updater 的 doInstall）并退出，
 //   NSIS 静默装完 --force-run 把新版本拉起来 = 自动重启。推迟后回到「退出时静默装」。
@@ -39,8 +39,8 @@ const MANIFEST_URLS = [
   `https://github.com/${REPO}/releases/download/rolling/latest.json`
 ].filter(Boolean)
 
-/** 自动检查间隔（分钟）；<=0 关掉定时，只剩启动那一次 */
-const CHECK_INTERVAL_MIN = Number(process.env.FRIDAY_WORK_UPDATE_INTERVAL_MIN || 30)
+/** 自动检查间隔（分钟，默认 1——现在发布比较频繁）；<=0 关掉定时，只剩启动那一次 */
+const CHECK_INTERVAL_MIN = Number(process.env.FRIDAY_WORK_UPDATE_INTERVAL_MIN || 1)
 /** 自动下载完成后到重启的倒计时（给浮层「稍后」留出反应时间） */
 const AUTO_RESTART_DELAY_MS = 8_000
 
