@@ -3,7 +3,7 @@
 // 控制面：文件选择、拖放路径换出、语音片段落盘、系统通知。渲染进程始终接触不到 Node、令牌与凭据。
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { PickedFile } from '../shared/api.js'
+import type { PickedFile, SysStats } from '../shared/api.js'
 import type { UpdateState } from '../shared/update.js'
 
 // 数据面端口：页面加载完成后请求主进程建一对，主进程把 port1 发来，这里转给主世界
@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   deleteStackMedia: (names: string[]): Promise<number> => ipcRenderer.invoke('media-stack:delete', { names }),
   /** 列出已缓存的文件名（启动时回填注册表） */
   listStackMedia: (): Promise<string[]> => ipcRenderer.invoke('media-stack:list'),
+  /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
+  systemStats: (): Promise<SysStats> => ipcRenderer.invoke('sys:stats'),
   /** 系统通知（attention / 任务跑完） */
   notify: (payload: { title: string; body?: string; conversationID?: string }): void => {
     ipcRenderer.send('notify:show', payload)

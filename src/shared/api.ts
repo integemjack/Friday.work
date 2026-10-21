@@ -61,6 +61,19 @@ export interface PickedFile {
   size: number
 }
 
+/** 本机系统资源快照（贾维斯 HUD 的远程遥测用；null = 这台测不了，显示 N/A） */
+export interface SysStats {
+  /** 本机主机名——渲染层用它核对「当前连接的服务器是否就是本机」，对不上不用这份本机数据 */
+  hostname: string
+  cpuPct: number | null
+  ramPct: number | null
+  gpuPct: number | null
+  vramUsedMiB: number | null
+  vramTotalMiB: number | null
+  /** 系统进程数 */
+  procs: number | null
+}
+
 // MARK: 渲染 → 协议
 
 export type HostRequest =

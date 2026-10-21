@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { PickedFile } from '../../shared/api.js'
+import type { PickedFile, SysStats } from '../../shared/api.js'
 import type { UpdateState } from '../../shared/update.js'
 
 declare global {
@@ -33,6 +33,8 @@ declare global {
       deleteStackMedia(names: string[]): Promise<number>
       /** 列出已缓存的文件名（启动时回填注册表） */
       listStackMedia(): Promise<string[]>
+      /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
+      systemStats(): Promise<SysStats>
       /** 系统通知 */
       notify(payload: { title: string; body?: string; conversationID?: string }): void
       /** 界面主题底色（贾维斯深空蓝 / 跟随系统深浅） */

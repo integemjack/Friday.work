@@ -1,13 +1,14 @@
 <script setup lang="ts">
 // 贾维斯 HUD：桌面中央的全息雷达。多层旋转环 + 雷达扫描 + 反应堆核心 + 两侧真实遥测。
 // 不是纯装饰：遥测栏和状态行显示真实数据——FPS（实测）、JS 堆内存、运行时长、CPU 核数、
-// 时区、日期、机器连接状态、窗口数、待确认数、实时时钟；底部 hex 是装饰性数据流。
+// 时区、日期、机器连接状态、窗口数、待确认数、实时时钟；右侧 REMOTE 组是当前服务器的
+// CPU/RAM/GPU/显存/进程数实测（Linux 走 fs.read 读 /proc+/sys，Windows 本机走主进程 IPC）。
 // 随鼠标做 3D 视差倾斜（--par-x/--par-y 由 App.vue 下发，rAF 已插值）。
 // 只在「贾维斯界面」下挂载（App.vue 里 v-if="jarvis"），别的主题不渲染、零开销。
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { rpc } from '../lib/host.js'
-import type { FsReadResult } from '../../../protocol/rpc/protocol.js'
+import type { FsListResult, FsReadResult } from '../../../protocol/rpc/protocol.js'
 
 const store = useAppStore()
 
@@ -72,19 +73,34 @@ const tzText = computed(() => {
   return `UTC${sign}${Number.isInteger(abs) ? abs : abs.toFixed(1)}`
 })
 
-// ---- 远程服务器资源（真实数据，不是装饰）：fs.read 读那台的 /proc ----
-// CPU：/proc/stat 首行聚合，两次采样差值算使用率；RAM：MemTotal/MemAvailable。
-// 没连机器、那台不是 Linux（读不到 /proc）或 fs.read 不给用：显示 N/A 并停轮询（换机器时重试）。
+// ---- 远程服务器资源（真实数据，不是装饰）：按服务器平台分派两路数据源 ----
+//   Linux   —— 协议 fs.read 读那台的 /proc（CPU 差值 / RAM / loadavg 进程数），
+//              GPU/显存再试 /sys/class/drm/card*/device（AMD/Intel 暴露 sysfs，NVIDIA 与虚拟机没有 → N/A）；
+//   Windows —— 只有「服务器就是本机」一种情况测得了：走 fridayBridge.systemStats IPC
+//              （主进程 os.cpus 差值 + nvidia-smi 显存 + tasklist 进程数），返回的 hostname 与
+//              serverInfo.hostname 对得上才用（哪天连了别的 Windows 机器不至于误显示本机数据）。
+// 没连机器 / 那台测不了（fs.read 不给用、平台两条路都不通）：显示 N/A；
+// Linux 的 fs.read 明确失败时停轮询（remoteDead），换机器时自动重试。
 const hostName = ref('N/A')
 const cpuText = ref('…')
 const ramText = ref('…')
+const gpuText = ref('…')
+const vramText = ref('…')
+const procText = ref('…')
 let remoteTimer = 0
-let remoteDead = false // fs.read 明确不给用 / 这台读不到：停轮询，免得每 3 秒白打两枪
+let remoteDead = false // Linux fs.read 明确不给用 / 那台没有 /proc：停轮询，免得每 3 秒白打几枪
 let prevCpu: { idle: number; total: number } | null = null
 let polledMachine = ''
+let gpuCard: string | null = null // Linux 那台探到的 DRM 卡名（/sys/class/drm/card0…）；'' = 探过、没有
 
 function pct(n: number): string {
   return `${Math.max(0, Math.min(100, Math.round(n)))}%`
+}
+
+function fmtVram(usedMiB: number | null, totalMiB: number | null): string {
+  return usedMiB != null && totalMiB != null && totalMiB > 0
+    ? `${(usedMiB / 1024).toFixed(1)}/${(totalMiB / 1024).toFixed(1)}G`
+    : 'N/A'
 }
 
 function parseCpu(text: string): { idle: number; total: number } | null {
@@ -95,35 +111,47 @@ function parseCpu(text: string): { idle: number; total: number } | null {
   return { idle: parts[3]! + (parts[4] ?? 0), total: parts.reduce((sum, v) => sum + v, 0) }
 }
 
-async function pollRemote(): Promise<void> {
-  // 先排下一次再干活：断线/没连时也能在恢复后自动接上；dead 时空转（不发包）
-  remoteTimer = window.setTimeout(() => void pollRemote(), 3000)
-  const machineID = store.currentMachine
-  const info = store.currentMachineInfo
-  if (!machineID || info?.state !== 'ready') {
-    hostName.value = 'N/A'
-    cpuText.value = 'N/A'
-    ramText.value = 'N/A'
-    prevCpu = null
-    remoteDead = false
-    polledMachine = machineID
+function resetRemote(pending: boolean): void {
+  const text = pending ? '…' : 'N/A'
+  cpuText.value = text
+  ramText.value = text
+  gpuText.value = text
+  vramText.value = text
+  procText.value = text
+}
+
+/** 服务器就是本机（Windows）：主进程实测（os/nvidia-smi/tasklist），直接上屏 */
+async function pollLocalServer(serverHostname: string | undefined): Promise<void> {
+  const bridge = window.fridayBridge
+  if (!bridge?.systemStats) {
+    resetRemote(false)
     return
   }
-  if (machineID !== polledMachine) {
-    // 换了台机器：重新起测
-    polledMachine = machineID
-    remoteDead = false
-    prevCpu = null
-    cpuText.value = '…'
-    ramText.value = '…'
-  }
-  if (remoteDead) return
-  hostName.value = info.serverInfo?.hostname || 'REMOTE'
   try {
-    const [stat, mem] = (await Promise.all([
+    const s = await bridge.systemStats()
+    // hostname 对不上 = 连的是别的 Windows 机器，本机数据不作数
+    if (!s || (serverHostname && s.hostname.toLowerCase() !== serverHostname.toLowerCase())) {
+      resetRemote(false)
+      return
+    }
+    cpuText.value = s.cpuPct == null ? 'N/A' : pct(s.cpuPct)
+    ramText.value = s.ramPct == null ? 'N/A' : pct(s.ramPct)
+    gpuText.value = s.gpuPct == null ? 'N/A' : pct(s.gpuPct)
+    vramText.value = fmtVram(s.vramUsedMiB, s.vramTotalMiB)
+    procText.value = s.procs == null ? 'N/A' : String(s.procs)
+  } catch {
+    resetRemote(false)
+  }
+}
+
+/** Linux：fs.read 读那台的 /proc 与 /sys（GPU 是尽力而为，读不到只显示 N/A、不判死） */
+async function pollLinuxServer(machineID: string): Promise<void> {
+  try {
+    const [stat, mem, load] = (await Promise.all([
       rpc(machineID, 'fs.read', { path: '/proc/stat', offset: 0, length: 256 }),
-      rpc(machineID, 'fs.read', { path: '/proc/meminfo', offset: 0, length: 4096 })
-    ])) as [FsReadResult, FsReadResult]
+      rpc(machineID, 'fs.read', { path: '/proc/meminfo', offset: 0, length: 4096 }),
+      rpc(machineID, 'fs.read', { path: '/proc/loadavg', offset: 0, length: 128 })
+    ])) as [FsReadResult, FsReadResult, FsReadResult]
     if (typeof stat?.data === 'string') {
       const sample = parseCpu(atob(stat.data))
       if (sample) {
@@ -147,13 +175,96 @@ async function pollRemote(): Promise<void> {
     } else {
       ramText.value = 'N/A'
     }
+    // loadavg 第 4 字段「运行中/进程总数」：取总数当进程数
+    if (typeof load?.data === 'string') {
+      const m = /(?:^|\s)\d+\/(\d+)\s/.exec(atob(load.data))
+      procText.value = m ? m[1]! : 'N/A'
+    } else {
+      procText.value = 'N/A'
+    }
+    await pollLinuxGpu(machineID)
   } catch {
     // fs.read 不给用（回错误 4）或那台没有 /proc：这台测不了，空转等换机器
-    cpuText.value = 'N/A'
-    ramText.value = 'N/A'
+    resetRemote(false)
     prevCpu = null
     remoteDead = true
   }
+}
+
+/** Linux GPU：/sys/class/drm/ 下 cardN/device 里 AMD/Intel 暴露的 gpu_busy_percent 与 mem_info_vram_*
+ *  （字节）；NVIDIA 没有内核利用率接口、虚拟机没有 GPU——都显示 N/A。卡列表只探一次，换机器重置。 */
+async function pollLinuxGpu(machineID: string): Promise<void> {
+  const read = async (path: string): Promise<string | null> => {
+    try {
+      const r = (await rpc(machineID, 'fs.read', { path, offset: 0, length: 128 })) as FsReadResult
+      return typeof r?.data === 'string' ? atob(r.data).trim() : null
+    } catch {
+      return null
+    }
+  }
+  if (gpuCard === null) {
+    try {
+      const listing = (await rpc(machineID, 'fs.list', { path: '/sys/class/drm' })) as FsListResult
+      gpuCard = listing?.entries?.find((e) => /^card\d+$/.test(e.name))?.name ?? ''
+    } catch {
+      gpuCard = ''
+    }
+  }
+  if (!gpuCard) {
+    gpuText.value = 'N/A'
+    vramText.value = 'N/A'
+    return
+  }
+  const busy = await read(`/sys/class/drm/${gpuCard}/device/gpu_busy_percent`)
+  const busyNum = Number(busy)
+  gpuText.value = busy != null && Number.isFinite(busyNum) ? pct(busyNum) : 'N/A'
+  const [usedBytes, totalBytes] = await Promise.all([
+    read(`/sys/class/drm/${gpuCard}/device/mem_info_vram_used`),
+    read(`/sys/class/drm/${gpuCard}/device/mem_info_vram_total`)
+  ])
+  const used = Number(usedBytes)
+  const total = Number(totalBytes)
+  // sysfs 值是字节，fmtVram 吃 MiB：除 1024²
+  vramText.value =
+    usedBytes != null && totalBytes != null && Number.isFinite(used) && Number.isFinite(total)
+      ? fmtVram(used / 1048576, total / 1048576)
+      : 'N/A'
+}
+
+async function pollRemote(): Promise<void> {
+  // 先排下一次再干活：断线/没连时也能在恢复后自动接上；dead 时空转（不发包）
+  remoteTimer = window.setTimeout(() => void pollRemote(), 3000)
+  const machineID = store.currentMachine
+  const info = store.currentMachineInfo
+  if (!machineID || info?.state !== 'ready') {
+    hostName.value = 'N/A'
+    resetRemote(false)
+    prevCpu = null
+    gpuCard = null
+    remoteDead = false
+    polledMachine = machineID
+    return
+  }
+  if (machineID !== polledMachine) {
+    // 换了台机器：重新起测
+    polledMachine = machineID
+    remoteDead = false
+    prevCpu = null
+    gpuCard = null
+    resetRemote(true)
+  }
+  if (remoteDead) return
+  hostName.value = info.serverInfo?.hostname || 'REMOTE'
+  const platform = info.serverInfo?.platform
+  if (platform === 'windows') {
+    await pollLocalServer(info.serverInfo?.hostname)
+    return
+  }
+  if (platform === 'linux') {
+    await pollLinuxServer(machineID)
+    return
+  }
+  resetRemote(false)
 }
 
 // 连接状态（和任务栏同一份 state，换成 HUD 味的英文短语；0.3 起只剩这几种）
@@ -213,12 +324,17 @@ onBeforeUnmount(() => {
     <div class="hud-top">J.A.R.V.I.S. // FRIDAY DESKTOP</div>
 
     <div class="hud-stage">
-      <!-- 左遥测：本机（实测） -->
+      <!-- 左遥测：上组 = 本机实时（实测）；下组 = 本机日期/核数/时区 -->
       <div class="telemetry">
         <div class="t-head">LOCAL</div>
         <div class="t-row"><span class="t-key">FPS</span><span class="t-val">{{ fps || '…' }}</span></div>
         <div class="t-row"><span class="t-key">MEM</span><span class="t-val">{{ memText }}</span></div>
         <div class="t-row"><span class="t-key">UPTIME</span><span class="t-val">{{ uptime }}</span></div>
+        <div class="t-div">
+          <div class="t-row"><span class="t-key">DATE</span><span class="t-val">{{ dateText }}</span></div>
+          <div class="t-row"><span class="t-key">CORE</span><span class="t-val">{{ coreText }}</span></div>
+          <div class="t-row"><span class="t-key">TZ</span><span class="t-val">{{ tzText }}</span></div>
+        </div>
       </div>
 
       <svg viewBox="0 0 400 400">
@@ -295,19 +411,21 @@ onBeforeUnmount(() => {
         </g>
       </svg>
 
-      <!-- 右遥测：上组 = 远程服务器资源（fs.read 读那台的 /proc，实测）；下组 = 本机日期/核数/时区 -->
+      <!-- 右遥测：远程服务器资源（Linux 走 fs.read 读那台的 /proc+/sys，Windows 本机走主进程 IPC；实测）。
+           HOST 身份行 + 细线下资源组，与左栏（3 行 + t-div 3 行）结构对称、精确等高 -->
       <div class="telemetry align-r">
         <div class="t-head">REMOTE</div>
         <div class="t-row">
           <span class="t-key">HOST</span>
-          <span class="t-val host">{{ hostName }}</span>
+          <!-- 主机名不长就完整显示；超过 10ch 才用 .host（16ch 上限 + 左缘渐隐），短名字不会被 mask 压住首字符 -->
+          <span class="t-val" :class="{ host: hostName.length > 10 }">{{ hostName }}</span>
         </div>
-        <div class="t-row"><span class="t-key">CPU</span><span class="t-val">{{ cpuText }}</span></div>
-        <div class="t-row"><span class="t-key">RAM</span><span class="t-val">{{ ramText }}</span></div>
         <div class="t-div">
-          <div class="t-row"><span class="t-key">DATE</span><span class="t-val">{{ dateText }}</span></div>
-          <div class="t-row"><span class="t-key">CORE</span><span class="t-val">{{ coreText }}</span></div>
-          <div class="t-row"><span class="t-key">TZ</span><span class="t-val">{{ tzText }}</span></div>
+          <div class="t-row"><span class="t-key">CPU</span><span class="t-val">{{ cpuText }}</span></div>
+          <div class="t-row"><span class="t-key">RAM</span><span class="t-val">{{ ramText }}</span></div>
+          <div class="t-row"><span class="t-key">GPU</span><span class="t-val">{{ gpuText }}</span></div>
+          <div class="t-row"><span class="t-key">VRAM</span><span class="t-val">{{ vramText }}</span></div>
+          <div class="t-row"><span class="t-key">PROC</span><span class="t-val">{{ procText }}</span></div>
         </div>
       </div>
     </div>
@@ -468,7 +586,7 @@ svg {
   margin-bottom: -4px;
 }
 
-/* 右遥测第二组（日期/核数/时区）：细线隔开远程资源组 */
+/* 遥测第二组（左遥测下方的日期/核数/时区）：细线隔开 */
 .t-div {
   display: flex;
   flex-direction: column;

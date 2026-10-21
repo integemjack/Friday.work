@@ -7,6 +7,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { deleteStackMediaFiles, isValidStackMediaName, listStackMediaFiles, saveStackMediaFile } from '../MediaStack.js'
+import { registerSysStatsIpc } from './SysStats.js'
 
 export interface PickedFile {
   handle: string
@@ -35,6 +36,9 @@ export class IpcBridge {
   }
 
   register(): void {
+    // 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数）
+    registerSysStatsIpc()
+
     ipcMain.on('friday-request-port', (event) => {
       this.protocolHost.providePort(event.sender)
     })
