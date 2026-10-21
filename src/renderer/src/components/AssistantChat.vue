@@ -24,6 +24,15 @@ const messages = computed(() => {
 const runtime = computed(() => detail.value?.runtime ?? null)
 const approvals = computed(() => store.approvals[conversationID.value] ?? [])
 
+// 排队 / 待插入的消息（runtime.queue）：像用户消息一样靠右、虚线描边的淡色气泡，可撤回（qt QueuedBubbles）
+const queued = computed(() => runtime.value?.queue ?? [])
+const queuePaused = computed(() => runtime.value?.queuePaused ?? false)
+
+/** 服务端给的 attachments 是路径；显示用文件名 */
+function baseName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path
+}
+
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
@@ -73,12 +82,21 @@ watch(allMessages, (next, prev) => {
   }
 })
 
+// 新排队一条（插入内容）也强制贴底：气泡落在消息流末尾，跟着回到底部才能看到它
+watch(queued, (next, prev) => {
+  if (next.length > (prev?.length ?? 0)) {
+    stickToBottom.value = true
+    void scrollToBottom(true)
+  }
+})
+
 const statusLine = computed(() => {
   const current = runtime.value
   if (!current) return ''
-  if (current.generating) return '正在生成…'
+  if (current.generating) return current.queue.length > 0 ? `正在生成 · ${current.queue.length} 条待插入` : '正在生成…'
   if (current.stopping) return '正在停止…'
   if (approvals.value.length > 0) return approvals.value.some((item) => item.questions?.length) ? '等你回答' : '等待你确认'
+  if (current.queuePaused && current.queue.length > 0) return '排队已暂停'
   if (current.queue.length > 0) return `${current.queue.length} 条消息排队`
   return ''
 })
@@ -89,6 +107,22 @@ const statusLine = computed(() => {
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
       <div ref="messagesEl" class="messages">
         <MessageItem v-for="entry in messages" :key="entry.message.id" :message="entry.message" />
+
+        <!-- 排队 / 待插入的消息（qt QueuedBubbles）：靠右虚线气泡，随列表滚动，接在消息流末尾 -->
+        <div v-if="queued.length > 0" class="queued">
+          <div v-for="item in queued" :key="item.id" class="queued-item">
+            <div v-if="item.attachments.length > 0" class="queued-atts" :title="item.attachments.join(', ')">
+              📎 {{ item.attachments.map(baseName).join('、') }}
+            </div>
+            <div v-if="item.text" class="queued-bubble">{{ item.text }}</div>
+            <button class="queued-remove" title="撤回这条，不交给智能体" @click="store.removeQueued(conversationID, item.id)">撤回</button>
+          </div>
+          <div class="queued-status" :class="{ paused: queuePaused }">
+            <span>{{ queuePaused ? '排队已暂停' : '排队中 · 做完当前这一步就交给它' }}</span>
+            <button v-if="queuePaused" class="queued-resume" @click="store.resumeQueue(conversationID)">发送</button>
+          </div>
+        </div>
+
         <div v-if="!conversationID" class="hint">
           {{ store.connected ? '直接说话，和助手开一段新对话' : '先连上机器' }}
         </div>
@@ -291,5 +325,83 @@ const statusLine = computed(() => {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+}
+
+/* 排队 / 待插入的消息（qt QueuedBubbles）：靠右、虚线描边的淡色气泡（正式用户气泡是实底） */
+.queued {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.queued-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.queued-atts {
+  max-width: 90%;
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-bubble {
+  max-width: 92%;
+  padding: 7px 11px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.queued-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.queued-remove:hover {
+  color: var(--fail);
+}
+
+.queued-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.queued-status.paused {
+  color: var(--warn);
+}
+
+.queued-resume {
+  border: 1px solid var(--warn);
+  background: transparent;
+  color: var(--warn);
+  font-size: 11px;
+  padding: 1px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.queued-resume:hover {
+  background: var(--warn);
+  color: #fff;
 }
 </style>

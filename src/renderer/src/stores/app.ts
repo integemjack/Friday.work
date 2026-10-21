@@ -1583,6 +1583,21 @@ export const useAppStore = defineStore('app', {
       await rpc(this.currentMachine, 'runner.stop', { conversationID: target })
     },
 
+    // MARK: 插入内容（工作中补充，对照 Friday 桌面端 v1.6）
+
+    /** 撤回一条排队 / 待插入的消息（REMOTE.md：runner.removeQueued {conversationID, itemID}） */
+    async removeQueued(conversationID: string, itemID: string) {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'runner.removeQueued', { conversationID, itemID })
+    },
+
+    /** 上一轮被停止后暂停的排队消息：用户点了「发送」（REMOTE.md：runner.resumeQueue {conversationID}） */
+    async resumeQueue(conversationID?: string) {
+      const target = conversationID ?? this.activeConversationID
+      if (!this.currentMachine || !target) return
+      await rpc(this.currentMachine, 'runner.resumeQueue', { conversationID: target })
+    },
+
     // ---- 桌面投窗（气泡 / 操作卡）：会话不再是窗口，流式内容从这里上桌面 ----
 
     /** 投出物的避让尺寸（增长上限）：投出后会随流式内容长高，落点选取与已占矩形部必须按
