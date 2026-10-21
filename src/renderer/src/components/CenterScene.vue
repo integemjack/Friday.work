@@ -2,6 +2,7 @@
 // 桌面中央 3D 场景（2026-10：中栏改 3D 形式）：纯 CSS 3D，零依赖——
 // 透视网格地面（向观察者流动）+ 缓慢自转的线框陀螺环 + 中心辉光核。
 // 只是氛围层：pointer-events 全关，铺在桌面背景上、气泡/操作卡/浮动窗口之下，主题色跟随 --accent。
+// 只属于默认（跟随系统）主题；贾维斯主题不挂（App.vue 里 v-if="!jarvis"，那边走自己的深空层 + HUD）。
 </script>
 
 <template>
@@ -230,7 +231,7 @@
   }
 }
 
-/* 注：贾维斯装饰层动画不随系统 prefers-reduced-motion 关闭——
-   动效是这个主题的核心体验，且本机 Windows 关了「动画效果」（性能模式），
-   跟随系统 hint 会让整套主题静默变成纯静态（实测 matchMedia 报 reduce）。 */
+/* 注：动画不随系统 prefers-reduced-motion 关闭——
+   本机 Windows 关了「动画效果」（性能模式），跟随系统 hint 会让场景静默变成纯静态
+   （实测 matchMedia 报 reduce），失去这套氛围层的意义。 */
 </style>

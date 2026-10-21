@@ -162,10 +162,12 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
       </aside>
 
       <!-- 中间：3D 场景铺在背景上（网格地面 + 自转陀螺环，纯 CSS 不挡交互），气泡/操作卡投在它上面；
+           只属于默认（跟随系统）主题——贾维斯有自己的装饰层（深空星野 + HUD + 扫描线），
+           3D 场景混进去会跟它们叠影打架；
            媒体叠（看图/看视频成功归档，图片一叠视频一叠）压在最底层，被气泡/卡/窗口盖住就点不到；
            底部居中悬浮输入台（盖过投层气泡，别被随机投下的气泡挡住打字） -->
       <section class="main-area">
-        <CenterScene />
+        <CenterScene v-if="!jarvis" />
         <DesktopMediaStacks />
         <div class="composer-dock">
           <Composer :conversation-id="conversationID" @submit="onComposerSubmit" />
