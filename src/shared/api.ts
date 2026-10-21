@@ -74,6 +74,12 @@ export interface SysStats {
   procs: number | null
 }
 
+/** sysstats.json 的格式（SysStats + 写入时刻）：别的电脑 fs.read 读它看这台的资源，
+ *  at 距今太远说明那台服务器上的 Friday Work 没在写（没跑/刚断），不采信 */
+export interface SysStatsSnapshot extends SysStats {
+  at: number
+}
+
 // MARK: 渲染 → 协议
 
 export type HostRequest =

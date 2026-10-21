@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { rpc } from '../lib/host.js'
 import type { FsListResult, FsReadResult } from '../../../protocol/rpc/protocol.js'
+import type { SysStatsSnapshot } from '../../../shared/api.js'
 
 const store = useAppStore()
 
@@ -73,12 +74,15 @@ const tzText = computed(() => {
   return `UTC${sign}${Number.isInteger(abs) ? abs : abs.toFixed(1)}`
 })
 
-// ---- 远程服务器资源（真实数据，不是装饰）：按服务器平台分派两路数据源 ----
+// ---- 远程服务器资源（真实数据，不是装饰）：按服务器平台分派数据源 ----
 //   Linux   —— 协议 fs.read 读那台的 /proc（CPU 差值 / RAM / loadavg 进程数），
 //              GPU/显存再试 /sys/class/drm/card*/device（AMD/Intel 暴露 sysfs，NVIDIA 与虚拟机没有 → N/A）；
-//   Windows —— 只有「服务器就是本机」一种情况测得了：走 fridayBridge.systemStats IPC
-//              （主进程 os.cpus 差值 + nvidia-smi 显存 + tasklist 进程数），返回的 hostname 与
-//              serverInfo.hostname 对得上才用（哪天连了别的 Windows 机器不至于误显示本机数据）。
+//   Windows —— 两级：①「服务器就是本机」时走 fridayBridge.systemStats IPC（主进程 os.cpus 差值
+//              + nvidia-smi + tasklist），返回 hostname 与 serverInfo.hostname 对得上才用；
+//              ②从别的电脑连这台时（①的 hostname 对不上），协议 fs.read 读服务器上
+//              %ProgramData%\Friday\sysstats.json——那份文件由服务器机器上跑着的 Friday Work
+//              主进程每次采样写入（协议没有系统采样方法，这是纯客户端仓库内的跨机器桥）；
+//              文件读不到 / 超过 10 秒没更新（那台没跑 Friday Work）→ N/A。
 // 没连机器 / 那台测不了（fs.read 不给用、平台两条路都不通）：显示 N/A；
 // Linux 的 fs.read 明确失败时停轮询（remoteDead），换机器时自动重试。
 const hostName = ref('N/A')
@@ -120,28 +124,56 @@ function resetRemote(pending: boolean): void {
   procText.value = text
 }
 
-/** 服务器就是本机（Windows）：主进程实测（os/nvidia-smi/tasklist），直接上屏 */
-async function pollLocalServer(serverHostname: string | undefined): Promise<void> {
-  const bridge = window.fridayBridge
-  if (!bridge?.systemStats) {
-    resetRemote(false)
-    return
-  }
+/** 把一份 SysStats 上屏（IPC 与 json 桥共用；字段缺失按 null → N/A 处理） */
+function applyStats(s: Partial<SysStatsSnapshot>): void {
+  cpuText.value = s.cpuPct == null ? 'N/A' : pct(s.cpuPct)
+  ramText.value = s.ramPct == null ? 'N/A' : pct(s.ramPct)
+  gpuText.value = s.gpuPct == null ? 'N/A' : pct(s.gpuPct)
+  vramText.value = fmtVram(s.vramUsedMiB ?? null, s.vramTotalMiB ?? null)
+  procText.value = s.procs == null ? 'N/A' : String(s.procs)
+}
+
+/** Windows 服务器·第二级：服务器不是本机（从别的电脑连它）——协议 fs.read 读
+ *  服务器上跑着的 Friday Work 写的 %ProgramData%\Friday\sysstats.json。
+ *  读不到 / JSON 坏了 / 超过 10 秒没更新（那台没跑 Friday Work 或刚断）→ N/A。 */
+const REMOTE_STATS_PATH = 'C:/ProgramData/Friday/sysstats.json'
+const REMOTE_STATS_FRESH_MS = 10_000
+
+async function pollWindowsViaFile(machineID: string): Promise<void> {
   try {
-    const s = await bridge.systemStats()
-    // hostname 对不上 = 连的是别的 Windows 机器，本机数据不作数
-    if (!s || (serverHostname && s.hostname.toLowerCase() !== serverHostname.toLowerCase())) {
+    const r = (await rpc(machineID, 'fs.read', { path: REMOTE_STATS_PATH, offset: 0, length: 2048 })) as FsReadResult
+    if (typeof r?.data !== 'string') {
       resetRemote(false)
       return
     }
-    cpuText.value = s.cpuPct == null ? 'N/A' : pct(s.cpuPct)
-    ramText.value = s.ramPct == null ? 'N/A' : pct(s.ramPct)
-    gpuText.value = s.gpuPct == null ? 'N/A' : pct(s.gpuPct)
-    vramText.value = fmtVram(s.vramUsedMiB, s.vramTotalMiB)
-    procText.value = s.procs == null ? 'N/A' : String(s.procs)
+    const s = JSON.parse(atob(r.data)) as Partial<SysStatsSnapshot>
+    if (typeof s?.at !== 'number' || Date.now() - s.at > REMOTE_STATS_FRESH_MS) {
+      resetRemote(false)
+      return
+    }
+    applyStats(s)
   } catch {
     resetRemote(false)
   }
+}
+
+/** Windows 服务器：先试本机 IPC（服务器就是这台机器时最快最准），
+ *  hostname 对不上（= 从别的电脑连这台服务器）就落到 fs.read 读 json 桥。 */
+async function pollLocalServer(machineID: string, serverHostname: string | undefined): Promise<void> {
+  const bridge = window.fridayBridge
+  if (bridge?.systemStats) {
+    try {
+      const s = await bridge.systemStats()
+      // hostname 对不上 = 连的是别的 Windows 机器：本机数据不作数，落到 json 桥
+      if (s && (!serverHostname || s.hostname.toLowerCase() === serverHostname.toLowerCase())) {
+        applyStats(s)
+        return
+      }
+    } catch {
+      // IPC 出错也落到 json 桥再试
+    }
+  }
+  await pollWindowsViaFile(machineID)
 }
 
 /** Linux：fs.read 读那台的 /proc 与 /sys（GPU 是尽力而为，读不到只显示 N/A、不判死） */
@@ -257,7 +289,7 @@ async function pollRemote(): Promise<void> {
   hostName.value = info.serverInfo?.hostname || 'REMOTE'
   const platform = info.serverInfo?.platform
   if (platform === 'windows') {
-    await pollLocalServer(info.serverInfo?.hostname)
+    await pollLocalServer(machineID, info.serverInfo?.hostname)
     return
   }
   if (platform === 'linux') {

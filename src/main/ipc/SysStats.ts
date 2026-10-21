@@ -3,9 +3,13 @@
 // CPU：os.cpus() 与上次采样的差值（首次没有基准返回 null，3 秒轮询下第二轮起有值）；
 // RAM：os.totalmem / os.freemem；GPU 与显存：nvidia-smi（本机没有 NVIDIA 时为 null，HUD 显示 N/A）；
 // 进程数：Windows 用 tasklist 数行，类 Unix 用 ps 数行。
+// 每次采样还把快照发布到 %ProgramData%\Friday\sysstats.json——别的电脑连这台机器当
+// 服务器时，渲染层用协议 fs.read 读它（协议没有系统采样方法，这是纯客户端侧的跨机器桥）。
 // 结果缓存 2.5 秒：HUD 每 3 秒问一次刚好逐轮刷新，多个窗口同问也不会重复开子进程。
 
 import { execFile } from 'node:child_process'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { ipcMain } from 'electron'
 import os from 'node:os'
 import type { SysStats } from '../../shared/api.js'
@@ -66,12 +70,32 @@ const CACHE_MS = 2500
 let cached: { at: number; stats: SysStats } | null = null
 let inFlight: Promise<SysStats> | null = null
 
+// ---- 跨机器桥：把快照发布到 %ProgramData%\Friday\sysstats.json ----
+// 协议没有系统采样方法，别的电脑连这台 Windows 机器当服务器时，渲染层只能用 fs.read
+// 读这份文件（由这台机器上跑着的 Friday Work 每次采样顺手写）。Linux 服务器不需要
+//（fs.read 直接读 /proc+/sys）。写失败静默：尽力而为，不影响本机 HUD。
+const SNAPSHOT_PATH = join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Friday', 'sysstats.json')
+
+async function publishSnapshot(stats: SysStats): Promise<void> {
+  if (process.platform !== 'win32') return
+  try {
+    const payload = JSON.stringify({ ...stats, at: Date.now() })
+    await mkdir(dirname(SNAPSHOT_PATH), { recursive: true })
+    await writeFile(SNAPSHOT_PATH + '.tmp', payload, 'utf8')
+    await rename(SNAPSHOT_PATH + '.tmp', SNAPSHOT_PATH)
+  } catch {
+    // 权限/磁盘问题：跳过这次，下轮采样再试
+  }
+}
+
 async function collect(): Promise<SysStats> {
   const cpuPct = sampleCpuPct()
   const total = os.totalmem()
   const ramPct = total > 0 ? Math.round(((total - os.freemem()) / total) * 100) : null
   const [gpu, procs] = await Promise.all([sampleGpu(), sampleProcCount()])
-  return { hostname: os.hostname(), cpuPct, ramPct, ...gpu, procs }
+  const stats: SysStats = { hostname: os.hostname(), cpuPct, ramPct, ...gpu, procs }
+  await publishSnapshot(stats)
+  return stats
 }
 
 /** IPC 'sys:stats' 的实现（带缓存；HUD 3 秒轮询一次，缓存防止更密的调用反复开子进程） */
