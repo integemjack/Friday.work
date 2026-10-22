@@ -199,6 +199,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/voice-*.zip dist/voice-*.tar.gz --title "$TAG" \
+          # voice-*.json 是打包时生成的校验清单（sha256），客户端下引擎 zip 时要拿它校验，必须一起发
+          gh release create "$TAG" dist/voice-*.zip dist/voice-*.tar.gz dist/voice-*.json --title "$TAG" \
             --notes "friday-voice ${TAG#voice-v}：本地 GPU 实时听写 + 边写边读 + 音色克隆（v0.5 起）。各平台包见附件，客户端按平台从这里下载。" \
-            || gh release upload "$TAG" dist/voice-*.zip dist/voice-*.tar.gz --clobber
+            || gh release upload "$TAG" dist/voice-*.zip dist/voice-*.tar.gz dist/voice-*.json --clobber

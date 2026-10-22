@@ -47,7 +47,9 @@ interface Asset {
   file: string
   /** 候选地址（按顺序试，第一个不通换下一个） */
   urls: string[]
-  sha256: string
+  /** 固定内容的模型写死校验值；引擎 zip 是 CI 现打的（哈希随构建变），不写——从同
+   *  Release 的 sidecar（voice-*.json，打包时生成）拉真实 sha256 再校验 */
+  sha256?: string
   /** 下载进度里显示的名字 */
   label: string
 }
@@ -66,8 +68,7 @@ function engineTarget(): { asset: Asset; dir: string } | null {
       asset: {
         file: 'engine.zip',
         label: '语音引擎（Vulkan）',
-        urls: releaseUrls(`${RELEASE_BASE}/voice-v${POWER_VERSION}/voice-${POWER_VERSION}-windows-x64-vulkan.zip`),
-        sha256: '69281bc9e8a17c7aa0ad7e77fe4f399ab7ed8736ae6a435aff410dd652859c70'
+        urls: releaseUrls(`${RELEASE_BASE}/voice-v${POWER_VERSION}/voice-${POWER_VERSION}-windows-x64-vulkan.zip`)
       }
     }
   }
@@ -77,8 +78,7 @@ function engineTarget(): { asset: Asset; dir: string } | null {
       asset: {
         file: 'engine.tar.gz',
         label: '语音引擎（Metal）',
-        urls: releaseUrls(`${RELEASE_BASE}/voice-v${POWER_VERSION}/voice-${POWER_VERSION}-macos-arm64-metal.tar.gz`),
-        sha256: '122c3d8f9bfa54b27e153b1408b65c75fda625ea9ada92cecc52dbcc351244f9'
+        urls: releaseUrls(`${RELEASE_BASE}/voice-v${POWER_VERSION}/voice-${POWER_VERSION}-macos-arm64-metal.tar.gz`)
       }
     }
   }
@@ -88,8 +88,7 @@ function engineTarget(): { asset: Asset; dir: string } | null {
       asset: {
         file: 'engine.tar.gz',
         label: '语音引擎（Vulkan）',
-        urls: releaseUrls(`${RELEASE_BASE}/voice-v${POWER_VERSION}/voice-${POWER_VERSION}-linux-x64-vulkan.tar.gz`),
-        sha256: 'd92062af22d6a37985732ee4e35c098e3b24d6584b44616a1415bb09d037c3ff'
+        urls: releaseUrls(`${RELEASE_BASE}/voice-v${POWER_VERSION}/voice-${POWER_VERSION}-linux-x64-vulkan.tar.gz`)
       }
     }
   }
@@ -233,6 +232,17 @@ async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressCha
   for (const url of asset.urls) {
     try {
       pushProgress(to, 'downloading', 0, asset.label, channel)
+      // 没写死 sha 的（引擎 zip）：从同 Release 的 sidecar json（打包时生成）取真实值，
+      // 顺带校验版本号——防止镜像缓存了旧版本的包
+      let expected = asset.sha256
+      if (!expected) {
+        const sidecar = await fetch(`${url}.json`, { redirect: 'follow' })
+        if (!sidecar.ok) throw new Error(`校验清单拉取失败（HTTP ${sidecar.status}）`)
+        const info = (await sidecar.json()) as { sha256?: string; version?: string }
+        if (info.version && info.version !== POWER_VERSION) throw new Error(`引擎包版本不符（Release 里是 ${info.version}）`)
+        expected = info.sha256
+        if (!expected) throw new Error('校验清单里没有 sha256')
+      }
       const res = await fetch(url, { redirect: 'follow' })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
       const total = Number(res.headers.get('content-length') ?? 0)
@@ -251,7 +261,7 @@ async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressCha
       })
       await pipeline(stream, createWriteStream(part))
       const digest = hash.digest('hex')
-      if (digest !== asset.sha256) throw new Error(`校验不过（sha256 ${digest.slice(0, 12)}…）`)
+      if (digest !== expected) throw new Error(`校验不过（sha256 ${digest.slice(0, 12)}…）`)
       await rename(part, dest)
       return
     } catch (error) {
