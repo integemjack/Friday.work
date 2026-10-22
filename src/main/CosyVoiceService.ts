@@ -26,7 +26,7 @@
 // 听写下 Whisper turbo），已在跑的 serve 缺本次需要的能力时重启换参数。
 
 import { app, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm } from 'node:fs/promises'
@@ -157,14 +157,54 @@ const SPEAK_TIMEOUT_MS = 120_000
 function rootDir(): string {
   return join(app.getPath('userData'), 'voice-power')
 }
+/** 引擎目录带版本（v0.5 起升级 = 下新目录，不再原地覆盖）；zip 解出来是固定名，落地后改名 */
 function engineDir(): string {
-  return join(rootDir(), engineTarget()?.dir ?? 'friday-voice')
+  return join(rootDir(), `friday-voice-${POWER_VERSION}`)
+}
+/** 0.4.x 时代的旧目录（无版本后缀）：新版没就绪时的回落，升级成功后顺手清掉 */
+function legacyEngineDir(): string {
+  return join(rootDir(), 'friday-voice')
 }
 function modelsDir(): string {
   return join(rootDir(), 'models')
 }
+function exeIn(dir: string): string {
+  return join(dir, process.platform === 'win32' ? 'friday-voice.exe' : 'friday-voice')
+}
 function executablePath(): string {
-  return join(engineDir(), process.platform === 'win32' ? 'friday-voice.exe' : 'friday-voice')
+  return exeIn(engineDir())
+}
+function legacyExecutablePath(): string {
+  return exeIn(legacyEngineDir())
+}
+
+/** 路径 → 引擎版本（spawn --version 一次，缓存）；失败/解析不出给 ''。
+ *  v0.5 客户端会传旧引擎不认识的参数（--no-clone 等）：旧引擎要么升级要么降参，不探版本会直接退出码 2 */
+const engineVersions = new Map<string, string>()
+function detectEngineVersion(path: string): string {
+  const cached = engineVersions.get(path)
+  if (cached !== undefined) return cached
+  let version = ''
+  try {
+    const out = spawnSync(path, ['--version'], { timeout: 5000, windowsHide: true, encoding: 'utf8' })
+    const match = /friday-voice\s+([0-9]+\.[0-9]+\.[0-9]+)/.exec(`${out.stdout ?? ''}\n${out.stderr ?? ''}`)
+    if (match) version = match[1] ?? ''
+  } catch {
+    // 起不来（缺 DLL 等）：当未知版本处理
+  }
+  engineVersions.set(path, version)
+  return version
+}
+
+/** a >= b（点分数字比较；空串视为最小） */
+function versionAtLeast(a: string, b: string): boolean {
+  if (!a) return false
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
+  }
+  return true
 }
 
 type ProgressChannel = 'voice:tts-progress' | 'voice:model-progress'
@@ -238,15 +278,25 @@ function extract(archive: string, intoDir: string): Promise<void> {
   })
 }
 
-/** 引擎可执行文件在不在（只查文件，不启动） */
+/** 在用的引擎目录（本版本优先，回落旧版 0.4.x）；两个都没有 = '' */
+function activeEngineDir(): string {
+  return existsSync(executablePath()) ? engineDir() : existsSync(legacyExecutablePath()) ? legacyEngineDir() : ''
+}
+
+/** 引擎可执行文件在不在（只查文件，不启动；含旧版回落） */
 function engineInstalled(): boolean {
-  return existsSync(executablePath()) && existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'))
+  return (
+    (existsSync(executablePath()) || existsSync(legacyExecutablePath())) &&
+    existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'))
+  )
 }
 
 /** 已装引擎包里的音色名（voices/*.gguf，去掉后缀） */
 async function installedVoices(): Promise<string[]> {
+  const dir = activeEngineDir()
+  if (!dir) return []
   try {
-    const names = await readdir(join(engineDir(), 'voices'))
+    const names = await readdir(join(dir, 'voices'))
     return names.filter((n) => n.endsWith('.gguf')).map((n) => n.slice(0, -5)).sort()
   } catch {
     return []
@@ -269,18 +319,31 @@ async function ensureFiles(to: WebContents, need: ServeNeed = {}): Promise<void>
   if (!target) throw new Error(`本机平台（${process.platform}-${process.arch}）没有对应的语音引擎包`)
   const channel = need.progress ?? 'voice:tts-progress'
   if (!existsSync(executablePath())) {
-    await downloadAsset(to, target.asset, channel)
-    pushProgress(to, 'extracting', undefined, target.asset.label, channel)
-    const archive = join(rootDir(), target.asset.file)
+    // 版本目录没有：下本版引擎。旧版（0.4.x 无版本目录）还在时，下载失败（发布资产未就绪等）
+    // 不拖死语音——回落旧引擎继续听写/播报（只是克隆等新能力暂缺），下次再试升级。
+    const hasLegacy = existsSync(legacyExecutablePath())
     try {
-      await extract(archive, rootDir())
-    } catch (error) {
+      await downloadAsset(to, target.asset, channel)
+      pushProgress(to, 'extracting', undefined, target.asset.label, channel)
+      const archive = join(rootDir(), target.asset.file)
+      try {
+        await extract(archive, rootDir())
+      } catch (error) {
+        await rm(archive, { force: true })
+        await rm(join(rootDir(), target.dir), { recursive: true, force: true })
+        throw new Error(`语音引擎解压失败：${String((error as Error)?.message ?? error)}`)
+      }
       await rm(archive, { force: true })
+      // zip/tar 解出来是固定名目录：改成本版本目录，升级不覆盖、可多版本共存
       await rm(engineDir(), { recursive: true, force: true })
-      throw new Error(`语音引擎解压失败：${String((error as Error)?.message ?? error)}`)
+      await rename(join(rootDir(), target.dir), engineDir())
+      if (!existsSync(executablePath())) throw new Error('语音引擎包内容不完整（缺 friday-voice）')
+      // 新版确认可用：旧版目录没用了，清掉（几十 MB，留着只会误导回落）
+      if (hasLegacy) await rm(legacyEngineDir(), { recursive: true, force: true }).catch(() => {})
+    } catch (error) {
+      if (!hasLegacy) throw error
+      console.warn('[voice] 新版引擎下载/安装失败，先用旧版引擎（克隆暂不可用）：', error)
     }
-    await rm(archive, { force: true })
-    if (!existsSync(executablePath())) throw new Error('语音引擎包内容不完整（缺 friday-voice）')
   }
   // serve 硬要求的两个先下；按需再下 whisper（听写）/ cosyvoice3（播报）/ 克隆前端
   const needTts = need.forTts || need.forClone
@@ -353,17 +416,30 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
   if (starting) return starting
   const task = (async () => {
     await ensureFiles(to, need)
+    // 用哪个引擎：本版本目录优先，没有（下载失败/未发布）回落旧目录（0.4.x），参数按版本兼容
+    const enginePath = existsSync(executablePath())
+      ? executablePath()
+      : existsSync(legacyExecutablePath())
+        ? legacyExecutablePath()
+        : null
+    if (!enginePath) throw new Error('语音引擎不在（下载失败）')
+    const legacy = enginePath === legacyExecutablePath()
+    const modern = !legacy || versionAtLeast(detectEngineVersion(enginePath), POWER_VERSION)
     // 到这里模型都已落盘：按实际存在与否组 serve 参数（TTS 可选、Whisper 可选）
+    const voicesDir = join(legacy ? legacyEngineDir() : engineDir(), 'voices')
     const hasTts = existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'))
     const hasWhisper = existsSync(join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin'))
     const hasClone =
+      modern &&
       hasTts &&
       existsSync(join(modelsDir(), 'frontend-onnx', 'speech_tokenizer_v3.int8.onnx')) &&
       existsSync(join(modelsDir(), 'frontend-onnx', 'campplus.onnx'))
     if (need.forTts && !hasTts) throw new Error('CosyVoice3 模型缺失')
     if (need.forDictation && !hasWhisper) throw new Error('Whisper 定稿模型缺失')
-    if (need.forClone && !hasClone) throw new Error('音色克隆的前端模型缺失')
-    pushProgress(to, 'loading', undefined, '启动本地语音引擎', channel)
+    if (need.forClone && !hasClone) {
+      throw new Error(legacy ? '新版语音引擎还没下好（克隆需要 v0.5），稍后重试' : '音色克隆的前端模型缺失')
+    }
+    pushProgress(to, 'loading', undefined, legacy ? '启动本地语音引擎（旧版，克隆暂不可用）' : '启动本地语音引擎', channel)
     const token = randomBytes(16).toString('hex')
     const args = [
       'serve',
@@ -372,11 +448,12 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
       // serve 的听写模型是硬要求（SenseVoice + VAD）；TTS / Whisper 定稿按下载情况带上；
       // 声纹（campplus 28MB）还没接功能，永远砍掉
       ...(hasTts
-        ? ['--tts-model', join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'), '--voices', join(engineDir(), 'voices')]
+        ? ['--tts-model', join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'), '--voices', voicesDir]
         : ['--no-tts']),
       ...(hasWhisper ? ['--whisper-model', join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin')] : ['--no-whisper']),
-      // v0.5 克隆：用户音色落 rootDir()/user-voices（升级客户端不丢）；前端模型在才开
-      ...(hasClone ? ['--user-voices', join(rootDir(), 'user-voices')] : ['--no-clone']),
+      // v0.5 克隆：用户音色落 rootDir()/user-voices（升级客户端不丢）；前端模型在才开。
+      // --user-voices/--no-clone 是 0.5 才有的参数：旧引擎传了会「不认识的参数」直接退出（码 2）
+      ...(modern ? (hasClone ? ['--user-voices', join(rootDir(), 'user-voices')] : ['--no-clone']) : []),
       '--no-speaker',
       '--host',
       '127.0.0.1',
@@ -386,7 +463,7 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
       token,
       '--parent-stdin'
     ]
-    const child = spawn(executablePath(), args, { cwd: rootDir(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(enginePath, args, { cwd: rootDir(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     const next: Running = { child, wsUrl: '', token, caps: { tts: hasTts, whisper: hasWhisper, clone: hasClone } }
     let stdoutBuf = ''
     let settled = false
@@ -415,10 +492,12 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
           }
         }
       })
+      let stderrTail = ''
       child.stderr.on('data', (chunk: Buffer) => {
-        // --verbose 没开，这里主要是 ggml 的设备探测和错误
+        // --verbose 没开，这里主要是 ggml 的设备探测和错误；留尾部几百字给启动失败的报错
         const text = chunk.toString('utf8')
-        if (/error|失败|不支持|cannot/.test(text)) console.warn('[cosyvoice3]', text.trim().slice(0, 300))
+        stderrTail = (stderrTail + text).slice(-400)
+        if (/error|失败|不支持|不认识|cannot/.test(text)) console.warn('[cosyvoice3]', text.trim().slice(0, 300))
       })
       child.once('error', (error) => {
         settled = true
@@ -428,7 +507,13 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
       child.once('close', (code) => {
         if (!settled) {
           clearTimeout(timer)
-          reject(new Error(`语音引擎启动后立刻退出（码 ${code}）——常见原因：显卡不支持 Vulkan / 驱动没有 Vulkan 运行库`))
+          // 引擎自己打的错因（「不认识的参数：xxx」「找不到 Vulkan 设备」…）就在 stderr 里，别只猜显卡
+          const why = stderrTail.trim().replace(/\s+/g, ' ').slice(-220)
+          reject(
+            new Error(
+              `语音引擎启动后立刻退出（码 ${code}）${why ? `：${why}` : '——常见原因：显卡不支持 Vulkan / 驱动没有 Vulkan 运行库'}`
+            )
+          )
         }
       })
     })
@@ -677,16 +762,23 @@ export function registerCosyVoiceIpc(): void {
   ipcMain.handle('voice:cv3-cancel', (): void => {
     cancelCosyVoice()
   })
-  // v0.5 克隆状态：前端两个 ONNX + CosyVoice3 都装了才能克隆（引擎端点要合成模型在）
-  ipcMain.handle('voice:clone-status', () => ({
-    supported: engineTarget() !== null,
-    installed:
-      engineTarget() !== null &&
-      existsSync(join(modelsDir(), 'frontend-onnx', 'speech_tokenizer_v3.int8.onnx')) &&
-      existsSync(join(modelsDir(), 'frontend-onnx', 'campplus.onnx')) &&
-      existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf')),
-    serving: running?.caps.clone === true
-  }))
+  // v0.5 克隆状态：引擎得是 0.5（旧版 0.4.x 没有克隆端点）+ 前端两个 ONNX + CosyVoice3 都在
+  ipcMain.handle('voice:clone-status', () => {
+    const dir = activeEngineDir()
+    const modern =
+      !!dir &&
+      (dir === engineDir() || versionAtLeast(detectEngineVersion(exeIn(dir)), POWER_VERSION))
+    return {
+      supported: engineTarget() !== null,
+      installed:
+        engineTarget() !== null &&
+        modern &&
+        existsSync(join(modelsDir(), 'frontend-onnx', 'speech_tokenizer_v3.int8.onnx')) &&
+        existsSync(join(modelsDir(), 'frontend-onnx', 'campplus.onnx')) &&
+        existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf')),
+      serving: running?.caps.clone === true
+    }
+  })
   // 克隆：audio 为 16 kHz Float32（8~15 秒）；没给 text 让引擎听写当底稿。首次会先下前端模型（进度走 voice:model-progress）
   ipcMain.handle(
     'voice:clone',
@@ -741,7 +833,7 @@ export async function dictationEngineState(): Promise<{
     supported: engineTarget() !== null,
     ready:
       engineTarget() !== null &&
-      existsSync(executablePath()) &&
+      (existsSync(executablePath()) || existsSync(legacyExecutablePath())) &&
       existsSync(join(modelsDir(), 'sensevoice-small-q8.gguf')) &&
       existsSync(join(modelsDir(), 'fsmn-vad.gguf')) &&
       existsSync(join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin')),
