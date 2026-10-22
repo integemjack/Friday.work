@@ -65,6 +65,14 @@ declare global {
       listVoices(): Promise<{ voices: string[]; user: string[]; clone: boolean; default: string }>
       /** 删掉一个克隆音色（内置的引擎会拒绝） */
       deleteVoice(name: string): Promise<void>
+      /** 拖进来的音色 gguf：路径 preload 里换（渲染层接触不到），主进程复制进 user-voices 并验证 */
+      importVoiceFiles(files: File[]): Promise<{ imported: string[]; failed: { file: string; error: string }[] }>
+      /** 点「选择文件」导入音色 gguf：主进程弹对话框并导入；canceled = 没选 */
+      pickVoiceFiles(): Promise<{
+        canceled: boolean
+        imported: string[]
+        failed: { file: string; error: string }[]
+      }>
       onTtsModelProgress(
         listener: (
           state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }

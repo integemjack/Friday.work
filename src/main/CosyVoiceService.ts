@@ -25,12 +25,12 @@
 // 听写和播报共用同一个 serve 进程：谁需要什么就下什么（要 TTS 下 CosyVoice3，要实时
 // 听写下 Whisper turbo），已在跑的 serve 缺本次需要的能力时重启换参数。
 
-import { app, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { app, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createWriteStream, existsSync } from 'node:fs'
-import { mkdir, readdir, rename, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { copyFile, mkdir, open as openFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import WebSocket from 'ws'
@@ -546,11 +546,14 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
   })()
   starting = task
   // 启动失败要把占位的 Promise 清掉，下次触发才能重试；成功路径下 running 已置好，
-  // 这里也不能再指回旧 task（stopServe 后拿到已死的地址会直接并报错）
-  task.catch(() => {})
-  void task.finally(() => {
-    if (starting === task) starting = null
-  })
+  // 这里也不能再指回旧 task（stopServe 后拿到已死的地址会直接并报错）。
+  // 注意链序：finally 跟在 catch 后面——单独 void task.finally() 会派生一个无人接的
+  // rejected promise（启动失败时刷 unhandledRejection）
+  task
+    .catch(() => {})
+    .finally(() => {
+      if (starting === task) starting = null
+    })
   return task
 }
 
@@ -756,6 +759,157 @@ async function cloneVoiceRequest(
   return { voice: body.voice ?? name, transcript: body.transcript ?? '', seconds: body.seconds ?? 0, took: body.took ?? 0 }
 }
 
+// MARK: 导入现成音色 gguf（v0.5）：拖拽/选文件 → user-voices/ 持久化 → 重启 serve 验证
+
+/** 音色名规则（引擎 Server.cpp validVoiceName 同款）：字母数字下划线连字符中文，最长 60 */
+function validVoiceName(name: string): boolean {
+  return name.length > 0 && name.length <= 60 && /^[\p{L}\p{N}_-]+$/u.test(name)
+}
+
+/** 导入接口的结果：成功的给音色名，失败的给原文件名 + 人话原因 */
+interface VoiceImportResult {
+  imported: string[]
+  failed: { file: string; error: string }[]
+}
+
+/** 导入一批音色 gguf（克隆导出的 / 从别的机器拷来的，和内置 voices/*.gguf 同格式）：
+ *  校验 → 先落 import-staging（引擎不扫）→ 移进 user-voices（持久化，升级客户端不丢）
+ *  → 重启 serve 扫描 → /v1/voices 列表确认。必须「列表里看得到」才算成功：引擎对加载
+ *  不了的 gguf 只是静默跳过，不确认的话用户以为导入成功、列表里却永远不出现。
+ *
+ *  更要命的是实测发现：header 坏掉的 gguf 会让 serve 启动即退（不是跳过）——直接复制进去
+ *  验证的话，一个坏文件就把整个语音（播报+听写）毒死到手动删文件为止。所以验证分两级：
+ *  快路径一批全验；serve 起不来就撤回 staging 逐个验（单个起不来 → 移走再起一次对照，
+ *  起来了才归罪于文件，起不来是环境问题 → 回滚本次导入、不碰 user-voices）。 */
+async function importVoiceFiles(to: WebContents, paths: string[]): Promise<VoiceImportResult> {
+  if (!engineInstalled()) throw new Error('语音引擎还没下载好，先下载（约 1.2GB）再导入音色')
+  // 旧引擎（0.4.x）没有 --user-voices，扫不到导入的文件——会被误报成「gguf 无效」，先挡住
+  const dir = activeEngineDir()
+  const modern = !!dir && (dir === engineDir() || versionAtLeast(detectEngineVersion(exeIn(dir)), POWER_VERSION))
+  if (!modern) throw new Error('本机的语音引擎还是旧版（导入音色需要 v0.5）：新版引擎还没下载好，稍后重试')
+  const builtin = new Set(await installedVoices())
+  const userDir = join(rootDir(), 'user-voices')
+  const staging = join(rootDir(), 'import-staging') // 暂存区：serve 不扫，坏文件在这里毒不到引擎
+  const failed: { file: string; error: string }[] = []
+  const staged: { name: string; from: string }[] = []
+  const stagedFile = (name: string): string => join(staging, `${name}.gguf`)
+  const userFile = (name: string): string => join(userDir, `${name}.gguf`)
+  const backupFile = (name: string): string => join(staging, `backup-${name}.gguf`)
+  const invalidVoice = '引擎加载不了（不是有效的 CosyVoice 音色 gguf）'
+
+  // ① 逐个校验 + 复制到 staging；同名重复导入 = 更新那个音色（先备份旧版，失败可恢复）
+  for (const raw of paths) {
+    const file = String(raw ?? '')
+    try {
+      const info = await stat(file)
+      if (!info.isFile()) throw new Error('不是文件')
+      if (!/\.gguf$/i.test(file)) throw new Error('不是 .gguf 文件')
+      if (info.size < 1024) throw new Error('文件太小（音色 gguf 一般几十到几百 KB）')
+      if (info.size > 64 * 1024 * 1024) throw new Error('文件太大（音色 gguf 只有几百 KB，拖的是不是合成模型？）')
+      // GGUF 头：magic + version==3（引擎 gguf_parser 硬编码只认 v3）；能不能真用交给引擎验证
+      const fd = await openFile(file, 'r')
+      try {
+        const head = Buffer.alloc(8)
+        await fd.read(head, 0, 8, 0)
+        if (head.subarray(0, 4).toString('latin1') !== 'GGUF') throw new Error('文件头不是 GGUF（不是 gguf 格式）')
+        if (head.readUInt32LE(4) !== 3) throw new Error(`GGUF 版本号不对（${head.readUInt32LE(4)}，要 3）`)
+      } finally {
+        await fd.close()
+      }
+      // 文件名 → 音色名：和克隆向导同款清洗（空格、路径分隔符等换 -）
+      const name = basename(file)
+        .replace(/\.gguf$/i, '')
+        .replace(/[\\/:*?"<>|\s.]/g, '-')
+        .slice(0, 60)
+      if (!validVoiceName(name)) throw new Error('文件名清洗后不是合法音色名（字母、数字、下划线、连字符或中文）')
+      if (builtin.has(name)) throw new Error(`和内置音色「${name}」同名，改个文件名再导入`)
+      await mkdir(staging, { recursive: true })
+      if (existsSync(userFile(name))) await copyFile(userFile(name), backupFile(name)).catch(() => {})
+      await copyFile(file, stagedFile(name))
+      staged.push({ name, from: file })
+    } catch (error) {
+      failed.push({ file: basename(file) || file, error: (error as Error)?.message ?? String(error) })
+    }
+  }
+
+  // ② 验证：重启 serve（音色表是启动时扫的，addVoiceFile 没有对外端点），拉列表确认
+  const imported: string[] = []
+  const loadUserVoices = async (): Promise<Set<string>> => {
+    if (running) await stopServe()
+    // 引擎 crash 后马上重启偶发 Vulkan 驱动资源未释放（实测 RTX 2060 连环重启第 4 次会挂）：
+    // 每次验证重启前留一小段缓冲，多文件验证时也压低节奏
+    await new Promise((r) => setTimeout(r, 1200))
+    const server = await ensureServe(to, { forTts: true, progress: 'voice:model-progress' })
+    const response = await fetch(`${server.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
+      headers: { Authorization: `Bearer ${server.token}` }
+    })
+    if (!response.ok) throw new Error(`音色列表拉取失败（${response.status}）`)
+    return new Set((((await response.json()) as { user_voices?: unknown[] }).user_voices ?? []).map(String))
+  }
+  /** 一个文件验完的善后：成了记账，没成恢复备份的旧音色 */
+  const settle = (item: { name: string; from: string }, ok: boolean, error?: string): void => {
+    if (ok) {
+      imported.push(item.name)
+      return
+    }
+    rm(userFile(item.name), { force: true }).catch(() => {})
+    // 恢复被覆盖的旧音色（同名更新失败 = 旧版还在）
+    if (existsSync(backupFile(item.name))) rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+    failed.push({ file: basename(item.from), error: error ?? invalidVoice })
+  }
+
+  if (staged.length) {
+    await mkdir(userDir, { recursive: true })
+    try {
+      // 快路径：一批全部移进 user-voices，一轮 serve 验完（绝大多数情况：文件都是好的）
+      for (const item of staged) await rename(stagedFile(item.name), userFile(item.name))
+      let loaded = await loadUserVoices()
+      for (const item of staged) settle(item, loaded.has(item.name))
+      // settle 里失败的（结构不对、引擎跳过的那种不致命坏文件）已删掉复制的文件：
+      // user-voices 干净、引擎内存里也没加载它，不用再重启
+    } catch {
+      // serve 起不来：这批里有致命坏文件（实测会让引擎启动即退）。全部撤回 staging，逐个验
+      for (const item of staged) {
+        if (existsSync(userFile(item.name))) {
+          await rm(userFile(item.name), { force: true }).catch(() => {})
+          // 重新从源拷回 staging（被覆盖的旧音色也从备份恢复，保持导入前状态）
+          await copyFile(item.from, stagedFile(item.name)).catch(() => {})
+          if (existsSync(backupFile(item.name))) await rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+        }
+      }
+      for (const item of staged) {
+        if (!existsSync(stagedFile(item.name))) continue
+        try {
+          await rm(userFile(item.name), { force: true }).catch(() => {})
+          await rename(stagedFile(item.name), userFile(item.name))
+        } catch {
+          continue
+        }
+        try {
+          const loaded = await loadUserVoices()
+          settle(item, loaded.has(item.name))
+        } catch {
+          // 单个也起不来：移走它再起一次对照——起来了才归罪于这个文件，起不来是环境问题
+          await rm(userFile(item.name), { force: true }).catch(() => {})
+          if (existsSync(backupFile(item.name))) await rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+          try {
+            await loadUserVoices() // 对照成功（顺带把语音恢复可用）
+            failed.push({ file: basename(item.from), error: '引擎加载不了（gguf 损坏，已跳过）' })
+          } catch (env) {
+            await rm(staging, { recursive: true, force: true }).catch(() => {})
+            throw new Error(
+              `语音引擎启动失败（环境问题，不是导入文件的问题）：${(env as Error).message}。` +
+                `已导入 ${imported.join('、') || '无'}，其余已回滚`
+            )
+          }
+        }
+      }
+    }
+  }
+  await rm(staging, { recursive: true, force: true }).catch(() => {})
+  return { imported, failed }
+}
+
 export function registerCosyVoiceIpc(): void {
   // 播报合成（原 kokoro/CosyVoice3 双路由收敛为引擎一条路；engine 字段兼容旧渲染层缓存）
   ipcMain.handle(
@@ -833,6 +987,26 @@ export function registerCosyVoiceIpc(): void {
       throw new Error(body.error?.message ?? `删除失败（${response.status}）`)
     }
   })
+  // 拖拽导入音色 gguf：路径是 preload 用 webUtils 从拖放的 File 里换出来的（和 upload:register-drop
+  // 同一信任级别——渲染进程接触不到本机路径，伪造不了）；这里只收数组、逐个校验
+  ipcMain.handle('voice:import-voice', async (event, paths: unknown): Promise<VoiceImportResult> =>
+    importVoiceFiles(event.sender, Array.isArray(paths) ? paths.map(String) : [])
+  )
+  // 点击「选择文件」导入：对话框在主进程弹，选中的路径不经过渲染层直接导入
+  ipcMain.handle(
+    'voice:import-picked',
+    async (
+      event: IpcMainInvokeEvent
+    ): Promise<VoiceImportResult & { canceled: boolean }> => {
+      const picked = await dialog.showOpenDialog({
+        title: '选择要导入的音色文件',
+        properties: ['openFile', 'multiSelections'],
+        filters: [{ name: 'CosyVoice 音色（gguf）', extensions: ['gguf'] }]
+      })
+      if (picked.canceled || !picked.filePaths.length) return { canceled: true, imported: [], failed: [] }
+      return { canceled: false, ...(await importVoiceFiles(event.sender, picked.filePaths)) }
+    }
+  )
   app.on('before-quit', () => {
     void stopServe()
   })

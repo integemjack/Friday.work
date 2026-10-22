@@ -97,6 +97,20 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.invoke('voice:voices'),
   /** 删掉一个克隆音色（内置的引擎会拒绝） */
   deleteVoice: (name: string): Promise<void> => ipcRenderer.invoke('voice:delete-voice', name),
+  /** 拖进来的音色 gguf（File）：在 preload 里换出本机路径（渲染进程接触不到），主进程复制进
+   *  user-voices 持久化、重启引擎验证；返回成功导入的音色名和失败清单 */
+  importVoiceFiles: (
+    files: File[]
+  ): Promise<{ imported: string[]; failed: { file: string; error: string }[] }> => {
+    const paths = files.map((file) => webUtils.getPathForFile(file))
+    return ipcRenderer.invoke('voice:import-voice', paths)
+  },
+  /** 点「选择文件」导入音色 gguf：主进程弹对话框并导入（路径不经过渲染层）；canceled = 没选 */
+  pickVoiceFiles: (): Promise<{
+    canceled: boolean
+    imported: string[]
+    failed: { file: string; error: string }[]
+  }> => ipcRenderer.invoke('voice:import-picked'),
   onTtsModelProgress: (
     listener: (state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }) => void
   ): (() => void) => {

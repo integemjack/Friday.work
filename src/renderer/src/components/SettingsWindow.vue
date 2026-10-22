@@ -297,6 +297,77 @@ async function deleteClone(voice: VoiceOption): Promise<void> {
     cloneError.value = error instanceof Error ? error.message : String(error)
   }
 }
+
+// MARK: 导入现成音色 gguf（拖拽 / 选文件）：复制进 user-voices 持久化，重启客户端仍在
+
+const importOver = ref(false) // 拖拽悬停高亮
+const importBusy = ref(false)
+const importDone = ref('')
+const importError = ref('')
+const importProgress = ref('')
+let importProgressOff: (() => void) | null = null
+
+/** 导入结果的展示（拖拽和选文件共用）：成功提示持久化、失败逐个给原因，刷新音色列表 */
+async function applyImportResult(result: { imported: string[]; failed: { file: string; error: string }[] }): Promise<void> {
+  importDone.value = result.imported.length
+    ? `已导入 ${result.imported.join('、')}（存在本机 user-voices，重启后仍在，可删）`
+    : ''
+  importError.value = result.failed.map((f) => `${f.file}：${f.error}`).join('；')
+  await refreshCosyVoiceStatus()
+  // 第一个导入成功的自动选上（和克隆完自动切换一致）；没有成功的保持原选择
+  const first = result.imported[0]
+  if (first && allVoices.value.some((voice) => voice.id === `cv3:${first}`)) setCurrentVoice(`cv3:${first}`)
+}
+
+/** 拖拽导入：只认 .gguf；导入中引擎会启动验证（首次几秒，进度行有提示） */
+async function importVoiceFiles(files: File[]): Promise<void> {
+  const ggufs = files.filter((file) => /\.gguf$/i.test(file.name))
+  if (!ggufs.length) {
+    importError.value = '只认 .gguf 音色文件（克隆导出的那种，几百 KB）'
+    return
+  }
+  importBusy.value = true
+  importError.value = ''
+  importDone.value = ''
+  importProgress.value = '导入中…（会启动语音引擎验证，约几秒）'
+  importProgressOff?.()
+  importProgressOff =
+    window.fridayBridge.onVoiceModelProgress?.((state) => {
+      importProgress.value = state.phase === 'loading' ? '启动语音引擎验证…' : ''
+    }) ?? null
+  try {
+    await applyImportResult(await window.fridayBridge.importVoiceFiles(ggufs))
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    importBusy.value = false
+    importProgress.value = ''
+    importProgressOff?.()
+    importProgressOff = null
+  }
+}
+
+function onVoiceDrop(event: DragEvent): void {
+  importOver.value = false
+  if (importBusy.value) return
+  void importVoiceFiles(Array.from(event.dataTransfer?.files ?? []))
+}
+
+/** 点击拖拽框：主进程弹文件选择框（拖不了的时候用鼠标选） */
+async function pickVoiceFiles(): Promise<void> {
+  if (importBusy.value) return
+  importBusy.value = true
+  importError.value = ''
+  importDone.value = ''
+  try {
+    const result = await window.fridayBridge.pickVoiceFiles()
+    if (!result.canceled) await applyImportResult(result)
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    importBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -470,6 +541,24 @@ async function deleteClone(voice: VoiceOption): Promise<void> {
           <span class="voice-name">+ 克隆我的声音</span>
           <span class="voice-meta">念 8~15 秒，全程本地提取</span>
         </button>
+      </div>
+
+      <!-- 导入现成音色 gguf（拖拽优先，点击弹选择框）：和克隆同格式，存 user-voices 持久化 -->
+      <div
+        class="voice-drop"
+        :class="{ over: importOver, busy: importBusy }"
+        title="克隆导出的音色 gguf（几百 KB），拖进来或点击选择文件"
+        @dragover.prevent
+        @dragenter.prevent="importOver = true"
+        @dragleave.prevent="importOver = false"
+        @drop.prevent="onVoiceDrop"
+        @click="pickVoiceFiles"
+      >
+        <span class="voice-name">{{ importBusy ? '导入中…' : '拖入 .gguf 音色文件' }}</span>
+        <span class="voice-meta">克隆导出的音色；点击也可选择文件；导入后存在本机，重启不丢</span>
+        <span v-if="importProgress" class="voice-meta">{{ importProgress }}</span>
+        <span v-if="importDone" class="voice-meta ok">{{ importDone }}</span>
+        <span v-if="importError" class="voice-meta danger">{{ importError }}</span>
       </div>
 
       <div v-if="cloneOpen" class="voice-draft">
@@ -720,6 +809,48 @@ h3.sub {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 8px;
+}
+
+/* 拖拽导入音色 gguf：整块都是拖放目标（子元素不接鼠标事件，dragleave 才不闪烁） */
+.voice-drop {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.voice-drop > * {
+  pointer-events: none;
+}
+
+.voice-drop:hover:not(.busy),
+.voice-drop.over {
+  border-color: var(--text-2);
+  background: var(--chip);
+}
+
+.voice-drop.busy {
+  cursor: default;
+  opacity: 0.75;
+}
+
+[data-theme='jarvis'] .voice-drop:hover:not(.busy),
+[data-theme='jarvis'] .voice-drop.over {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-a15);
+}
+
+.voice-meta.ok {
+  color: var(--text-2);
+}
+
+.voice-meta.danger {
+  color: var(--fail);
 }
 
 .voice-item {
