@@ -206,13 +206,69 @@ test('句缓冲：增量攒到句末才送播、flush 播尾巴、无标点长�
     assert.equal(calls.length, 1, '尾巴继续攒')
     inc.flush()
     await flushMicro()
-    assert.deepEqual(calls.slice(-1), ['没等到的尾巴'], 'flush 把尾巴整段送播')
+    assert.deepEqual(calls.slice(-1), ['没等到的尾巴。'], 'flush 把尾巴整段送播（无句末标点补句号收音）')
     release()
     await flushMicro()
 
     inc.push('一'.repeat(200)) // 无任何句末标点：超过 120 字兕底直送（splitForSpeech 硬切）
     await flushMicro()
     assert.ok(calls.length >= 3, '无标点长文不憋着不出声')
+  } finally {
+    restore()
+  }
+})
+
+test('修复：流式 append 不再用首句 16 字上限硬切（一句话不再分两次说）', async () => {
+  const { calls, release, flushMicro, restore } = mockBridge()
+  try {
+    speech.speakText('第一句。', { force: true })
+    await flushMicro()
+    assert.deepEqual(calls, ['第一句。'], '首句立即送合成')
+
+    // 泵在跑（第一句还挂在 pending）：append 的完整句不应被 16 字上限切开
+    const long = '这句已经超过十六个字还有逗号，后面是同一个句子的后半截。'
+    speech.speakText(long, { force: true, append: true })
+    await flushMicro()
+    assert.deepEqual(calls, ['第一句。'], 'append 只入队')
+    release()
+    await flushMicro()
+    assert.deepEqual(calls, ['第一句。', long], '流式追加的句子整句送合成，不从中间切开')
+
+    // 泵停了？不——泵还在等上一句的合成结果：先放行，再验证新一轮 append 也不切
+    release()
+    await flushMicro()
+    speech.speakText('还没等到的尾巴后面接了一句完整的长句子，长度超过了十六个字', { force: true, append: true })
+    await flushMicro()
+    assert.deepEqual(calls.slice(-1), ['还没等到的尾巴后面接了一句完整的长句子，长度超过了十六个字。'], '新一轮 append 同样整句送（无尾标点补句号）')
+  } finally {
+    restore()
+  }
+})
+
+test('分句：硬切不产生孤儿标点段（引擎对纯标点实测返回空音频）', () => {
+  // 17 字子句硬切出的 1 字尾片「，」要拼回前段，不独立成段
+  const parts = splitForSpeech('这句话已经超过了十六个字还有逗号，后面这些是同一个句子的后半截。')
+  assert.deepEqual(parts, ['这句话已经超过了十六个字还有逗号，', '后面这些是同一个句子的后半截。'])
+  // 纯标点/空白片段不独立成段
+  assert.deepEqual(splitForSpeech('。。，'), [])
+  assert.deepEqual(splitForSpeech('好的。'), ['好的。'])
+  // 流式追加（firstLimit=Infinity）不切：句子多长都整句
+  const long = '这是一句没有标点会一直往下说的很长的话'.repeat(2)
+  assert.deepEqual(splitForSpeech(long, Infinity), [long])
+})
+
+test('句缓冲：冒号引导句（如「如下：」）立刻成句送播，不等收尾 flush', async () => {
+  const { calls, release, flushMicro, restore } = mockBridge()
+  try {
+    const inc = speech.createSpeechIncrement()
+    inc.push('好的，具体步骤如下：')
+    await flushMicro()
+    assert.deepEqual(calls, ['好的，具体步骤如下：'], '全角冒号也是成句点，保持未完语气原样送播')
+    release()
+    await flushMicro()
+    inc.flush() // 没攒下的尾巴：不送
+    await flushMicro()
+    assert.equal(calls.length, 1, '冒号后没有尾巴就不补播')
   } finally {
     restore()
   }

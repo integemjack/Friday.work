@@ -455,9 +455,16 @@ function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
 /** 分句：按句末标点/换行切，超长句再按逗号顿号切；返回非空片段（首句短、首音快）。
  *  片段逐句送主进程合成（串行队列保序），播放与下一句的合成并行——女声 RTF 0.52-0.74
  *  （Vulkan 实测）< 1，播放追得上合成。firstLimit：首句上限——引擎整句合成完才返回，
- *  首句切短才能把开口压到 2-3 秒。 */
+ *  首句切短才能把开口压到 2-3 秒；流式追加传 Infinity（句子已在 SpeechIncrement 攒成
+ *  完整句，再切只会把一句话剁成两段，合成间隙听感就是「中间停顿分两次说」）。 */
 export function splitForSpeech(clean: string, firstLimit = 16): string[] {
   const parts: string[] = []
+  // 纯标点/空白不独立成段：兜底硬切和句读残留会切出「，」「。」这类孤儿片段，
+  // 引擎对纯标点返回空音频（实测 0B），白耗一次合成往返还留下怪停顿
+  const push = (piece: string) => {
+    const p = piece.trim()
+    if (p && /[^\s，,、。．.！？!?；;：:"'“”‘’()（）\u2026-]/.test(p)) parts.push(p)
+  }
   for (const paragraph of clean.split(/\n+/)) {
     const trimmed = paragraph.trim()
     if (!trimmed) continue
@@ -466,15 +473,22 @@ export function splitForSpeech(clean: string, firstLimit = 16): string[] {
       if (!s) continue
       const limit = parts.length === 0 ? firstLimit : 60
       if (s.length <= limit) {
-        parts.push(s)
+        push(s)
         continue
       }
       for (const clause of s.split(/(?<=[，,、])/)) {
         const c = clause.trim()
         if (!c) continue
-        // 兜底：没有逗号也超长的（罕见，比如一长串无标点文本），按上限硬切（首句更短）
-        const limit = parts.length === 0 ? firstLimit : 60
-        for (let at = 0; at < c.length; at += limit) parts.push(c.slice(at, at + limit))
+        // 兜底：没有逗号也超长的（罕见，比如一长串无标点文本），按上限硬切（首句更短）；
+        // 尾片不足 8 字并入前片——「，」「如下：」这类几个字的孤儿段单独送引擎只会得到
+        // 空音频或含混的几个字，拼回前一段整句合成听感才连贯
+        const hardLimit = parts.length === 0 ? firstLimit : 60
+        const chunks: string[] = []
+        for (let at = 0; at < c.length; at += hardLimit) chunks.push(c.slice(at, at + hardLimit))
+        if (chunks.length >= 2 && chunks[chunks.length - 1].length < 8) {
+          chunks[chunks.length - 2] += chunks.pop()
+        }
+        for (const chunk of chunks) push(chunk)
       }
     }
   }
@@ -504,7 +518,12 @@ export function dynamicSpeedFor(length: number, min: number, max: number): numbe
  *  收尾的整条播报也不冲掉前面还没播完的句子。
  *  开关关着时不播（试听用 force 跳过）。 */
 export function speakText(text: string, options?: { voice?: VoiceOption; force?: boolean; append?: boolean }): void {
-  const parts = splitForSpeech(cleanForSpeech(text))
+  // 首句上限只对非流式的整条播报生效（一次性给全文时首句切短、快开口）。
+  // 流式 append 的句子已在 SpeechIncrement 攒到自然句边界，一律整句送合成——
+  // 再按 16 字切会把每句话剁成「半句 + 孤儿标点」两段，串行合成两遍，中间的
+  // 合成间隙听感就是「一句话中间停顿分两次说」（2026-12 修）。
+  const firstLimit = options?.append ? Infinity : 16
+  const parts = splitForSpeech(cleanForSpeech(text), firstLimit)
   if (!parts.length) return
   if (!options?.force && !replySpeakEnabled.value) return
   if (!options?.append) {
@@ -533,8 +552,12 @@ async function pumpSpeech(): Promise<void> {
       const voice = pumpVoice ?? activeVoice()
       engineBusy = true
       try {
+        // 结尾完全没标点的片段（硬切截断 / 尾句）补个句号收韵律；逗号、冒号等
+        // 未完标点结尾的保持原样——引擎实测都能出声，保留自然的未完语气，
+        // 别叠加出「，。」「：。」这种连续标点
+        const spoken = /[,，、:：;；.。!！?？…]\s*$/.test(text) ? text : `${text}。`
         return await window.fridayBridge.speakReply({
-          text,
+          text: spoken,
           speed: speechSpeedFor(voice.speed, pumpScale),
           voice: voice.voice,
           instruction: voice.instruction
@@ -578,7 +601,7 @@ export interface SpeechIncrement {
   flush(): void
 }
 
-const SENTENCE_END = '。！？!?；;\n'
+const SENTENCE_END = '。！？!?；;：\n'
 
 export function createSpeechIncrement(): SpeechIncrement {
   let buffer = ''
