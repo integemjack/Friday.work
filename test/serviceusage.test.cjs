@@ -8,7 +8,10 @@ const {
   canQueryUsage,
   isLocalBaseURL,
   quotaCleared,
+  usageBalanceBar,
+  usageBars,
   usageCount,
+  usageCountdown,
   usageDate,
   usageDetailLines,
   usageForEntry,
@@ -16,8 +19,15 @@ const {
   usageMenuLine,
   usageMeter,
   usageMoney,
+  usageTip,
   usedFraction
 } = require('../.tmp/serviceusage.cjs')
+
+// 12:00Z → 13:00Z 在任何时区都不跨本地午夜；钟点按本地时区拼，CI 时区不定
+const localHM = (iso) => {
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 const now = new Date('2026-10-21T12:00:00Z')
 
@@ -216,11 +226,6 @@ test('meter：胶囊边框描多少（== 桌面端 ServiceUsage::meter 的同一
   assert.equal(brief(usageMeter({ windows: [{ title: '5 小时', remainingPercent: 91 }] }, undefined, now)), '9%')
   // 窗口用完了：整圈 + 重置时间
   const full = { windows: [{ title: '5 小时', remainingPercent: 0, resetAt: '2026-10-21T13:00:00Z' }] }
-  // 12:00Z → 13:00Z 在任何时区都不跨本地午夜，when 只写钟点；钟点按本地时区拼，CI 时区不定
-  const localHM = (iso) => {
-    const d = new Date(iso)
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  }
   assert.equal(brief(usageMeter(full, undefined, now)), `100% 橙 满 ${localHM('2026-10-21T13:00:00Z')} 恢复`)
   // 顺手记的额度用完（还没过去）：整圈 + 恢复时间；余额不足也一样
   const waiting = { quotaAt: '2026-10-21T11:59:00Z', quotaKind: 'usage', resumeAt: '2026-10-21T13:00:00Z' }
@@ -230,4 +235,86 @@ test('meter：胶囊边框描多少（== 桌面端 ServiceUsage::meter 的同一
   // 没什么可描的（只有警告）：不描
   assert.equal(usageMeter({ warnings: ['没有生效中的套餐'] }, undefined, now), undefined)
   assert.equal(usageMeter(undefined, undefined, now), undefined)
+})
+
+test('countdown：到目标时间还多久（== ServiceUsage::countdown）', () => {
+  const at = (seconds) => new Date(now.getTime() + seconds * 1000)
+  assert.equal(usageCountdown(at(30), now), '30 秒')
+  assert.equal(usageCountdown(at(90), now), '1 分 30 秒')
+  assert.equal(usageCountdown(at(3600 + 15 * 60), now), '1 小时 15 分')
+  assert.equal(usageCountdown(at(2 * 86400 + 5 * 3600), now), '2 天 5 小时')
+  assert.equal(usageCountdown(new Date(now.getTime() - 5000), now), '0 秒') // 已过去：0
+})
+
+test('bars + balanceBar：悬停浮条的进度条（== ServiceUsage::bars / balanceBar）', () => {
+  const brief = (bar) => `${bar.label} | ${Math.round(bar.used * 100)}%${bar.warning ? ' 橙' : ''}${bar.reset ? ' | ' + bar.reset : ''}`
+  // 窗口条：用得最多的两个，各自「已用」；重置时间写倒计时
+  const report = {
+    windows: [
+      { title: '5 小时', remainingPercent: 70, resetAt: '2026-10-21T14:15:00Z' },
+      { title: '每周', remainingPercent: 15 },
+      { title: '这个密钥的额度', remainingPercent: 95 }
+    ]
+  }
+  assert.deepEqual(
+    usageBars(report, now, true).map(brief),
+    ['5 小时 · 已用 30% | 30% | 2 小时 15 分后重置', '每周 · 已用 85% | 85% 橙']
+  )
+  // 不倒计时时写钟点
+  assert.equal(usageBars(report, now, false)[0].reset, `${localHM('2026-10-21T14:15:00Z')} 重置`)
+  // 余额条：按 100 元算满、剩多少填多少；剩两成以下（¥12.34 也是）橙；赠送写在条下面
+  assert.equal(brief(usageBalanceBar({ balances: [{ amount: 12.34, currency: 'CNY' }] })), '余额 ¥12.34 | 12% 橙')
+  assert.equal(usageBalanceBar({ balances: [{ amount: 15, currency: 'CNY' }] }).warning, true)
+  assert.equal(
+    brief(usageBalanceBar({ balances: [{ amount: 30, currency: 'CNY', granted: 10 }] })),
+    '余额 ¥30.00 | 30% | 其中赠送 ¥10.00'
+  )
+  assert.equal(usageBalanceBar({ balances: [{ amount: 0, currency: 'CNY' }] }).warning, true)
+  assert.equal(usageBalanceBar({ available: false, balances: [{ amount: 50, currency: 'CNY' }] }).warning, true)
+  assert.equal(usageBalanceBar(undefined), undefined)
+})
+
+test('usageTip：悬停浮条的整份（== ServiceCatalog::usage(…, true, true, true)）', () => {
+  const entry = {
+    key: 'k',
+    baseURL: 'https://x',
+    secretName: '',
+    custom: true,
+    loading: false,
+    checked: true,
+    supported: true,
+    error: '',
+    checkedAt: now.getTime() - 3 * 60_000,
+    report: {
+      plan: 'Mini',
+      balances: [{ amount: 12.34, currency: 'CNY' }],
+      windows: [
+        { title: '5 小时', remainingPercent: 70 },
+        { title: '每周', remainingPercent: 78 }
+      ]
+    }
+  }
+  const tip = usageTip(entry, now)
+  // 三条：两个窗口条（倒计时格式不需要）+ 余额条；行里第一笔余额、条上那两个窗口都不再重复，只剩套餐名
+  assert.deepEqual(
+    tip.bars.map((bar) => bar.label),
+    ['5 小时 · 已用 30%', '每周 · 已用 22%', '余额 ¥12.34']
+  )
+  assert.deepEqual(tip.lines, [{ text: '套餐 Mini', warning: false }])
+  assert.equal(tip.checkedAt, localHM(new Date(now.getTime() - 3 * 60_000).toISOString()))
+  // 在查（还没查到过）：转圈 + 正在查；查不到（不支持）：行里说一句，没有条
+  const loading = { ...entry, loading: true, report: undefined, checkedAt: 0 }
+  assert.deepEqual(usageTip(loading, now).lines, [{ text: '正在查余额…', warning: false }])
+  const failed = { ...entry, report: undefined, error: '连不上' }
+  assert.deepEqual(usageTip(failed, now).lines.map((line) => line.text), ['查不到余额和用量：连不上'])
+  assert.equal(usageTip(failed, now).bars.length, 0)
+  // 额度用完还挂着：行里倒计时恢复（行 = 套餐那行后面）
+  const waiting = {
+    ...entry,
+    observed: { quotaAt: '2026-10-21T11:59:00Z', quotaKind: 'usage', resumeAt: '2026-10-21T12:01:30Z' }
+  }
+  assert.equal(usageTip(waiting, now).lines[1].text, '额度用完了，1 分 30 秒后恢复')
+  // 浮条模式下明细不再重复：第一笔余额不写成行（没条时才写）
+  const onlyBalance = { ...entry, report: { balances: [{ amount: 12.34, currency: 'CNY' }] } }
+  assert.deepEqual(usageTip(onlyBalance, now).lines, [])
 })

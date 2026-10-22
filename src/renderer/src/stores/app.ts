@@ -1773,13 +1773,14 @@ export const useAppStore = defineStore('app', {
       await Promise.all(this.usageTargets().map((target) => this.queryServiceUsage(target, force)))
     },
 
-    /** 查一家（按接口地址 + 密钥名）。30 秒内查过的不重复查（推送里的「请求成功」很频繁） */
-    async queryServiceUsage(target: UsageTarget, force = false) {
+    /** 查一家（按接口地址 + 密钥名）。maxAgeMs 内查过的不重复查（推送里的「请求成功」很频繁，默认 30 秒；
+     *  悬停胶囊重查那家用 10 秒，== Friday refreshUsage(false, service, 10)） */
+    async queryServiceUsage(target: UsageTarget, force = false, maxAgeMs = 30_000) {
       const machine = this.currentMachine
       if (!machine) return
       const existing = this.serviceUsage[target.key]
       if (existing?.loading) return
-      if (!force && existing && Date.now() - existing.checkedAt < 30_000) return
+      if (!force && existing && Date.now() - existing.checkedAt < maxAgeMs) return
       this.serviceUsage[target.key] = {
         key: target.key,
         baseURL: target.baseURL,

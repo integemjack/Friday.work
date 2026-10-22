@@ -97,6 +97,18 @@ export interface UsageMeter {
   note: string
 }
 
+/** 悬停浮条里的一条进度（== ServiceUsage::Bar）：额度窗口（已用）或余额（剩多少填多少） */
+export interface UsageBar {
+  /** 「5 小时 · 已用 30%」「余额 ¥12.34」 */
+  label: string
+  /** 填多少 0–1：窗口 = 已用的比例，余额 = 剩下的比例（剩多少填多少） */
+  used: number
+  /** 80% 以上 / 余额剩两成以下（橙色） */
+  warning: boolean
+  /** 条下面那行小字：「2 小时 15 分后重置」「其中赠送 ¥10.00」 */
+  reset: string
+}
+
 /** 手里记着的一份用量（按接口地址 + 密钥名） */
 export interface UsageEntry {
   key: string
@@ -199,6 +211,26 @@ export function usageWhen(date: Date, now: Date): string {
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
 }
 
+/** 「2 小时 15 分」「3 分 40 秒」（== ServiceUsage::countdown）：到目标时间还多久，向上取整到秒 */
+export function usageCountdown(date: Date, now: Date): string {
+  const total = Math.max(Math.ceil((date.getTime() - now.getTime()) / 1000), 0)
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  const pair = (big: number, bigUnit: string, small: number, smallUnit: string): string =>
+    small > 0 ? `${big} ${bigUnit} ${small} ${smallUnit}` : `${big} ${bigUnit}`
+  if (days > 0) return pair(days, '天', hours, '小时')
+  if (hours > 0) return pair(hours, '小时', minutes, '分')
+  if (minutes > 0) return pair(minutes, '分', seconds, '秒')
+  return `${seconds} 秒`
+}
+
+/** 「15:20 重置」「2 小时 15 分后重置」（== ServiceUsage.cpp 的 at；countdown = 悬停浮条用倒计时） */
+function usageAt(date: Date, now: Date, countdown: boolean, verb: string): string {
+  return countdown ? `${usageCountdown(date, now)}后${verb}` : `${usageWhen(date, now)} ${verb}`
+}
+
 /** 这个窗口已用的比例 0–1（== ServiceUsage::usedFraction）；算不出返回 undefined */
 export function usedFraction(window: UsageWindow, now: Date): number | undefined {
   let fraction: number | undefined
@@ -214,8 +246,9 @@ export function usedFraction(window: UsageWindow, now: Date): number | undefined
   return Math.min(Math.max(fraction, 0), 1)
 }
 
-/** 算得出用了多少的窗口里用得最多的两个，按原来的顺序（== ServiceUsage 的 barWindows） */
-export function usageBarWindows(report: UsageReport, now: Date): Array<{ window: UsageWindow; used: number }> {
+/** 算得出用了多少的窗口里用得最多的两个，按原来的顺序（== ServiceUsage 的 barWindows）。
+ *  index：在这份报告 windows 里的下标——悬停浮条把条上那两个从明细行里去掉要用 */
+export function usageBarWindows(report: UsageReport, now: Date): Array<{ window: UsageWindow; used: number; index: number }> {
   const windows = (report.windows ?? [])
     .map((window, index) => ({ window, index, used: usedFraction(window, now) }))
     .filter((item): item is { window: UsageWindow; index: number; used: number } => item.used !== undefined)
@@ -223,7 +256,7 @@ export function usageBarWindows(report: UsageReport, now: Date): Array<{ window:
   return windows
     .slice(0, 2)
     .sort((a, b) => a.index - b.index)
-    .map((item) => ({ window: item.window, used: item.used }))
+    .map((item) => ({ window: item.window, used: item.used, index: item.index }))
 }
 
 /** 额度用完 / 余额不足还没过去（== ServiceUsage::activeQuota） */
@@ -263,7 +296,7 @@ export function quotaCleared(observed: UsageObserved | undefined, report: UsageR
   return any
 }
 
-function windowText(window: UsageWindow, now: Date, withReset: boolean): string {
+function windowText(window: UsageWindow, now: Date, withReset: boolean, countdown = false): string {
   let amount = ''
   if (typeof window.remainingPercent === 'number') {
     amount = `${Math.round(window.remainingPercent)}%`
@@ -280,7 +313,7 @@ function windowText(window: UsageWindow, now: Date, withReset: boolean): string 
   const space = last && last.charCodeAt(0) < 0x80 && /[A-Za-z]/.test(last) ? ' ' : ''
   let text = `${window.title}${space}剩 ${amount}`
   const resetAt = usageDate(window.resetAt)
-  if (withReset && resetAt && resetAt.getTime() > now.getTime()) text += `（${usageWhen(resetAt, now)} 重置）`
+  if (withReset && resetAt && resetAt.getTime() > now.getTime()) text += `（${usageAt(resetAt, now, countdown, '重置')}）`
   return text
 }
 
@@ -390,22 +423,81 @@ export function usageMeter(report: UsageReport | undefined, observed: UsageObser
   return { used: tightest, warning: tightest >= 0.8, exhausted: false, note: '' }
 }
 
+/** 悬停浮条的进度条（== ServiceUsage::bars）：用得最多的两个窗口，各一条「已用」的条 */
+export function usageBars(report: UsageReport | undefined, now: Date, countdown = false): UsageBar[] {
+  if (!report) return []
+  return usageBarWindows(report, now).map((item) => {
+    const resetAt = usageDate(item.window.resetAt)
+    return {
+      label: `${item.window.title} · 已用 ${Math.round(item.used * 100)}%`,
+      used: item.used,
+      warning: item.used >= 0.8,
+      reset: resetAt && resetAt.getTime() > now.getTime() ? usageAt(resetAt, now, countdown, '重置') : ''
+    }
+  })
+}
+
+/** 余额条（== ServiceUsage::balanceBar）：按 100 元算满、剩多少填多少；没钱 / 剩两成以下橙色 */
+export function usageBalanceBar(report: UsageReport | undefined): UsageBar | undefined {
+  const balance = (report?.balances ?? [])[0]
+  if (!balance) return undefined
+  const left = Math.min(Math.max(balance.amount / usageBalanceScale, 0), 1)
+  return {
+    label: `余额 ${usageMoney(balance.amount, balance.currency)}`,
+    used: left,
+    warning: balance.amount <= 0 || report?.available === false || left <= 0.2,
+    reset:
+      balance.granted && balance.granted > 0 && balance.granted < balance.amount
+        ? `其中赠送 ${usageMoney(balance.granted, balance.currency)}`
+        : ''
+  }
+}
+
+/**
+ * 悬停浮条要显示的一切（== Friday 悬停模型胶囊浮的 UsageTip）：进度条（额度窗口 + 余额）、明细行、
+ * 在查转圈、上次查的时间。没有条也没有行时界面自己补一句「这家查不到余额和用量」
+ */
+export function usageTip(
+  entry: UsageEntry | undefined,
+  now: Date
+): { bars: UsageBar[]; lines: UsageLine[]; loading: boolean; checkedAt: string } {
+  if (!entry) return { bars: [], lines: [], loading: false, checkedAt: '' }
+  const lines: UsageLine[] = []
+  if (entry.loading && !entry.report) lines.push({ text: '正在查余额…', warning: false })
+  lines.push(...usageDetailLines(entry.report, entry.observed, now, { barsShown: true, balanceBarShown: true, countdown: true }))
+  const bars = usageBars(entry.report, now, true)
+  const balanceBar = usageBalanceBar(entry.report)
+  if (balanceBar) bars.push(balanceBar)
+  if (entry.error && !entry.loading) {
+    const problem = entry.error.replace(/\s+/g, ' ').trim()
+    lines.push({ text: `查不到余额和用量：${problem.length > 80 ? problem.slice(0, 80) + '…' : problem}`, warning: false })
+  }
+  const checkedAt = entry.checkedAt ? usageWhen(new Date(entry.checkedAt), now) : ''
+  return { bars, lines, loading: entry.loading, checkedAt }
+}
+
 /**
  * 悬停时的明细（== ServiceUsage::summaryLines 的几条）：余额、套餐窗口、额度用完、限流余量。
- * 每一项一行文字
+ * 每一项一行文字。opts（悬停浮条用）：barsShown = 条上已画的那两个窗口不再写成行；balanceBarShown = 第一笔
+ * 余额不写成行（余额条替代）；countdown = 重置 / 恢复时间写成倒计时（浮条里每秒走）
  */
-export function usageDetailLines(report: UsageReport | undefined, observed: UsageObserved | undefined, now: Date): UsageLine[] {
+export function usageDetailLines(
+  report: UsageReport | undefined,
+  observed: UsageObserved | undefined,
+  now: Date,
+  opts: { barsShown?: boolean; balanceBarShown?: boolean; countdown?: boolean } = {}
+): UsageLine[] {
   const lines: UsageLine[] = []
   if (report) {
     const parts: string[] = []
     const insufficient = report.available === false
     let owed = false
-    for (const balance of report.balances ?? []) {
+    for (const [i, balance] of (report.balances ?? []).entries()) {
       let part = `余额 ${usageMoney(balance.amount, balance.currency)}`
       if (balance.granted && balance.granted > 0 && balance.granted < balance.amount) {
         part += `（其中赠送 ${usageMoney(balance.granted, balance.currency)}）`
       }
-      parts.push(part)
+      if (!(opts.balanceBarShown && i === 0)) parts.push(part)
       if (balance.owed && balance.owed > 0) {
         parts.push(`欠费 ${usageMoney(balance.owed, balance.currency)}`)
         owed = true
@@ -421,11 +513,13 @@ export function usageDetailLines(report: UsageReport | undefined, observed: Usag
     if (report.freeTier) parts.push('免费档（没充过值）')
     if (insufficient) parts.push('不够调用了，充值后恢复')
     if (parts.length > 0) lines.push({ text: parts.join('，'), warning: insufficient || owed })
-    // 套餐 / 额度窗口：全都写出来（这里没有进度条，不像桌面端的设置页会把条上的两个留给条）
+    // 套餐 / 额度窗口：菜单悬停的明细全都写成行；浮条的条上已画那两个用得最多的，不再重复
+    const drawn = new Set<number>(opts.barsShown ? usageBarWindows(report, now).map((item) => item.index) : [])
     const windows: string[] = []
     let empty = false
-    for (const window of report.windows ?? []) {
-      const text = windowText(window, now, true)
+    for (const [i, window] of (report.windows ?? []).entries()) {
+      if (drawn.has(i)) continue
+      const text = windowText(window, now, true, opts.countdown)
       if (!text) continue
       windows.push(text)
       empty = empty || exhausted(window)
@@ -433,7 +527,7 @@ export function usageDetailLines(report: UsageReport | undefined, observed: Usag
     if (windows.length > 0) {
       const prefix = report.plan ? `${report.plan} · ` : ''
       lines.push({ text: prefix + windows.join('，'), warning: empty })
-    } else if (report.plan) {
+    } else if (drawn.size > 0 && report.plan) {
       lines.push({ text: `套餐 ${report.plan}`, warning: false })
     }
     for (const warning of report.warnings ?? []) lines.push({ text: warning, warning: true })
@@ -446,7 +540,7 @@ export function usageDetailLines(report: UsageReport | undefined, observed: Usag
     } else {
       const resumeAt = usageDate(observed?.resumeAt)
       if (resumeAt && resumeAt.getTime() > now.getTime()) {
-        lines.push({ text: `额度用完了，${usageWhen(resumeAt, now)} 恢复`, warning: true })
+        lines.push({ text: `额度用完了，${usageAt(resumeAt, now, opts.countdown === true, '恢复')}`, warning: true })
       } else if (now.getTime() - quotaAt.getTime() < 7 * 86_400_000) {
         lines.push({ text: `额度用完了（${usageWhen(quotaAt, now)} 的请求），服务没说什么时候恢复`, warning: true })
       }

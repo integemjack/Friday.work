@@ -7,7 +7,7 @@ import type { EngineView } from '../stores/app.js'
 import type { CommandInfo } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
-import { usageForEntry, usageKey, canQueryUsage, type UsageLine, type UsageMeter } from '../lib/serviceUsage.js'
+import { usageForEntry, usageKey, canQueryUsage, usageTip, type UsageLine, type UsageMeter } from '../lib/serviceUsage.js'
 
 const emit = defineEmits<{ submit: [text: string, attachments: Array<{ path: string; name: string }>] }>()
 
@@ -130,6 +130,74 @@ onMounted(() => {
   }, 60_000)
 })
 onBeforeUnmount(() => window.clearInterval(usageTimer))
+
+// ---- 悬停浮条（== Friday v2.37 UsageTip）：鼠标停在胶囊上 0.35 秒浮出来，移开马上收；菜单开着不浮 ----
+
+/** 当前模型是在线服务（本机地址不查余额）才有浮条；有浮条时胶囊原来的 title 提示波它取代（== Friday help 的让位） */
+const engineTipAvailable = computed(() => {
+  const engine = effectiveEngine.value
+  return !store.assistantChat && !!engine && canQueryUsage(engine.baseURL ?? '')
+})
+const engineTipData = computed(() => {
+  if (!engineTipAvailable.value) return undefined
+  const engine = effectiveEngine.value!
+  return usageTip(store.serviceUsage[usageKey(engine.baseURL ?? '', engine.apiKeySecret ?? '')], usageNow.value)
+})
+/** 浮条头上的：服务名 + 模型名（两者一样时只写一个，== Friday tipService / engineModel） */
+const tipEngineModel = computed(() => {
+  const engine = effectiveEngine.value
+  return engine && engine.model && engine.model !== engine.title ? engine.model : ''
+})
+/** 条和行都没有又不在查：补一句「这家查不到余额和用量」（== Friday 浮条的兑底） */
+const engineTipLines = computed<UsageLine[]>(() => {
+  const lines = engineTipData.value?.lines ?? []
+  return lines.length > 0 ? lines : [{ text: '这家查不到余额和用量', warning: false }]
+})
+const tipOpen = ref(false)
+const tipAlignRight = ref(false)
+let tipDelayTimer = 0
+let tipTicker = 0
+function onChipEnter() {
+  if (!engineTipAvailable.value || modelOpen.value) return
+  // 停上去就重查那家（10 秒内查过的不再查，来回晃不会一直查；== Friday refreshUsage(false, service, 10)）
+  const engine = effectiveEngine.value!
+  void store.queryServiceUsage(
+    {
+      key: usageKey(engine.baseURL ?? '', engine.apiKeySecret ?? ''),
+      baseURL: engine.baseURL ?? '',
+      secretName: engine.apiKeySecret ?? '',
+      custom: true
+    },
+    false,
+    10_000
+  )
+  window.clearTimeout(tipDelayTimer)
+  tipDelayTimer = window.setTimeout(() => {
+    // 浮在胶囊上方、和它左对齐；右边出了窗口就和它右对齐（== Friday 浮条的 onAboutToShow）
+    const rect = modelWrap.value?.getBoundingClientRect()
+    tipAlignRight.value = !!rect && rect.left + 264 > window.innerWidth - 8
+    tipOpen.value = true
+  }, 350)
+}
+function onChipLeave() {
+  window.clearTimeout(tipDelayTimer)
+  tipOpen.value = false
+}
+// 浮着时每秒走一次：条下面「2 小时 15 分后重置」这类倒计时跟着走（== Friday v2.47）
+watch(tipOpen, (open) => {
+  window.clearInterval(tipTicker)
+  if (open) tipTicker = window.setInterval(() => {
+    usageNow.value = new Date()
+  }, 1000)
+})
+// 菜单弹开时收掉浮条（两者都浮在胶囊上方）
+watch(modelOpen, (open) => {
+  if (open) onChipLeave()
+})
+onBeforeUnmount(() => {
+  window.clearTimeout(tipDelayTimer)
+  window.clearInterval(tipTicker)
+})
 
 /** 菜单项的悬停提示：服务商 · 模型 + 余额 / 用量的明细（有的话一项一行） */
 function engineTip(engine: EngineView): string {
@@ -862,8 +930,10 @@ onBeforeUnmount(() => {
           <button
             class="model-chip"
             :class="{ open: modelOpen }"
-            :title="switchError || currentEngineTip"
+            :title="engineTipAvailable ? '' : switchError || currentEngineTip"
             @click="toggleModelMenu"
+            @mouseenter="onChipEnter"
+            @mouseleave="onChipLeave"
           >
             <span class="model-name">{{ currentEngineLabel }}</span>
             <span v-if="engineMeter?.exhausted && engineMeter.note" class="model-note">{{ engineMeter.note }}</span>
@@ -879,6 +949,38 @@ onBeforeUnmount(() => {
               ></span>
             </span>
           </button>
+          <!-- Friday v2.37 悬停浮条：服务名 · 模型、额度条（用得最多的两个窗口）、余额条（按 100 元算满、
+               剩多少填多少）、明细、上次查的时间；重置 / 恢复是倒计时，浮着时每秒走；不拦鼠标 -->
+          <div v-if="tipOpen" class="usage-tip" :class="{ right: tipAlignRight }">
+            <div class="usage-tip-head">
+              <span class="usage-tip-service">{{ effectiveEngine?.title || effectiveEngine?.model }}</span>
+              <span v-if="tipEngineModel" class="usage-tip-engine">{{ tipEngineModel }}</span>
+              <span v-if="engineTipData?.loading" class="usage-tip-spinner"></span>
+            </div>
+            <div v-for="(bar, index) in engineTipData?.bars ?? []" :key="index" class="usage-tip-bar">
+              <div class="usage-tip-bar-label" :class="{ warning: bar.warning }">{{ bar.label }}</div>
+              <div class="usage-tip-track">
+                <div
+                  class="usage-tip-fill"
+                  :class="{ warning: bar.warning }"
+                  :style="{ width: bar.used > 0 ? `max(6px, ${(bar.used * 100).toFixed(2)}%)` : '0' }"
+                ></div>
+              </div>
+              <div v-if="bar.reset" class="usage-tip-bar-reset">{{ bar.reset }}</div>
+            </div>
+            <div
+              v-if="(engineTipData?.lines.length ?? 0) > 0 || ((engineTipData?.bars.length ?? 0) === 0 && !engineTipData?.loading)"
+              class="usage-tip-lines"
+            >
+              <div
+                v-for="(line, index) in engineTipLines"
+                :key="index"
+                class="usage-tip-line"
+                :class="{ warning: line.warning }"
+              >{{ line.text }}</div>
+            </div>
+            <div v-if="engineTipData?.checkedAt && !engineTipData.loading" class="usage-tip-checked">{{ engineTipData.checkedAt }} 查的</div>
+          </div>
           <div v-if="modelOpen" class="model-menu">
             <div v-if="availableEngines.length === 0" class="model-empty">这台机器没有可用引擎</div>
             <button
@@ -1433,6 +1535,145 @@ textarea::placeholder {
 
 .model-caret {
   font-size: 9px;
+  color: var(--text-3);
+}
+
+/* Friday v2.37 悬停浮条（== UsageTip）：浮在胶囊上方 6px、宽 264，外观同弹出菜单（磨砂玻璃）；
+   不拦鼠标（同 Qt 的 popupType Item）——鼠标只能停在胶囊上，浮条本身不接事件 */
+.usage-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 264px;
+  padding: 12px 14px;
+  background: var(--panel);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  z-index: 31;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: usage-tip-in 0.09s ease-out;
+}
+
+.usage-tip.right {
+  left: auto;
+  right: 0;
+}
+
+@keyframes usage-tip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 头：服务名（粗）· 模型名（淡，太长留尾巴 ≈ 中间截断）；在查时右上角转圈 */
+.usage-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.usage-tip-service {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.usage-tip-engine {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.usage-tip-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--text-3);
+  border-top-color: transparent;
+  animation: usage-tip-spin 0.8s linear infinite;
+}
+
+@keyframes usage-tip-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 条：标签（warning 橙）、6px 圆角轨道 + 填充（剩 0 时不填，有一点就至少 6px）、下面一行小字 */
+.usage-tip-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.usage-tip-bar-label {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.usage-tip-bar-label.warning {
+  color: var(--warn);
+}
+
+.usage-tip-track {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  overflow: hidden;
+}
+
+.usage-tip-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--text-2);
+  transition: width 0.25s cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.usage-tip-fill.warning {
+  background: var(--warn);
+}
+
+.usage-tip-bar-reset {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* 明细行（warning 橙）+ 上次查的时间 */
+.usage-tip-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.usage-tip-line {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.usage-tip-line.warning {
+  color: var(--warn);
+}
+
+.usage-tip-checked {
+  font-size: 10.5px;
   color: var(--text-3);
 }
 
