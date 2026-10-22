@@ -243,6 +243,12 @@ function dirBasename(path: string): string {
 }
 
 const currentSummary = computed(() => store.summaries.find((summary) => summary.id === props.conversationId))
+/** 有内容后不能再改工作目录（服务端对非空会话静默忽略，选了也会被打回；
+ *  Qt 端 v2.1 起同样整个不显示，WorkingDirectoryChip 的 locked） */
+const workdirLocked = computed(() => (props.conversationId ? currentSummary.value?.isEmpty === false : false))
+watch(workdirLocked, (locked) => {
+  if (locked) dirOpen.value = false
+})
 const currentWorkdir = computed(
   () => currentSummary.value?.workingDirectory ?? store.details[props.conversationId ?? '']?.runtime?.workingDirectory ?? ''
 )
@@ -1005,8 +1011,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 工作目录选择（方案 §5.3）：作用在当前会话；没打开会话就新建一段把目录带上；助手模式下收起 -->
-        <div v-if="!store.assistantChat" ref="dirWrap" class="model-wrap dir-wrap">
+        <!-- 工作目录选择（方案 §5.3）：作用在当前会话；没打开会话就新建一段把目录带上；助手模式下收起；
+             会话有内容后不能改（服务端对非空会话静默忽略），整个不显示（同 Qt 端 v2.1） -->
+        <div v-if="!store.assistantChat && !workdirLocked" ref="dirWrap" class="model-wrap dir-wrap">
           <button
             class="model-chip"
             :class="{ open: dirOpen }"
