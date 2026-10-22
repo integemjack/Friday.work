@@ -630,6 +630,13 @@ export interface FsReadResult {
   eof: boolean
 }
 
+/** fs.mkdir（选工作目录时新建目录）：服务端 features 里有 fsMkdir 才有这个方法 */
+export interface FsMkdirResult {
+  path: string
+  /** 已经是个目录再建一次时 false */
+  created: boolean
+}
+
 export interface FsChange {
   path: string
   status: 'A' | 'M' | 'D'

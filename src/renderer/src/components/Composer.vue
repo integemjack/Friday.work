@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect
 import { useAppStore } from '../stores/app.js'
 import type { EngineView } from '../stores/app.js'
 import type { CommandInfo } from '../../../protocol/rpc/protocol.js'
+import type { FsMkdirResult } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
 import { usageForEntry, usageKey, canQueryUsage, usageTip, type UsageLine, type UsageMeter } from '../lib/serviceUsage.js'
@@ -289,6 +290,8 @@ async function openBrowse(path?: string) {
   browsing.value = true
   browseLoading.value = true
   browseError.value = ''
+  mkdirOpen.value = false // 换目录了，收起新建行
+  mkdirError.value = ''
   try {
     const result = await store.browseDirectory(path)
     if (!result) return
@@ -300,6 +303,44 @@ async function openBrowse(path?: string) {
     browseError.value = error instanceof Error ? error.message : String(error)
   } finally {
     browseLoading.value = false
+  }
+}
+
+// 浏览时新建目录（REMOTE.md fs.mkdir）：服务端 features 里有 fsMkdir 才显示；在当前浏览的目录里建一级，建好直接进去
+const canMkdir = computed(() => store.currentMachineInfo?.serverInfo?.features?.includes('fsMkdir') ?? false)
+const mkdirOpen = ref(false)
+const mkdirName = ref('')
+const mkdirBusy = ref(false)
+const mkdirError = ref('')
+const mkdirInput = ref<HTMLInputElement | null>(null)
+
+function toggleMkdir() {
+  mkdirOpen.value = !mkdirOpen.value
+  mkdirName.value = ''
+  mkdirError.value = ''
+  if (mkdirOpen.value) void nextTick(() => mkdirInput.value?.focus())
+}
+
+async function submitMkdir() {
+  const name = mkdirName.value.trim()
+  if (!name || mkdirBusy.value || !browsePath.value) return
+  if (/[\\/]/.test(name) || name === '.' || name === '..') {
+    mkdirError.value = '目录名里不能带路径分隔符'
+    return
+  }
+  mkdirBusy.value = true
+  mkdirError.value = ''
+  try {
+    const result = (await store.rpc(store.currentMachine, 'fs.mkdir', {
+      path: browsePath.value.replace(/\/+$/, '') + '/' + name
+    })) as FsMkdirResult
+    mkdirOpen.value = false
+    mkdirName.value = ''
+    await openBrowse(result?.path || browsePath.value) // 建好直接进新目录
+  } catch (error) {
+    mkdirError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    mkdirBusy.value = false
   }
 }
 
@@ -1082,8 +1123,24 @@ onBeforeUnmount(() => {
               <div class="dir-browse-bar">
                 <button v-if="browseParent" class="dir-up" title="上一级" @click="openBrowse(browseParent)">↑</button>
                 <span class="dir-browse-path" :title="browsePath">{{ browsePath || '主目录' }}</span>
+                <button v-if="canMkdir" class="dir-mkdir" title="在这里新建一个目录" @click="toggleMkdir">＋ 新建目录</button>
                 <button class="dir-back" @click="browsing = false">返回</button>
               </div>
+              <!-- 新建目录（fs.mkdir）：名字只允许一级，Enter 提交，Esc 收起；建好直接进新目录 -->
+              <div v-if="mkdirOpen" class="dir-mkdir-row">
+                <input
+                  ref="mkdirInput"
+                  v-model="mkdirName"
+                  class="dir-mkdir-input"
+                  placeholder="目录名"
+                  maxlength="80"
+                  :disabled="mkdirBusy"
+                  @keydown.enter.prevent="submitMkdir"
+                  @keydown.esc="toggleMkdir"
+                />
+                <button class="dir-mkdir-go" :disabled="mkdirBusy || !mkdirName.trim()" @click="submitMkdir">{{ mkdirBusy ? '建…' : '建' }}</button>
+              </div>
+              <div v-if="mkdirError" class="dir-mkdir-error">{{ mkdirError }}</div>
               <div v-if="browseLoading" class="model-empty">正在读目录…</div>
               <div v-else-if="browseError" class="model-empty">{{ browseError }}</div>
               <div v-else class="dir-browse-list">
@@ -1795,7 +1852,8 @@ textarea::placeholder {
 }
 
 .dir-up,
-.dir-back {
+.dir-back,
+.dir-mkdir {
   flex: none;
   height: 24px;
   padding: 0 8px;
@@ -1806,7 +1864,8 @@ textarea::placeholder {
 }
 
 .dir-up:hover,
-.dir-back:hover {
+.dir-back:hover,
+.dir-mkdir:hover {
   background: var(--hover);
   color: var(--text);
 }
@@ -1822,6 +1881,53 @@ textarea::placeholder {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11.5px;
   color: var(--text-2);
+}
+
+/* ---- 新建目录（fs.mkdir）：输入行 + 错误 ---- */
+.dir-mkdir-row {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 6px 5px 0;
+}
+
+.dir-mkdir-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dir-mkdir-input:focus {
+  outline: none;
+  border-color: var(--accent, var(--text-2));
+}
+
+.dir-mkdir-go {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--hover);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dir-mkdir-go:disabled {
+  opacity: .5;
+}
+
+.dir-mkdir-error {
+  flex: none;
+  padding: 4px 5px 0;
+  font-size: 11.5px;
+  color: var(--danger, #e5484d);
 }
 
 .dir-browse-list {
