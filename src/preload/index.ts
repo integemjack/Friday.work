@@ -27,10 +27,10 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   /** 一段录音（M3-A）：字节交给主进程落成临时文件、领句柄 */
   saveVoiceClip: (bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null> =>
     ipcRenderer.invoke('voice:save-clip', { bytes, mimeType }),
-  /** 输入框语音听写：16 kHz 单声道采样送主进程本地模型转写（SenseVoice/whisper 按语言与菜单选择路由），返回文字
-   *  （lang 为菜单语言值；model 为菜单「识别模型」值，空 = 主进程按语言自动选；首次使用会先下载模型，进度经 onVoiceModelProgress 推送） */
-  transcribeVoice: (audio: Float32Array, lang?: string, model?: string): Promise<{ text: string }> =>
-    ipcRenderer.invoke('voice:transcribe', { audio, lang, model }),
+  /** 输入框语音听写（一次性）：16 kHz 单声道采样送 friday-voice 引擎转写
+   *  （SenseVoice 出字 + Whisper 定稿，语言引擎内自动；首次使用会先下载模型，进度经 onVoiceModelProgress 推送） */
+  transcribeVoice: (audio: Float32Array, lang?: string): Promise<{ text: string }> =>
+    ipcRenderer.invoke('voice:transcribe', { audio, lang }),
   /** 实时听写（friday-voice 引擎，GPU）：begin 起 serve+连接并开始（首次会下载模型，进度走
    *  onVoiceModelProgress）；feed 喂 16 位小端 PCM16 帧；flush 把正在说的这句马上定稿；stop 结束。
    *  识别事件（边说边出字的 partial / 每句定稿的 final / 出错）经 onRtVoiceEvent 推送 */
@@ -73,23 +73,30 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('voice:model-progress', handler)
     return () => ipcRenderer.removeListener('voice:model-progress', handler)
   },
-  /** 助手回复语音播报：文本+音色送主进程合成，返回采样和采样率（渲染层 WebAudio 播放）。
-   *  engine：'kokoro'（默认，CPU，按 sid 选 103 个音色）| 'cosyvoice3'（本机 GPU，服务端同款
-   *  模型，按 voice 选音色名、可带语气指令）；首次使用会先下载（进度经 onTtsModelProgress 推） */
+  /** 助手回复语音播报：文本+音色送 friday-voice 引擎（CosyVoice3，本机 GPU）合成，
+   *  返回采样和采样率（渲染层 WebAudio 播放）；首次使用会先下载（进度经 onTtsModelProgress 推） */
   speakReply: (
-    payload: { text: string; speed: number; sid?: number; engine?: 'kokoro' | 'cosyvoice3'; voice?: string; instruction?: string }
+    payload: { text: string; speed?: number; voice?: string; instruction?: string }
   ): Promise<{ samples: Float32Array; sampleRate: number }> => ipcRenderer.invoke('voice:speak', payload),
   /** CosyVoice3 引擎状态：本机平台有无对应包、是否已下好、服务是否在跑、可用音色名 */
   cosyVoiceStatus: (): Promise<{ supported: boolean; installed: boolean; serving: boolean; voices: string[]; version: string }> =>
     ipcRenderer.invoke('voice:cv3-status'),
-  /** 下载 / 启动 CosyVoice3 引擎（约 1.2GB，进度走 onTtsModelProgress），不合成 */
+  /** 下载 / 启动语音引擎（约 1.2GB，进度走 onTtsModelProgress），不合成 */
   prefetchCosyVoice: (): Promise<void> => ipcRenderer.invoke('voice:cv3-prefetch'),
   /** 打断当前这句合成（不等它念完） */
   cancelCosyVoice: (): Promise<void> => ipcRenderer.invoke('voice:cv3-cancel'),
-  /** 只触发 TTS 模型下载/加载（设置里的「立即下载」），不合成 */
-  prefetchTtsModel: (): void => {
-    ipcRenderer.send('voice:tts-prefetch')
-  },
+  /** 音色克隆（v0.5）：8~15 秒 16 kHz 录音 → 本地音色（首次会先下前端模型，进度走 onVoiceModelProgress）；
+   *  没给 text 就用引擎听写当底稿；返回克隆名、底稿和用时 */
+  cloneVoice: (payload: { name: string; audio: Float32Array; text?: string }): Promise<{ voice: string; transcript: string; seconds: number; took: number }> =>
+    ipcRenderer.invoke('voice:clone', payload),
+  /** 克隆能力：本机平台支持否、前端模型装了没、引擎在跑否 */
+  cloneVoiceStatus: (): Promise<{ supported: boolean; installed: boolean; serving: boolean }> =>
+    ipcRenderer.invoke('voice:clone-status'),
+  /** 引擎音色列表（内置 + 用户克隆的） */
+  listVoices: (): Promise<{ voices: string[]; user: string[]; clone: boolean; default: string }> =>
+    ipcRenderer.invoke('voice:voices'),
+  /** 删掉一个克隆音色（内置的引擎会拒绝） */
+  deleteVoice: (name: string): Promise<void> => ipcRenderer.invoke('voice:delete-voice', name),
   onTtsModelProgress: (
     listener: (state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }) => void
   ): (() => void) => {

@@ -500,21 +500,11 @@ function saveVoicePref(key: string, value: string): void {
   }
 }
 
-// 识别模型：默认按语言自动选（中文等 → SenseVoice，混合/其他 → Qwen3-ASR）；也可手动锁定某一款。
-// whisper 已从菜单移除（2026-10 被 Qwen3-ASR 替换，本机实测质量更好），仅在主进程作回退引擎
-const VOICE_MODELS: Array<{ value: string; label: string; note: string }> = [
-  { value: 'auto', label: '自动（按语言选，推荐）', note: '中文→SenseVoice，混合/小语种→Qwen3-0.6B' },
-  { value: 'friday-voice', label: 'GPU 实时（边说边出字）', note: '约0.8GB · GPU 引擎 + Whisper 定稿，中英混说最稳，实时出字' },
-  { value: 'sensevoice', label: 'SenseVoice', note: '约230MB · 中文最快最准、抗噪' },
-  { value: 'qwen3', label: 'Qwen3-ASR 0.6B', note: '约840MB · 30语种+22方言，混合/小语种更准，稍慢' },
-  { value: 'qwen3-1.7b', label: 'Qwen3-ASR 1.7B', note: '约2.4GB · 最准，明显更慢' }
-]
+// 识别引擎收敛为 friday-voice 一条路（语言引擎内自动）：菜单只剩模式/麦克风/语言。
+// 旧缓存的 voice.model 值已无意义，不读。
 
 const voiceMode = ref<'hold' | 'click'>(loadVoicePref('voice.mode') === 'click' ? 'click' : 'hold')
 const voiceLang = ref(loadVoicePref('voice.lang') || 'auto')
-const voiceModel = ref(loadVoicePref('voice.model'))
-// 旧缓存可能是已移除的 whisper-*：不在菜单里就回「自动」（主进程也会把旧值迁到 Qwen3）
-if (!VOICE_MODELS.some((m) => m.value === voiceModel.value)) voiceModel.value = 'auto'
 const voiceMicId = ref(loadVoicePref('voice.mic'))
 const voiceMenuOpen = ref(false)
 const voiceWrap = ref<HTMLDivElement | null>(null)
@@ -604,11 +594,6 @@ function setVoiceLang(value: string): void {
   saveVoicePref('voice.lang', value)
 }
 
-function setVoiceModel(value: string): void {
-  voiceModel.value = value
-  saveVoicePref('voice.model', value)
-}
-
 function chooseMic(deviceId: string): void {
   voiceMicId.value = deviceId
   saveVoicePref('voice.mic', deviceId)
@@ -626,9 +611,8 @@ async function startListen(): Promise<void> {
     {
       lang:
         voiceLang.value === 'auto'
-          ? navigator.language || undefined // 「自动」= 跟随系统：whisper 对短音频自己猜语言容易猜错（实测中文句被译成英文）
+          ? navigator.language || undefined // 「自动」= 跟随系统（引擎自己也会识别语言）
           : voiceLang.value,
-      model: voiceModel.value,
       deviceId: voiceMicId.value || undefined,
       onPhase: (phase: VoicePhase, detail?: string) => {
         if (phase === 'listening') {
@@ -639,7 +623,7 @@ async function startListen(): Promise<void> {
         // 模型准备进度由 onVoiceModelProgress 专门推送，这里不管 detail
       },
       onText: (recognized) => {
-        // whisper 是逐段落定追加：整段拼回输入框（开头保留用户已打的字）
+        // 转写逐段落定追加：整段拼回输入框（开头保留用户已打的字）
         const base = sessionBase
         text.value = base ? base + recognized : recognized
         void nextTick(resize)
@@ -1098,21 +1082,7 @@ onBeforeUnmount(() => {
                 </span>
                 <span v-if="voiceLang === lang.value" class="model-check">✓</span>
               </button>
-              <div class="dir-sep">识别模型</div>
-              <button
-                v-for="m in VOICE_MODELS"
-                :key="m.value"
-                class="model-item"
-                :class="{ current: voiceModel === m.value }"
-                :title="m.note"
-                @click="setVoiceModel(m.value)"
-              >
-                <span class="model-item-main">
-                  <span class="model-item-title">{{ m.label }}</span>
-                  <span class="model-item-model">{{ m.note }}</span>
-                </span>
-                <span v-if="voiceModel === m.value" class="model-check">✓</span>
-              </button>
+              <!-- 识别引擎收敛为 friday-voice 一条路：语言菜单后面不再有「识别模型」区 -->
             </div>
           </div>
           <!-- 生成中/助手在说：停止键；会话生成中还多一颗补充键（插入内容：做完当前这一步就交给它，qt 同款双键）。

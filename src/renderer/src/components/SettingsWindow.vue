@@ -6,26 +6,23 @@ import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { loadTheme, setTheme, type UITheme } from '../lib/theme.js'
 import {
-  addCustomVoice,
+  clonedVoices,
+  cloneSupported,
   cosyVoiceReady,
   cosyVoiceStatus,
-  CUSTOM_VOICE_GROUPS,
   currentVoiceId,
-  customVoices,
   PRESET_VOICES,
   previewVoice,
-  prefetchTtsModel,
   refreshCosyVoiceStatus,
-  removeCustomVoice,
   replySpeakEnabled,
   setCurrentVoice,
   setReplySpeak,
-  sidToVoiceCode,
   stopSpeaking,
   ttsDetail,
   ttsPhase,
   type VoiceOption
 } from '../lib/speechOutput.js'
+import { resample } from '../lib/voiceMedia.js'
 import { autoCallEnabled, setAutoCall } from '../lib/autoCall.js'
 
 const store = useAppStore()
@@ -142,38 +139,17 @@ const serverRows = computed<Array<{ label: string; value: string }>>(() => {
 
 onMounted(load)
 
-// MARK: 语音播报（tab=speech）：开关 / 音色 / 自定义音色 / 模型下载
+// MARK: 语音播报（tab=speech）：开关 / 音色（内置 + 克隆）/ 克隆向导 / 模型下载
+// 2026-10 收敛：语音只剩 friday-voice 引擎一条路（CosyVoice3 + 克隆），kokoro 和本地
+// sherpa-onnx 系列已删；「自定义音色」变成「克隆自己的声音」（引擎 v0.5）。
 
-/** 自定义音色下拉的选项（分组：中文女 55 / 中文男 45 / 英文女 3） */
-const customVoiceOptions = CUSTOM_VOICE_GROUPS.map((group) => ({
-  label: group.label,
-  options: group.sids.map((sid) => ({ value: sid, label: `${sidToVoiceCode(sid)}（编号 ${sid}）` }))
-}))
+/** 全部可选音色：引擎内置 5 个 + 克隆的（克隆的排后面，可删） */
+const allVoices = computed<VoiceOption[]>(() => [...PRESET_VOICES, ...clonedVoices.value])
 
-/** 全部可选音色：预置 10 个 + 用户自定义的（自定义的排后面，可删） */
-const allVoices = computed<VoiceOption[]>(() => [...PRESET_VOICES, ...customVoices.value])
+/** 克隆模型（前端两个 ONNX）还没装：向导里提醒首次会先下 ~260MB */
+const cloneModelHint = computed(() => (cloneSupported.value ? '' : '（首次克隆会先下载前端模型约 260MB）'))
 
-const draft = ref({ name: '', sid: 44, speed: 1.0 })
-const draftOpen = ref(false)
-
-function pickDraftVoice(sid: number): void {
-  draft.value.sid = sid
-}
-
-function previewDraft(): void {
-  previewVoice({ id: 'draft', name: draft.value.name || '新音色', tag: '', sid: draft.value.sid, speed: draft.value.speed })
-}
-
-function saveCustom(): void {
-  const name = draft.value.name.trim()
-  if (!name) return
-  const voice = addCustomVoice(name, draft.value.sid, draft.value.speed)
-  setCurrentVoice(voice.id)
-  draftOpen.value = false
-  draft.value = { name: '', sid: 44, speed: 1.0 }
-}
-
-/** 模型状态文案（下载/解压/加载/就绪/出错；首次使用自动下载约 150MB） */
+/** 模型状态文案（下载/解压/加载/出错） */
 const modelStateText = computed(() => {
   switch (ttsPhase.value) {
     case 'downloading':
@@ -190,7 +166,7 @@ const modelStateText = computed(() => {
 })
 const modelReady = computed(() => ttsPhase.value === 'idle' || ttsPhase.value === 'speaking')
 
-// MARK: CosyVoice3（服务端同款本地模型）：状态 / 下载
+// MARK: 引擎状态 / 下载
 
 const cv3StateText = computed(() => {
   const status = cosyVoiceStatus.value
@@ -208,6 +184,119 @@ function downloadCosyVoice(): void {
 }
 
 onMounted(() => void refreshCosyVoiceStatus())
+
+// MARK: 克隆我的声音（8~15 秒录音 → 引擎提取 → 出现在音色列表）
+
+const cloneOpen = ref(false)
+const cloneName = ref('')
+const cloneRecording = ref(false)
+const cloneSeconds = ref(0)
+/** 录完待提取的音频（16 kHz Float32）；空 = 还没录 */
+const cloneAudio = ref<Float32Array | null>(null)
+const cloneBusy = ref(false)
+const cloneError = ref('')
+const cloneDone = ref('')
+/** 克隆模型下载进度（onVoiceModelProgress 的百分比；克隆首次会先下 ~260MB 前端模型） */
+const cloneProgress = ref('')
+
+let cloneStream: MediaStream | null = null
+let cloneContext: AudioContext | null = null
+let cloneProcessor: ScriptProcessorNode | null = null
+let cloneFrames: Float32Array[] = []
+let cloneProgressOff: (() => void) | null = null
+
+async function startCloneRecording(): Promise<void> {
+  cloneError.value = ''
+  cloneDone.value = ''
+  cloneAudio.value = null
+  try {
+    cloneStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    })
+    cloneFrames = []
+    cloneSeconds.value = 0
+    cloneContext = new AudioContext()
+    const source = cloneContext.createMediaStreamSource(cloneStream)
+    cloneProcessor = cloneContext.createScriptProcessor(2048, 1, 1)
+    const context = cloneContext
+    cloneProcessor.onaudioprocess = (event) => {
+      const frame = resample(event.inputBuffer.getChannelData(0), context.sampleRate, 16000)
+      cloneFrames.push(frame)
+      cloneSeconds.value = cloneFrames.reduce((n, f) => n + f.length, 0) / 16000
+    }
+    source.connect(cloneProcessor)
+    cloneProcessor.connect(cloneContext.destination)
+    cloneRecording.value = true
+  } catch (error) {
+    cloneError.value = `麦克风开不起来：${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+function stopCloneRecording(): void {
+  cloneRecording.value = false
+  const total = new Float32Array(cloneFrames.reduce((n, f) => n + f.length, 0))
+  let at = 0
+  for (const frame of cloneFrames) {
+    total.set(frame, at)
+    at += frame.length
+  }
+  cloneFrames = []
+  cloneAudio.value = total
+  cloneProcessor?.disconnect()
+  cloneProcessor = null
+  for (const track of cloneStream?.getTracks() ?? []) track.stop()
+  cloneStream = null
+  void cloneContext?.close().catch(() => {})
+  cloneContext = null
+}
+
+async function extractClone(): Promise<void> {
+  const audio = cloneAudio.value
+  if (!audio || audio.length < 16000 * 3) {
+    cloneError.value = '录音太短（至少 3 秒，建议 8~15 秒）'
+    return
+  }
+  const name = (cloneName.value.trim() || 'my-voice').replace(/[\\/:*?"<>|\s.]/g, '-').slice(0, 60)
+  cloneBusy.value = true
+  cloneError.value = ''
+  cloneProgressOff?.()
+  cloneProgressOff = window.fridayBridge.onVoiceModelProgress?.((state) => {
+    cloneProgress.value =
+      state.phase === 'downloading'
+        ? state.percent !== undefined ? `${state.detail ?? '克隆模型下载中'} ${state.percent}%` : (state.detail ?? '克隆模型下载中')
+        : state.phase === 'loading'
+          ? '启动语音引擎…'
+          : ''
+  }) ?? null
+  try {
+    // 没给 text：引擎用 SenseVoice 听写当底稿（念什么都行）
+    const result = await window.fridayBridge.cloneVoice({ name, audio })
+    cloneDone.value = `已克隆「${result.voice}」（${result.seconds.toFixed(1)} 秒录音，用时 ${result.took.toFixed(1)} 秒）`
+    cloneAudio.value = null
+    cloneName.value = ''
+    cloneOpen.value = false
+    await refreshCosyVoiceStatus()
+    setCurrentVoice(`cv3:${result.voice}`)
+    // 克隆完直接试听一句
+    previewVoice({ id: `cv3:${result.voice}`, name: result.voice, tag: '克隆', voice: result.voice, speed: 1.0, custom: true })
+  } catch (error) {
+    cloneError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    cloneBusy.value = false
+    cloneProgress.value = ''
+    cloneProgressOff?.()
+    cloneProgressOff = null
+  }
+}
+
+async function deleteClone(voice: VoiceOption): Promise<void> {
+  try {
+    await window.fridayBridge.deleteVoice(voice.voice)
+    await refreshCosyVoiceStatus()
+  } catch (error) {
+    cloneError.value = error instanceof Error ? error.message : String(error)
+  }
+}
 </script>
 
 <template>
@@ -341,10 +430,10 @@ onMounted(() => void refreshCosyVoiceStatus())
           <button class="small-btn" :class="{ strong: !replySpeakEnabled }" @click="setReplySpeak(false)">关</button>
         </span>
       </div>
-      <div class="note">回复完成时用本地语音模型朗读文字部分（代码块、链接不念），完全离线、不联网。默认引擎 kokoro 首次使用会下载约 350MB 模型（fp32，比 int8 快 3-4 倍），之后不再下载。</div>
+      <div class="note">回复完成时用本地语音引擎朗读文字部分（代码块、链接不念），完全离线、不联网、不花钱。首次使用会自动下载模型（约 1.2GB，本机 GPU 推理），之后不再下载。</div>
 
       <div class="row">
-        <span class="key">高质量引擎 CosyVoice3</span>
+        <span class="key">语音引擎</span>
         <span class="value">
           <span>{{ cv3StateText }}</span>
           <button v-if="cv3Supported && !cv3Downloaded" class="small-btn" :disabled="ttsPhase === 'downloading'" @click="downloadCosyVoice">
@@ -352,9 +441,9 @@ onMounted(() => void refreshCosyVoiceStatus())
           </button>
         </span>
       </div>
-      <div class="note">服务端（Friday）用的同一套本地模型和加载方式：friday-voice 引擎 + Fun-CosyVoice3-0.5B，本机 GPU（Vulkan）推理。实测女声 RTF 0.52-0.74、首块 0.53-0.82s，韵律比 kokoro 自然、还能带语气指令。没下载时选它的音色会自动用 kokoro 念，不会不出声。</div>
+      <div class="note">friday-voice（与服务端同一套）：CosyVoice3 合成 + SenseVoice/Whisper 听写，本机 GPU（Vulkan）推理。听写（输入框麦克风）和播报共用这一个引擎、同一批模型。</div>
 
-      <h3 class="sub">音色（CosyVoice3 5 种 + kokoro 10 种，可自定义）</h3>
+      <h3 class="sub">音色（引擎内置 5 种 + 克隆的）</h3>
       <div class="voice-grid">
         <button
           v-for="voice in allVoices"
@@ -364,59 +453,52 @@ onMounted(() => void refreshCosyVoiceStatus())
           @click="setCurrentVoice(voice.id)"
         >
           <span class="voice-name">{{ voice.name }}</span>
-          <span class="voice-meta">{{ voice.tag }} · {{ voice.engine === 'cosyvoice3' ? voice.voice : voice.custom ? sidToVoiceCode(voice.sid) : voice.id }}{{ voice.engine === 'cosyvoice3' && !cosyVoiceReady ? '（未下载，先拿 kokoro 念）' : '' }}</span>
+          <span class="voice-meta">{{ voice.tag }}{{ !cosyVoiceReady ? '（引擎未下载）' : '' }}</span>
           <span class="voice-actions">
             <span class="voice-mini" role="button" title="试听这个音色" @click.stop="previewVoice(voice)">试听</span>
             <span
               v-if="voice.custom"
               class="voice-mini danger"
               role="button"
-              title="删掉这个自定义音色"
-              @click.stop="removeCustomVoice(voice.id)"
+              title="删掉这个克隆音色"
+              @click.stop="deleteClone(voice)"
               >删除</span
             >
           </span>
         </button>
-        <button class="voice-item add" @click="draftOpen = !draftOpen">
-          <span class="voice-name">+ 自定义音色</span>
-          <span class="voice-meta">在 100 个内置音色里起名保存</span>
+        <button class="voice-item add" @click="cloneOpen = !cloneOpen">
+          <span class="voice-name">+ 克隆我的声音</span>
+          <span class="voice-meta">念 8~15 秒，全程本地提取</span>
         </button>
       </div>
 
-      <div v-if="draftOpen" class="voice-draft">
+      <div v-if="cloneOpen" class="voice-draft">
+        <div class="note" style="padding-top: 0">在安静环境里用平常说话的语气念 8~15 秒（念什么都行，引擎会自动听写当底稿）；太短效果差，太长没有增益。{{ cloneModelHint }}</div>
         <div class="row">
-          <span class="key">名字</span>
-          <input v-model="draft.name" class="input" maxlength="12" placeholder="比如：沉稳男声" />
-        </div>
-        <div class="row">
-          <span class="key">底层音色</span>
-          <select class="input" :value="draft.sid" @change="pickDraftVoice(Number(($event.target as HTMLSelectElement).value))">
-            <optgroup v-for="group in customVoiceOptions" :key="group.label" :label="group.label">
-              <option v-for="option in group.options" :key="option.value" :value="option.value">{{ option.label }}</option>
-            </optgroup>
-          </select>
-        </div>
-        <div class="row">
-          <span class="key">语速 {{ draft.speed.toFixed(2) }}×</span>
-          <input
-            v-model.number="draft.speed"
-            class="input range"
-            type="range"
-            min="0.6"
-            max="1.6"
-            step="0.05"
-          />
+          <span class="key">音色名</span>
+          <input v-model="cloneName" class="input" maxlength="20" placeholder="比如：我的声音（默认 my-voice）" />
         </div>
         <div class="update-actions">
-          <button class="small-btn" @click="previewDraft">试听</button>
-          <button class="small-btn strong" :disabled="!draft.name.trim()" @click="saveCustom">保存并使用</button>
+          <button v-if="!cloneRecording && !cloneAudio" class="small-btn" :disabled="cloneBusy || !cv3Downloaded" @click="startCloneRecording">
+            开始录音
+          </button>
+          <button v-if="cloneRecording" class="small-btn strong" @click="stopCloneRecording">结束（{{ cloneSeconds.toFixed(1) }}s）</button>
+          <button v-if="cloneAudio && !cloneRecording" class="small-btn" :disabled="cloneBusy" @click="cloneAudio = null">重录</button>
+          <button v-if="cloneAudio && !cloneRecording" class="small-btn strong" :disabled="cloneBusy" @click="extractClone">
+            {{ cloneBusy ? '提取中…' : '提取音色' }}
+          </button>
         </div>
+        <div v-if="cloneRecording" class="note">正在录…（{{ cloneSeconds.toFixed(1) }} 秒）</div>
+        <div v-else-if="cloneAudio && !cloneBusy" class="note">已录 {{ cloneSeconds.toFixed(1) }} 秒，可以提取（或重录）。</div>
+        <div v-if="cloneProgress" class="note">{{ cloneProgress }}</div>
+        <div v-if="cloneDone" class="note">{{ cloneDone }}</div>
+        <div v-if="cloneError" class="error">{{ cloneError }}</div>
       </div>
 
       <h3 class="sub">本地语音模型</h3>
       <div class="row">
         <span class="key">模型</span>
-        <span class="value">kokoro v1.1 fp32（103 音色，中英）· 本机合成 · 实测比实时快 2-3 倍</span>
+        <span class="value">friday-voice · CosyVoice3 Q8（合成）+ SenseVoice/Whisper turbo（听写）· 本机 GPU</span>
       </div>
       <div v-if="ttsPhase === 'downloading'" class="progress">
         <div class="bar" :style="{ width: (ttsDetail.match(/(\d+)%/)?.[1] ?? 0) + '%' }" />
@@ -427,7 +509,7 @@ onMounted(() => void refreshCosyVoiceStatus())
         <button v-if="ttsPhase === 'downloading' || ttsPhase === 'extracting' || ttsPhase === 'loading'" class="small-btn" disabled>
           准备中…
         </button>
-        <button v-else-if="!modelReady" class="small-btn" @click="prefetchTtsModel()">重试下载</button>
+        <button v-else-if="!modelReady" class="small-btn" @click="downloadCosyVoice()">重试下载</button>
       </div>
     </section>
   </div>

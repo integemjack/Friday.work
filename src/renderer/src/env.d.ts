@@ -12,8 +12,8 @@ declare global {
       registerDrop(file: File): Promise<PickedFile | null>
       /** 一段录音交给主进程落盘（M3-A） */
       saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
-      /** 输入框语音听写：16 kHz 单声道采样送主进程本地模型转写（SenseVoice/whisper），返回文字 */
-      transcribeVoice(audio: Float32Array, lang?: string, model?: string): Promise<{ text: string }>
+      /** 输入框语音听写（一次性）：16 kHz 单声道采样送 friday-voice 引擎转写（语言自动），返回文字 */
+      transcribeVoice(audio: Float32Array, lang?: string): Promise<{ text: string }>
       /** 实时听写（friday-voice 引擎，GPU）：begin 起 serve+连接（首次下载进度走 onVoiceModelProgress），
        *  feed 喂 16 位小端 PCM16 帧，flush 定稿当前句，stop 结束；识别事件经 onRtVoiceEvent 推送 */
       rtBeginVoice(lang?: string): Promise<void>
@@ -41,24 +41,30 @@ declare global {
           total?: number
         }) => void
       ): () => void
-      /** 助手回复语音播报：主进程合成返回采样（渲染层 WebAudio 播放）；
-       *  engine 缺省 = kokoro（CPU），'cosyvoice3' = 本机 GPU、服务端同款模型 */
+      /** 助手回复语音播报：friday-voice 引擎（CosyVoice3，本机 GPU）合成返回采样（渲染层 WebAudio 播放） */
       speakReply(payload: {
         text: string
-        speed: number
-        sid?: number
-        engine?: 'kokoro' | 'cosyvoice3'
+        speed?: number
         voice?: string
         instruction?: string
       }): Promise<{ samples: Float32Array; sampleRate: number }>
-      /** 只触发 TTS 模型下载/加载（设置里的「立即下载」） */
+      /** 只触发语音引擎下载/启动（设置里的「立即下载」） */
       prefetchTtsModel(): void
       /** CosyVoice3 引擎状态（支持/已装/在跑/音色名） */
       cosyVoiceStatus(): Promise<{ supported: boolean; installed: boolean; serving: boolean; voices: string[]; version: string }>
-      /** 下载 / 启动 CosyVoice3 引擎（约 1.2GB，进度走 onTtsModelProgress） */
+      /** 下载 / 启动语音引擎（约 1.2GB，进度走 onTtsModelProgress） */
       prefetchCosyVoice(): Promise<void>
       /** 打断当前这句合成 */
       cancelCosyVoice(): Promise<void>
+      /** 音色克隆（v0.5）：8~15 秒 16 kHz 录音 → 本地音色（首次会先下前端模型，进度走 onVoiceModelProgress）；
+       *  没给 text 就用引擎听写当底稿；返回克隆名、底稿和用时 */
+      cloneVoice(payload: { name: string; audio: Float32Array; text?: string }): Promise<{ voice: string; transcript: string; seconds: number; took: number }>
+      /** 克隆能力：本机平台支持否、前端模型装了没、引擎在跑否 */
+      cloneVoiceStatus(): Promise<{ supported: boolean; installed: boolean; serving: boolean }>
+      /** 引擎音色列表（内置 + 用户克隆的） */
+      listVoices(): Promise<{ voices: string[]; user: string[]; clone: boolean; default: string }>
+      /** 删掉一个克隆音色（内置的引擎会拒绝） */
+      deleteVoice(name: string): Promise<void>
       onTtsModelProgress(
         listener: (
           state: { phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error'; percent?: number; detail?: string }

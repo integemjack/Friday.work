@@ -1,18 +1,13 @@
-// 语音听写（本地模型，主进程推理）：麦克风 → AudioContext → 重采样 16k → Float32；
-//   - hold 模式（默认）：按住累积，松开时整段送主进程转写，出文字落定；
-//   - click 持续模式：能量 VAD 切句（静音 ~600ms 断句，最长 12s 强制断），
-//     每句排队转写，文字一句句追加；转写排队串行，不压爆 CPU。
-//   - 实时引擎（model='friday-voice'，GPU）：不走上面的整段转写，音频帧直接流式喂给
-//     friday-voice 引擎（边说边出 partial、每句 final 定稿）；断句/首词处理引擎内做，
-//     渲染层只管喂帧和拼文字。引擎冷启动期间帧先攒着（最多 10s），连上后补发。
+// 语音听写（friday-voice 引擎，GPU）：麦克风 → AudioContext → 重采样 16k → Float32；
+//   - hold 模式（默认）：按住累积，松开时整段送引擎一次性转写（/v1/audio/transcriptions），文字落定；
+//   - click 持续模式：实时链路（边说边出字 + 引擎 VAD 断句 + 每句 Whisper 定稿），
+//     渲染层只管喂帧和拼字。
+//   引擎冷启动期间帧先攒着（最多 10s），连上后补发。
 //
 // 全 WebAudio 录音，不依赖任何原生模块；回声消除 / 降噪 / 自动增益交给 Chromium。
-// Chrome 自带的 SpeechRecognition 在 Electron 里没有识别服务（electron#46143），故走本地模型。
+// Chrome 自带的 SpeechRecognition 在 Electron 里没有识别服务（electron#46143），故走本地引擎。
 
 import { resample } from './voiceMedia.js'
-
-/** 「识别模型」菜单里实时引擎的值：选它走流式链路（rtBeginVoice/…），不调 transcribeVoice */
-export const RT_VOICE_MODEL = 'friday-voice'
 
 const TARGET_RATE = 16000
 /** 静音判定窗：连续这么久低于阈值就断句 */
@@ -31,10 +26,8 @@ const TAIL_PAD_MS = 100
 export type VoicePhase = 'listening' | 'model-loading' | 'transcribing'
 
 export interface SpeechInputOptions {
-  /** 识别语言（菜单值：'auto' | 'zh-CN' | …；空 = 跟随系统，都交给主进程映射 whisper 语言） */
+  /** 识别语言（菜单值：'auto' | 'zh-CN' | …；空 = 跟随系统，都交给引擎自动） */
   lang?: string
-  /** 识别模型（菜单值：'auto' | 'sensevoice' | 'qwen3' | 'qwen3-1.7b'；主进程路由） */
-  model?: string
   /** 指定麦克风（deviceId；空 = 系统默认） */
   deviceId?: string
   /** 状态变化（含模型下载进度 detail） */
@@ -187,7 +180,7 @@ export class SpeechInput {
     this.whole = new Float32Array(0)
     this.queue = []
     this.hold = hold
-    this.realtime = options.model === RT_VOICE_MODEL
+    this.realtime = !hold   // 持续模式一律实时链路（引擎 VAD 断句）；hold 松手才整段转写
     // AudioContext 不依赖设备，先建；和 getUserMedia 并行省点启动时间
     const context = new AudioContext()
     this.context = context
@@ -407,7 +400,7 @@ export class SpeechInput {
         const utterance = this.queue.shift()!
         this.options?.onPhase?.('transcribing')
         try {
-          const out = await window.fridayBridge.transcribeVoice(utterance, this.options?.lang, this.options?.model)
+          const out = await window.fridayBridge.transcribeVoice(utterance, this.options?.lang)
           const text = out.text
           if (text) {
             this.transcript += (this.transcript && !this.transcript.endsWith(' ') ? ' ' : '') + text

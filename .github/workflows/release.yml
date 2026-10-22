@@ -3,7 +3,7 @@ name: Build & Release
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['v[0-9]*']   # 只认 v0.5.x 这类版本 tag；voice-v*（引擎）不能触发客户端发布
   workflow_dispatch:
 
 permissions:

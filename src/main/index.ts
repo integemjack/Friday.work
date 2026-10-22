@@ -7,7 +7,6 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerDictationIpc } from './Dictation.js'
 import { registerRealtimeDictationIpc } from './RealtimeDictation.js'
-import { registerTtsIpc } from './TtsService.js'
 import { registerCosyVoiceIpc } from './CosyVoiceService.js'
 import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
@@ -188,12 +187,9 @@ app.whenReady().then(() => {
   protocolProcessHost.start()
   bridge = new IpcBridge(protocolProcessHost, () => mainWindow)
   bridge.register()
-  // 输入框语音听写：SenseVoice（主力）/ whisper（混合与多语言）按语言+菜单选择路由；
-  // 「GPU 实时」引擎（friday-voice，边说边出字 + Whisper 定稿）走流式链路 RealtimeDictation
+  // 语音全部走 friday-voice 引擎（GPU）：听写（实时 + 一次性）和播报（CosyVoice3，含克隆音色）
   registerDictationIpc()
   registerRealtimeDictationIpc()
-  // 助手回复语音播报：kokoro v1.1（CPU、103 音色）+ CosyVoice3（本机 GPU、服务端同款模型）
-  registerTtsIpc()
   registerCosyVoiceIpc()
   updater.register()
   updater.spawnInstallerOnQuit()

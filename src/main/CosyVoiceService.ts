@@ -35,10 +35,10 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import WebSocket from 'ws'
 
-/** 引擎版本（Friday.Powers release tag voice-v0.4.1，和服务端装的同一份） */
-const POWER_VERSION = '0.4.1'
-/** GitHub release 附件；直连慢/不通时换公共镜像（同一批文件） */
-const RELEASE_BASE = 'integemjack/Friday.Powers/releases/download'
+/** 引擎版本（本仓库 release tag voice-v0.5.0：CI 从 vendor/friday-voice 编出来的，含音色克隆） */
+const POWER_VERSION = '0.5.0'
+/** 引擎 zip 从本仓库（Friday.work）的 voice tag Release 拉；挂了换公共镜像（同一批文件） */
+const RELEASE_BASE = 'integemjack/Friday.work/releases/download'
 const DOWNLOAD_HOSTS = ['https://github.com', 'https://ghproxy.net/https://github.com', 'https://ghfast.top/https://github.com']
 const MODEL_BASE = 'https://modelscope.cn/models'
 
@@ -129,6 +129,22 @@ const TTS_MODEL_ASSETS: Asset[] = [
     label: 'CosyVoice3 合成模型',
     urls: [`${MODEL_BASE}/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/CosyVoice3-2512_Q8_0.gguf`],
     sha256: 'be133cb6154ca73cd1d213b1c9496def99ba9c1f7c14cd99f6b350af2eb7963d'
+  }
+]
+
+/** 音色克隆需要的前端模型（speech tokenizer 认语音 token、campplus 认说话人向量；第一次克隆才下载） */
+const CLONE_MODEL_ASSETS: Asset[] = [
+  {
+    file: join('models', 'frontend-onnx', 'speech_tokenizer_v3.int8.onnx'),
+    label: '语音分词器（克隆用）',
+    urls: [`${MODEL_BASE}/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/frontend-onnx/speech_tokenizer_v3.int8.onnx`],
+    sha256: 'd7caa04fbc2f54af196906469471b607ce2594b7e92ac07dddfb315103a74c72'
+  },
+  {
+    file: join('models', 'frontend-onnx', 'campplus.onnx'),
+    label: '说话人向量（克隆用）',
+    urls: [`${MODEL_BASE}/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/frontend-onnx/campplus.onnx`],
+    sha256: 'a6ac6a63997761ae2997373e2ee1c47040854b4b759ea41ec48e4e42df0f4d73'
   }
 ]
 
@@ -242,6 +258,8 @@ interface ServeNeed {
   forTts?: boolean
   /** 实时听写：要 Whisper 定稿模型 + serve 带 --whisper-model */
   forDictation?: boolean
+  /** 音色克隆：要前端两个 ONNX + CosyVoice3（引擎的 clone 端点要合成模型在）；forClone ⇒ forTts */
+  forClone?: boolean
   /** 进度推到哪条事件（听写 UI 听 model-progress，播报 UI 听 tts-progress） */
   progress?: ProgressChannel
 }
@@ -264,8 +282,14 @@ async function ensureFiles(to: WebContents, need: ServeNeed = {}): Promise<void>
     await rm(archive, { force: true })
     if (!existsSync(executablePath())) throw new Error('语音引擎包内容不完整（缺 friday-voice）')
   }
-  // serve 硬要求的两个先下；按需再下 whisper（听写）/ cosyvoice3（播报）
-  const wanted = [...DICTATION_MODEL_ASSETS.slice(0, 2), ...(need.forTts ? TTS_MODEL_ASSETS : []), ...(need.forDictation ? [DICTATION_MODEL_ASSETS[2]] : [])]
+  // serve 硬要求的两个先下；按需再下 whisper（听写）/ cosyvoice3（播报）/ 克隆前端
+  const needTts = need.forTts || need.forClone
+  const wanted = [
+    ...DICTATION_MODEL_ASSETS.slice(0, 2),
+    ...(needTts ? TTS_MODEL_ASSETS : []),
+    ...(need.forDictation ? [DICTATION_MODEL_ASSETS[2]] : []),
+    ...(need.forClone ? CLONE_MODEL_ASSETS : [])
+  ]
   for (const asset of wanted) {
     await downloadAsset(to, asset, channel)
   }
@@ -278,7 +302,7 @@ interface Running {
   wsUrl: string
   token: string
   /** 本次启动加载了哪些能力（复用检查用：在跑但缺能力的要重启） */
-  caps: { tts: boolean; whisper: boolean }
+  caps: { tts: boolean; whisper: boolean; clone: boolean }
 }
 
 let running: Running | null = null
@@ -316,7 +340,10 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
   const channel = need.progress ?? 'voice:tts-progress'
   // 在跑的实例能力够就直接用（比如听写和播报共用）
   if (running) {
-    const ok = (!need.forTts || running.caps.tts) && (!need.forDictation || running.caps.whisper)
+    const ok =
+      (!need.forTts || running.caps.tts) &&
+      (!need.forDictation || running.caps.whisper) &&
+      (!need.forClone || running.caps.clone)
     if (ok) {
       touchIdle()
       return running
@@ -329,8 +356,13 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
     // 到这里模型都已落盘：按实际存在与否组 serve 参数（TTS 可选、Whisper 可选）
     const hasTts = existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'))
     const hasWhisper = existsSync(join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin'))
+    const hasClone =
+      hasTts &&
+      existsSync(join(modelsDir(), 'frontend-onnx', 'speech_tokenizer_v3.int8.onnx')) &&
+      existsSync(join(modelsDir(), 'frontend-onnx', 'campplus.onnx'))
     if (need.forTts && !hasTts) throw new Error('CosyVoice3 模型缺失')
     if (need.forDictation && !hasWhisper) throw new Error('Whisper 定稿模型缺失')
+    if (need.forClone && !hasClone) throw new Error('音色克隆的前端模型缺失')
     pushProgress(to, 'loading', undefined, '启动本地语音引擎', channel)
     const token = randomBytes(16).toString('hex')
     const args = [
@@ -343,6 +375,8 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
         ? ['--tts-model', join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'), '--voices', join(engineDir(), 'voices')]
         : ['--no-tts']),
       ...(hasWhisper ? ['--whisper-model', join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin')] : ['--no-whisper']),
+      // v0.5 克隆：用户音色落 rootDir()/user-voices（升级客户端不丢）；前端模型在才开
+      ...(hasClone ? ['--user-voices', join(rootDir(), 'user-voices')] : ['--no-clone']),
       '--no-speaker',
       '--host',
       '127.0.0.1',
@@ -353,7 +387,7 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
       '--parent-stdin'
     ]
     const child = spawn(executablePath(), args, { cwd: rootDir(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    const next: Running = { child, wsUrl: '', token, caps: { tts: hasTts, whisper: hasWhisper } }
+    const next: Running = { child, wsUrl: '', token, caps: { tts: hasTts, whisper: hasWhisper, clone: hasClone } }
     let stdoutBuf = ''
     let settled = false
     const info = await new Promise<string>((resolve, reject) => {
@@ -521,7 +555,7 @@ export function synthesizeCosyVoice(
   options: { voice?: string; speed?: number; instruction?: string }
 ): Promise<{ samples: Float32Array; sampleRate: number }> {
   const run = async (): Promise<{ samples: Float32Array; sampleRate: number }> => {
-    const server = await ensureServe(to)
+    const server = await ensureServe(to, { forTts: true })
     return speakOnce(server, { text, ...options })
   }
   const next = queueTail.then(run, run)
@@ -543,7 +577,93 @@ export function prefetchCosyVoice(to: WebContents): Promise<void> {
   )
 }
 
+// MARK: 一次性转写（输入框 hold 模式）：serve 的 /v1/audio/transcriptions，
+//  SenseVoice 出字 + Whisper 定稿都在引擎里（语言 auto；不再有本地多模型路由）
+
+/** Float32（16 kHz）→ PCM16 WAV Blob（multipart 用） */
+function pcm16Wav(samples: Float32Array): Blob {
+  const pcm = Buffer.alloc(samples.length * 2)
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]))
+    pcm.writeInt16LE(s < 0 ? s * 0x8000 : s * 0x7fff, i * 2)
+  }
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0)
+  header.writeUInt32LE(36 + pcm.length, 4)
+  header.write('WAVEfmt ', 8)
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(1, 22)
+  header.writeUInt32LE(16000, 24)
+  header.writeUInt32LE(32000, 28)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write('data', 36)
+  header.writeUInt32LE(pcm.length, 40)
+  return new Blob([header, pcm], { type: 'audio/wav' })
+}
+
+export async function transcribeViaServe(
+  to: WebContents,
+  audio: Float32Array,
+  lang?: string
+): Promise<string> {
+  const server = await ensureServe(to, { forDictation: true, progress: 'voice:model-progress' })
+  const form = new FormData()
+  form.append('file', pcm16Wav(audio), 'clip.wav')
+  if (lang && lang !== 'auto') form.append('language', lang)
+  const response = await fetch(`${server.wsUrl.replace(/^ws:/, 'http:')}/v1/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${server.token}` },
+    body: form
+  })
+  if (!response.ok) throw new Error(`转写失败（${response.status}）：${await response.text()}`)
+  const result = (await response.json()) as { text?: string }
+  return (result.text ?? '').trim()
+}
+
+// MARK: 音色克隆（v0.5）：serve 的 /v1/voice/clone + 音色管理
+
+async function cloneVoiceRequest(
+  server: Running,
+  name: string,
+  audio: Float32Array,
+  text?: string
+): Promise<{ voice: string; transcript: string; seconds: number; took: number }> {
+  const form = new FormData()
+  form.append('file', pcm16Wav(audio), 'reference.wav')
+  form.append('name', name)
+  if (text) form.append('text', text)
+  const response = await fetch(`${server.wsUrl.replace(/^ws:/, 'http:')}/v1/voice/clone`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${server.token}` },
+    body: form
+  })
+  const body = (await response.json().catch(() => ({}))) as {
+    voice?: string
+    transcript?: string
+    seconds?: number
+    took?: number
+    error?: { message?: string }
+  }
+  if (!response.ok) throw new Error(body.error?.message ?? `克隆失败（${response.status}）`)
+  return { voice: body.voice ?? name, transcript: body.transcript ?? '', seconds: body.seconds ?? 0, took: body.took ?? 0 }
+}
+
 export function registerCosyVoiceIpc(): void {
+  // 播报合成（原 kokoro/CosyVoice3 双路由收敛为引擎一条路；engine 字段兼容旧渲染层缓存）
+  ipcMain.handle(
+    'voice:speak',
+    async (
+      event: IpcMainInvokeEvent,
+      payload: { text: string; speed?: number; voice?: string; instruction?: string }
+    ): Promise<{ samples: Float32Array; sampleRate: number }> =>
+      synthesizeCosyVoice(event.sender, payload.text, {
+        voice: payload.voice,
+        speed: payload.speed,
+        instruction: payload.instruction
+      })
+  )
   ipcMain.handle('voice:cv3-status', async () => ({
     supported: engineTarget() !== null,
     installed: engineInstalled(),
@@ -556,6 +676,49 @@ export function registerCosyVoiceIpc(): void {
   })
   ipcMain.handle('voice:cv3-cancel', (): void => {
     cancelCosyVoice()
+  })
+  // v0.5 克隆状态：前端两个 ONNX + CosyVoice3 都装了才能克隆（引擎端点要合成模型在）
+  ipcMain.handle('voice:clone-status', () => ({
+    supported: engineTarget() !== null,
+    installed:
+      engineTarget() !== null &&
+      existsSync(join(modelsDir(), 'frontend-onnx', 'speech_tokenizer_v3.int8.onnx')) &&
+      existsSync(join(modelsDir(), 'frontend-onnx', 'campplus.onnx')) &&
+      existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf')),
+    serving: running?.caps.clone === true
+  }))
+  // 克隆：audio 为 16 kHz Float32（8~15 秒）；没给 text 让引擎听写当底稿。首次会先下前端模型（进度走 voice:model-progress）
+  ipcMain.handle(
+    'voice:clone',
+    async (
+      event: IpcMainInvokeEvent,
+      payload: { name: string; audio: Float32Array; text?: string }
+    ): Promise<{ voice: string; transcript: string; seconds: number; took: number }> => {
+      if (!payload?.name || !payload.audio?.length) throw new Error('克隆要名字和录音')
+      const server = await ensureServe(event.sender, { forClone: true, progress: 'voice:model-progress' })
+      return cloneVoiceRequest(server, payload.name, payload.audio, payload.text)
+    }
+  )
+  // 引擎音色列表（内置 + 用户克隆的；带 default，供播报选音色）
+  ipcMain.handle('voice:voices', async () => {
+    if (!running) return { voices: await installedVoices(), user: [] as string[], clone: false, default: 'default' }
+    const response = await fetch(`${running.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
+      headers: { Authorization: `Bearer ${running.token}` }
+    })
+    if (!response.ok) throw new Error(`音色列表拉取失败（${response.status}）`)
+    const body = (await response.json()) as { voices?: string[]; user_voices?: string[]; clone?: boolean; default?: string }
+    return { voices: body.voices ?? [], user: body.user_voices ?? [], clone: body.clone === true, default: body.default ?? 'default' }
+  })
+  ipcMain.handle('voice:delete-voice', async (_event: IpcMainInvokeEvent, name: string): Promise<void> => {
+    if (!running) throw new Error('语音引擎没在跑')
+    const response = await fetch(`${running.wsUrl.replace(/^ws:/, 'http:')}/v1/voice/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${running.token}` }
+    })
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } }
+      throw new Error(body.error?.message ?? `删除失败（${response.status}）`)
+    }
   })
   app.on('before-quit', () => {
     void stopServe()
