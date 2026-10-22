@@ -839,7 +839,10 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
     // 引擎 crash 后马上重启偶发 Vulkan 驱动资源未释放（实测 RTX 2060 连环重启第 4 次会挂）：
     // 每次验证重启前留一小段缓冲，多文件验证时也压低节奏
     await new Promise((r) => setTimeout(r, 1200))
-    const server = await ensureServe(to, { forTts: true, progress: 'voice:model-progress' })
+    // 要 forClone 不要只 forTts：/v1/voices 和 --user-voices 都挂在克隆能力下，
+    // 没下过克隆前端模型的机器 serve 是 --no-clone 起的，/v1/voices 直接 404。
+    // forClone 会让 ensureFiles 先把前端模型（约 31MB）下齐，serve 改带 --user-voices
+    const server = await ensureServe(to, { forClone: true, progress: 'voice:model-progress' })
     const response = await fetch(`${server.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
       headers: { Authorization: `Bearer ${server.token}` }
     })
