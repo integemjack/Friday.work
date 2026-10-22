@@ -31,10 +31,45 @@ contextBridge.exposeInMainWorld('fridayBridge', {
    *  （lang 为菜单语言值；model 为菜单「识别模型」值，空 = 主进程按语言自动选；首次使用会先下载模型，进度经 onVoiceModelProgress 推送） */
   transcribeVoice: (audio: Float32Array, lang?: string, model?: string): Promise<{ text: string }> =>
     ipcRenderer.invoke('voice:transcribe', { audio, lang, model }),
-  onVoiceModelProgress: (
-    listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
+  /** 实时听写（friday-voice 引擎，GPU）：begin 起 serve+连接并开始（首次会下载模型，进度走
+   *  onVoiceModelProgress）；feed 喂 16 位小端 PCM16 帧；flush 把正在说的这句马上定稿；stop 结束。
+   *  识别事件（边说边出字的 partial / 每句定稿的 final / 出错）经 onRtVoiceEvent 推送 */
+  rtBeginVoice: (lang?: string): Promise<void> => ipcRenderer.invoke('voice:rt-begin', { lang }),
+  rtFeedVoice: (chunk: ArrayBuffer): void => {
+    ipcRenderer.send('voice:rt-feed', chunk)
+  },
+  rtFlushVoice: (): void => {
+    ipcRenderer.send('voice:rt-flush')
+  },
+  rtStopVoice: (): void => {
+    ipcRenderer.send('voice:rt-stop')
+  },
+  onRtVoiceEvent: (
+    listener: (event: { type: 'speech_start' | 'partial' | 'final' | 'speech_end' | 'error'; segment?: number; text?: string; language?: string; emotion?: string; message?: string }) => void
   ): (() => void) => {
-    const handler = (_event: unknown, state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }): void => listener(state)
+    const handler = (_event: unknown, state: Parameters<typeof listener>[0]): void => listener(state)
+    ipcRenderer.on('voice:rt-event', handler)
+    return () => ipcRenderer.removeListener('voice:rt-event', handler)
+  },
+  onVoiceModelProgress: (
+    listener: (state: {
+      phase: 'downloading' | 'loading' | 'ready'
+      percent?: number
+      detail?: string
+      received?: number
+      total?: number
+    }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      state: {
+        phase: 'downloading' | 'loading' | 'ready'
+        percent?: number
+        detail?: string
+        received?: number
+        total?: number
+      }
+    ): void => listener(state)
     ipcRenderer.on('voice:model-progress', handler)
     return () => ipcRenderer.removeListener('voice:model-progress', handler)
   },

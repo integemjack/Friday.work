@@ -18,9 +18,12 @@
 // 从 stdout 读 {"event":"listening","url":...} 拿到本机地址，再连 WebSocket。
 // 引擎闲置几分钟就停（下次懒启动，Vulkan 冷启动到可合成约 3-8s）。
 //
-// 体积：引擎 16MB + CosyVoice3 Q8 900MB + SenseVoice 242MB + FSMN-VAD 2MB ≈ 1.16GB
-// （serve 必须带听写模型，--no-whisper --no-speaker 已经砍掉 Whisper 547MB 和声纹 27MB）。
+// 体积：引擎 16MB + CosyVoice3 Q8 900MB + SenseVoice 242MB + FSMN-VAD 2MB ≈ 1.16GB；
+// 听写（RealtimeDictation.ts）再加分 whisper 定稿 574MB ≈ 1.74GB。
+// （serve 必须带 SenseVoice + VAD；--no-speaker 砍掉声纹 28MB——没接声纹功能）
 // 所以不自动下载：设置里点「下载」才拉；没下载时选中该引擎会提示，播报回落到 kokoro。
+// 听写和播报共用同一个 serve 进程：谁需要什么就下什么（要 TTS 下 CosyVoice3，要实时
+// 听写下 Whisper turbo），已在跑的 serve 缺本次需要的能力时重启换参数。
 
 import { app, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { spawn } from 'node:child_process'
@@ -93,14 +96,8 @@ function engineTarget(): { asset: Asset; dir: string } | null {
   return null
 }
 
-/** serve 必需的模型（听写那两个是 serve 的硬要求，砍不掉） */
-const MODEL_ASSETS: Asset[] = [
-  {
-    file: join('models', 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'),
-    label: 'CosyVoice3 合成模型',
-    urls: [`${MODEL_BASE}/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/CosyVoice3-2512_Q8_0.gguf`],
-    sha256: 'be133cb6154ca73cd1d213b1c9496def99ba9c1f7c14cd99f6b350af2eb7963d'
-  },
+/** serve 必需的模型（SenseVoice + VAD 是 serve 的硬要求，砍不掉）；whisper 是听写定稿用 */
+const DICTATION_MODEL_ASSETS: Asset[] = [
   {
     file: join('models', 'sensevoice-small-q8.gguf'),
     label: 'SenseVoice（serve 必需）',
@@ -112,6 +109,26 @@ const MODEL_ASSETS: Asset[] = [
     label: 'FSMN-VAD（serve 必需）',
     urls: [`${MODEL_BASE}/FunAudioLLM/fsmn-vad-GGUF/resolve/master/fsmn-vad.gguf`],
     sha256: '1270f2559c495f4e7b6e739541151027d360761a3fda43fc147034f5719f5479'
+  },
+  {
+    // 听写每句定稿（中英混说时认英文词）；与 Friday.Powers power.json 同一份
+    file: join('models', 'whisper', 'ggml-large-v3-turbo-q5_0.bin'),
+    label: 'Whisper large-v3-turbo（听写定稿）',
+    urls: [
+      'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+      'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin'
+    ],
+    sha256: '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2'
+  }
+]
+
+/** 播报需要的模型（听写路径不强制，下了就和听写共用同一个 serve） */
+const TTS_MODEL_ASSETS: Asset[] = [
+  {
+    file: join('models', 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'),
+    label: 'CosyVoice3 合成模型',
+    urls: [`${MODEL_BASE}/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/CosyVoice3-2512_Q8_0.gguf`],
+    sha256: 'be133cb6154ca73cd1d213b1c9496def99ba9c1f7c14cd99f6b350af2eb7963d'
   }
 ]
 
@@ -134,21 +151,24 @@ function executablePath(): string {
   return join(engineDir(), process.platform === 'win32' ? 'friday-voice.exe' : 'friday-voice')
 }
 
+type ProgressChannel = 'voice:tts-progress' | 'voice:model-progress'
+
 function pushProgress(
   to: WebContents,
   phase: 'downloading' | 'extracting' | 'loading' | 'ready' | 'error',
   percent?: number,
-  detail?: string
+  detail?: string,
+  channel: ProgressChannel = 'voice:tts-progress'
 ): void {
   try {
-    to.send('voice:tts-progress', { phase, percent, detail })
+    to.send(channel, { phase, percent, detail })
   } catch {
     // 窗口已关：忽略
   }
 }
 
 /** 落盘并校验 sha256（.part 写完再改名，中断不会留下半份文件冒充已装好） */
-async function downloadAsset(to: WebContents, asset: Asset): Promise<void> {
+async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressChannel = 'voice:tts-progress'): Promise<void> {
   const dest = join(rootDir(), asset.file)
   if (existsSync(dest)) return
   await mkdir(join(dest, '..'), { recursive: true })
@@ -156,7 +176,7 @@ async function downloadAsset(to: WebContents, asset: Asset): Promise<void> {
   let firstError: unknown = null
   for (const url of asset.urls) {
     try {
-      pushProgress(to, 'downloading', 0, asset.label)
+      pushProgress(to, 'downloading', 0, asset.label, channel)
       const res = await fetch(url, { redirect: 'follow' })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
       const total = Number(res.headers.get('content-length') ?? 0)
@@ -170,7 +190,7 @@ async function downloadAsset(to: WebContents, asset: Asset): Promise<void> {
         const now = Date.now()
         if (now - lastPush > 400) {
           lastPush = now
-          pushProgress(to, 'downloading', total ? Math.round((received / total) * 100) : undefined, asset.label)
+          pushProgress(to, 'downloading', total ? Math.round((received / total) * 100) : undefined, asset.label, channel)
         }
       })
       await pipeline(stream, createWriteStream(part))
@@ -217,12 +237,22 @@ async function installedVoices(): Promise<string[]> {
   }
 }
 
-async function ensureFiles(to: WebContents): Promise<void> {
+interface ServeNeed {
+  /** 播报：要 CosyVoice3 模型 + serve 带 --tts-model */
+  forTts?: boolean
+  /** 实时听写：要 Whisper 定稿模型 + serve 带 --whisper-model */
+  forDictation?: boolean
+  /** 进度推到哪条事件（听写 UI 听 model-progress，播报 UI 听 tts-progress） */
+  progress?: ProgressChannel
+}
+
+async function ensureFiles(to: WebContents, need: ServeNeed = {}): Promise<void> {
   const target = engineTarget()
   if (!target) throw new Error(`本机平台（${process.platform}-${process.arch}）没有对应的语音引擎包`)
+  const channel = need.progress ?? 'voice:tts-progress'
   if (!existsSync(executablePath())) {
-    await downloadAsset(to, target.asset)
-    pushProgress(to, 'extracting', undefined, target.asset.label)
+    await downloadAsset(to, target.asset, channel)
+    pushProgress(to, 'extracting', undefined, target.asset.label, channel)
     const archive = join(rootDir(), target.asset.file)
     try {
       await extract(archive, rootDir())
@@ -234,8 +264,10 @@ async function ensureFiles(to: WebContents): Promise<void> {
     await rm(archive, { force: true })
     if (!existsSync(executablePath())) throw new Error('语音引擎包内容不完整（缺 friday-voice）')
   }
-  for (const asset of MODEL_ASSETS) {
-    await downloadAsset(to, asset)
+  // serve 硬要求的两个先下；按需再下 whisper（听写）/ cosyvoice3（播报）
+  const wanted = [...DICTATION_MODEL_ASSETS.slice(0, 2), ...(need.forTts ? TTS_MODEL_ASSETS : []), ...(need.forDictation ? [DICTATION_MODEL_ASSETS[2]] : [])]
+  for (const asset of wanted) {
+    await downloadAsset(to, asset, channel)
   }
 }
 
@@ -245,6 +277,8 @@ interface Running {
   child: import('node:child_process').ChildProcessWithoutNullStreams
   wsUrl: string
   token: string
+  /** 本次启动加载了哪些能力（复用检查用：在跑但缺能力的要重启） */
+  caps: { tts: boolean; whisper: boolean }
 }
 
 let running: Running | null = null
@@ -278,26 +312,37 @@ function stopServe(): Promise<void> {
 }
 
 /** 起（或复用）本机引擎服务：spawn serve，等 stdout 的 listening 事件 */
-async function ensureServe(to: WebContents): Promise<Running> {
+async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Running> {
+  const channel = need.progress ?? 'voice:tts-progress'
+  // 在跑的实例能力够就直接用（比如听写和播报共用）
   if (running) {
-    touchIdle()
-    return running
+    const ok = (!need.forTts || running.caps.tts) && (!need.forDictation || running.caps.whisper)
+    if (ok) {
+      touchIdle()
+      return running
+    }
+    await stopServe() // 缺本次需要的能力（模型是后来下的）：重启换参数
   }
   if (starting) return starting
   const task = (async () => {
-    await ensureFiles(to)
-    pushProgress(to, 'loading', undefined, '启动本地语音引擎')
+    await ensureFiles(to, need)
+    // 到这里模型都已落盘：按实际存在与否组 serve 参数（TTS 可选、Whisper 可选）
+    const hasTts = existsSync(join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'))
+    const hasWhisper = existsSync(join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin'))
+    if (need.forTts && !hasTts) throw new Error('CosyVoice3 模型缺失')
+    if (need.forDictation && !hasWhisper) throw new Error('Whisper 定稿模型缺失')
+    pushProgress(to, 'loading', undefined, '启动本地语音引擎', channel)
     const token = randomBytes(16).toString('hex')
     const args = [
       'serve',
       '--models',
       modelsDir(),
-      '--tts-model',
-      join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'),
-      '--voices',
-      join(engineDir(), 'voices'),
-      // serve 的听写模型是硬要求，但播报用不上 Whisper 和声纹，砍掉省 574MB 显存和加载时间
-      '--no-whisper',
+      // serve 的听写模型是硬要求（SenseVoice + VAD）；TTS / Whisper 定稿按下载情况带上；
+      // 声纹（campplus 28MB）还没接功能，永远砍掉
+      ...(hasTts
+        ? ['--tts-model', join(modelsDir(), 'cosyvoice3', 'CosyVoice3-2512_Q8_0.gguf'), '--voices', join(engineDir(), 'voices')]
+        : ['--no-tts']),
+      ...(hasWhisper ? ['--whisper-model', join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin')] : ['--no-whisper']),
       '--no-speaker',
       '--host',
       '127.0.0.1',
@@ -308,7 +353,7 @@ async function ensureServe(to: WebContents): Promise<Running> {
       '--parent-stdin'
     ]
     const child = spawn(executablePath(), args, { cwd: rootDir(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    const next: Running = { child, wsUrl: '', token }
+    const next: Running = { child, wsUrl: '', token, caps: { tts: hasTts, whisper: hasWhisper } }
     let stdoutBuf = ''
     let settled = false
     const info = await new Promise<string>((resolve, reject) => {
@@ -356,7 +401,7 @@ async function ensureServe(to: WebContents): Promise<Running> {
     next.wsUrl = info.replace(/^http:/, 'ws:')
     running = next
     touchIdle()
-    pushProgress(to, 'ready')
+    pushProgress(to, 'ready', undefined, undefined, channel)
     return next
   })()
   starting = task
@@ -492,7 +537,7 @@ export function cancelCosyVoice(): void {
 }
 
 export function prefetchCosyVoice(to: WebContents): Promise<void> {
-  return ensureServe(to).then(
+  return ensureServe(to, { forTts: true }).then(
     () => {},
     (error: unknown) => pushProgress(to, 'error', undefined, (error as Error).message)
   )
@@ -515,4 +560,29 @@ export function registerCosyVoiceIpc(): void {
   app.on('before-quit', () => {
     void stopServe()
   })
+}
+
+// MARK: 给实时听写（RealtimeDictation.ts）用的门面：同一个 serve 进程、同一套闲置策略
+
+export { ensureServe as ensureVoiceServe, stopServe as stopVoiceServe, touchIdle as touchVoiceServe, type ServeNeed }
+
+/** 听写就绪状态（设置页/菜单用）：引擎包 + SenseVoice + VAD + Whisper 定稿都在，
+ *  不要求 CosyVoice3——只想要听写的用户不必下 900MB 合成模型 */
+export async function dictationEngineState(): Promise<{
+  supported: boolean
+  ready: boolean
+  serving: boolean
+  whisperInstalled: boolean
+}> {
+  return {
+    supported: engineTarget() !== null,
+    ready:
+      engineTarget() !== null &&
+      existsSync(executablePath()) &&
+      existsSync(join(modelsDir(), 'sensevoice-small-q8.gguf')) &&
+      existsSync(join(modelsDir(), 'fsmn-vad.gguf')) &&
+      existsSync(join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin')),
+    serving: running !== null,
+    whisperInstalled: existsSync(join(modelsDir(), 'whisper', 'ggml-large-v3-turbo-q5_0.bin'))
+  }
 }

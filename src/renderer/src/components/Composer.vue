@@ -504,6 +504,7 @@ function saveVoicePref(key: string, value: string): void {
 // whisper 已从菜单移除（2026-10 被 Qwen3-ASR 替换，本机实测质量更好），仅在主进程作回退引擎
 const VOICE_MODELS: Array<{ value: string; label: string; note: string }> = [
   { value: 'auto', label: '自动（按语言选，推荐）', note: '中文→SenseVoice，混合/小语种→Qwen3-0.6B' },
+  { value: 'friday-voice', label: 'GPU 实时（边说边出字）', note: '约0.8GB · GPU 引擎 + Whisper 定稿，中英混说最稳，实时出字' },
   { value: 'sensevoice', label: 'SenseVoice', note: '约230MB · 中文最快最准、抗噪' },
   { value: 'qwen3', label: 'Qwen3-ASR 0.6B', note: '约840MB · 30语种+22方言，混合/小语种更准，稍慢' },
   { value: 'qwen3-1.7b', label: 'Qwen3-ASR 1.7B', note: '约2.4GB · 最准，明显更慢' }
@@ -641,6 +642,12 @@ async function startListen(): Promise<void> {
         // whisper 是逐段落定追加：整段拼回输入框（开头保留用户已打的字）
         const base = sessionBase
         text.value = base ? base + recognized : recognized
+        void nextTick(resize)
+      },
+      onPartial: (preview) => {
+        // 实时引擎：正在说的这句的临时字也先拼进去，边说边出字（final 落定后替换）
+        const base = sessionBase
+        text.value = base ? base + preview : preview
         void nextTick(resize)
       },
       onError: (code, message) => {

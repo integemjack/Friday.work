@@ -1,12 +1,18 @@
-// 语音听写（本地 whisper，主进程推理）：麦克风 → AudioContext → 重采样 16k → Float32；
+// 语音听写（本地模型，主进程推理）：麦克风 → AudioContext → 重采样 16k → Float32；
 //   - hold 模式（默认）：按住累积，松开时整段送主进程转写，出文字落定；
 //   - click 持续模式：能量 VAD 切句（静音 ~600ms 断句，最长 12s 强制断），
 //     每句排队转写，文字一句句追加；转写排队串行，不压爆 CPU。
+//   - 实时引擎（model='friday-voice'，GPU）：不走上面的整段转写，音频帧直接流式喂给
+//     friday-voice 引擎（边说边出 partial、每句 final 定稿）；断句/首词处理引擎内做，
+//     渲染层只管喂帧和拼文字。引擎冷启动期间帧先攒着（最多 10s），连上后补发。
 //
 // 全 WebAudio 录音，不依赖任何原生模块；回声消除 / 降噪 / 自动增益交给 Chromium。
 // Chrome 自带的 SpeechRecognition 在 Electron 里没有识别服务（electron#46143），故走本地模型。
 
 import { resample } from './voiceMedia.js'
+
+/** 「识别模型」菜单里实时引擎的值：选它走流式链路（rtBeginVoice/…），不调 transcribeVoice */
+export const RT_VOICE_MODEL = 'friday-voice'
 
 const TARGET_RATE = 16000
 /** 静音判定窗：连续这么久低于阈值就断句 */
@@ -35,6 +41,8 @@ export interface SpeechInputOptions {
   onPhase?: (phase: VoicePhase, detail?: string) => void
   /** 一段转写完成（已落定的文字，一段一段追加；hold 模式只有一段） */
   onText: (text: string) => void
+  /** 实时引擎：正在说的这句的临时文字（含之前已定稿的，会不断变化；final 后落定） */
+  onPartial?: (preview: string) => void
   onError?: (code: string, message: string) => void
   /** 录音完全结束（转写队列排空、麦克风已关）；hold/click 停止后都会来 */
   onEnd?: () => void
@@ -148,6 +156,19 @@ export class SpeechInput {
   private queue: Float32Array[] = []
   private draining = false
   private transcript = ''
+  /** 实时引擎状态 */
+  private realtime = false
+  private rtReady = false
+  private rtUnsub: (() => void) | null = null
+  private rtChunks: Int16Array[] = []
+  private rtSampleCount = 0
+  private rtPending = ''
+  private rtFinalTimer: ReturnType<typeof setTimeout> | null = null
+  private rtFinishing: (() => void) | null = null
+  /** final 去重（同句重复定稿时只落一次字；一次性灌入大块音频时引擎可能同 segment 双发）。
+   *  键含 segment：两句话内容一样（用户重复说）不算重复 */
+  private rtLastFinalKey = ''
+  private ended = false
   /** 还在录音（或队列没排空） */
   active = false
 
@@ -159,10 +180,14 @@ export class SpeechInput {
     this.options = options
     this.stopping = false
     this.pendingStop = false
+    this.ended = false
     this.transcript = ''
+    this.rtPending = ''
+    this.rtLastFinalKey = ''
     this.whole = new Float32Array(0)
     this.queue = []
     this.hold = hold
+    this.realtime = options.model === RT_VOICE_MODEL
     // AudioContext 不依赖设备，先建；和 getUserMedia 并行省点启动时间
     const context = new AudioContext()
     this.context = context
@@ -201,6 +226,19 @@ export class SpeechInput {
     let noiseFloor = 0
     let frames = 0
     let announced = false
+    // 实时引擎：先订事件再 begin（冷启动期间帧先攒着，连上后补发）
+    if (this.realtime) {
+      this.rtUnsub = window.fridayBridge.onRtVoiceEvent((event) => this.onRtEvent(event))
+      window.fridayBridge
+        .rtBeginVoice(options.lang)
+        .then(() => {
+          this.rtReady = true
+          this.sendRealtime() // 引擎冷启动期间攒的帧现在补发
+        })
+        .catch((error: unknown) => {
+          this.onErrorRealtime(String((error as Error)?.message ?? error))
+        })
+    }
     this.processor.onaudioprocess = (event) => {
       if (!this.active) return
       if (!announced) {
@@ -209,6 +247,10 @@ export class SpeechInput {
       }
       const input = event.inputBuffer.getChannelData(0)
       const frame = resample(input, context.sampleRate, TARGET_RATE)
+      if (this.realtime) {
+        this.pushRealtime(frame)
+        return
+      }
       if (this.hold) {
         this.whole = concat(this.whole, frame)
         // hold 模式最多留 30s（whisper 的舒适区），更早的截掉
@@ -235,6 +277,121 @@ export class SpeechInput {
   }
 
   private hold = true
+
+  // MARK: 实时引擎（friday-voice）：攒帧补发 + 事件拼字 + flush 收尾
+
+  private static toPcm16(frame: Float32Array): Int16Array {
+    const out = new Int16Array(frame.length)
+    for (let i = 0; i < frame.length; i++) {
+      const s = Math.max(-1, Math.min(1, frame[i]))
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    return out
+  }
+
+  private pushRealtime(frame: Float32Array): void {
+    const pcm = SpeechInput.toPcm16(frame)
+    this.rtChunks.push(pcm)
+    this.rtSampleCount += pcm.length
+    // 引擎还没连上（冷启动/首次下载）：最多攒 10 秒（同服务端 RealtimeConnection 的限额）
+    while (this.rtSampleCount > TARGET_RATE * 10 && this.rtChunks.length > 1) {
+      this.rtSampleCount -= this.rtChunks[0]!.length
+      this.rtChunks.shift()
+    }
+    if (this.rtReady && this.rtSampleCount >= 1024) this.sendRealtime() // ~64ms 一发
+  }
+
+  private sendRealtime(): void {
+    if (this.rtChunks.length === 0) return
+    const total = new Int16Array(this.rtSampleCount)
+    let at = 0
+    for (const chunk of this.rtChunks) {
+      total.set(chunk, at)
+      at += chunk.length
+    }
+    this.rtChunks = []
+    this.rtSampleCount = 0
+    window.fridayBridge.rtFeedVoice(total.buffer as ArrayBuffer)
+  }
+
+  private appendTranscript(text: string): void {
+    this.transcript += (this.transcript && !this.transcript.endsWith(' ') ? ' ' : '') + text
+  }
+
+  private onRtEvent(event: {
+    type: 'speech_start' | 'partial' | 'final' | 'speech_end' | 'error'
+    segment?: number
+    text?: string
+    message?: string
+  }): void {
+    if (this.ended) return
+    if (event.type === 'partial') {
+      this.rtPending = event.text ?? ''
+      this.options?.onPartial?.(this.joinPreview())
+    } else if (event.type === 'final') {
+      this.rtPending = ''
+      const key = `${event.segment ?? ''}:${event.text ?? ''}`
+      if (event.text && key !== this.rtLastFinalKey) {
+        this.rtLastFinalKey = key
+        this.appendTranscript(event.text)
+        this.options?.onText(this.transcript)
+      } else if (event.text) {
+        this.rtLastFinalKey = key
+      }
+      // 结束中：这句定稿到了，可以收尾（等一小会儿防同句后续事件）
+      if (this.rtFinishing) {
+        const finish = this.rtFinishing
+        this.rtFinishing = null
+        setTimeout(finish, 250)
+      }
+    } else if (event.type === 'speech_end') {
+      // 这句没听出字（噪音/咳嗽）：清掉残影
+      this.rtPending = ''
+      this.options?.onPartial?.(this.joinPreview())
+      if (this.rtFinishing) {
+        const finish = this.rtFinishing
+        this.rtFinishing = null
+        setTimeout(finish, 250)
+      }
+    } else if (event.type === 'error') {
+      this.onErrorRealtime(event.message ?? '语音引擎听写出错')
+    }
+  }
+
+  private joinPreview(): string {
+    return this.rtPending ? this.transcript + (this.transcript && !this.transcript.endsWith(' ') ? ' ' : '') + this.rtPending : this.transcript
+  }
+
+  private onErrorRealtime(message: string): void {
+    if (this.ended) return
+    this.options?.onError?.('transcribe', message)
+    this.finishRealtime()
+  }
+
+  private finishRealtime(): void {
+    if (this.ended) return
+    this.ended = true
+    if (this.rtFinalTimer) {
+      clearTimeout(this.rtFinalTimer)
+      this.rtFinalTimer = null
+    }
+    window.fridayBridge.rtStopVoice()
+    this.rtUnsub?.()
+    this.rtUnsub = null
+    this.closeMic()
+    this.options?.onEnd?.()
+  }
+
+  /** 结束实时听写：尾巴帧发出去 → flush 定稿当前半句 → 等 final（起 1.5s 超时）→ 收尾 */
+  private stopRealtime(): void {
+    this.sendRealtime()
+    window.fridayBridge.rtFlushVoice()
+    this.rtFinishing = () => this.finishRealtime()
+    this.rtFinalTimer = setTimeout(() => {
+      this.rtFinishing = null
+      this.finishRealtime()
+    }, 1500)
+  }
 
   private enqueue(utterance: Float32Array): void {
     // 前垫静音：whisper 对紧贴开头的音频丢首词（见 LEADING_PAD_MS 注释）
@@ -268,7 +425,7 @@ export class SpeechInput {
     else this.finishIfIdle()
   }
 
-  /** 停止录音；hold 模式把整段送转写，等队列排空后 onEnd */
+  /** 停止录音；hold 模式把整段送转写，等队列排空后 onEnd；实时引擎走 flush 收尾 */
   stop(): void {
     if (!this.active) {
       // 还在开麦中就被要求停（短按/误触）：记下，开起来立即收尾
@@ -278,6 +435,10 @@ export class SpeechInput {
     if (this.stopping) return
     this.stopping = true
     this.active = false
+    if (this.realtime) {
+      this.stopRealtime()
+      return
+    }
     // 先把最后的半句吐进队列
     if (this.slicer) for (const utterance of this.slicer.flush()) this.enqueue(utterance)
     if (this.hold && this.whole.length > 0) {

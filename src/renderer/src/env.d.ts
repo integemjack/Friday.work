@@ -14,8 +14,32 @@ declare global {
       saveVoiceClip(bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null>
       /** 输入框语音听写：16 kHz 单声道采样送主进程本地模型转写（SenseVoice/whisper），返回文字 */
       transcribeVoice(audio: Float32Array, lang?: string, model?: string): Promise<{ text: string }>
+      /** 实时听写（friday-voice 引擎，GPU）：begin 起 serve+连接（首次下载进度走 onVoiceModelProgress），
+       *  feed 喂 16 位小端 PCM16 帧，flush 定稿当前句，stop 结束；识别事件经 onRtVoiceEvent 推送 */
+      rtBeginVoice(lang?: string): Promise<void>
+      rtFeedVoice(chunk: ArrayBuffer): void
+      rtFlushVoice(): void
+      rtStopVoice(): void
+      onRtVoiceEvent(
+        listener: (
+          event: {
+            type: 'speech_start' | 'partial' | 'final' | 'speech_end' | 'error'
+            segment?: number
+            text?: string
+            language?: string
+            emotion?: string
+            message?: string
+          }
+        ) => void
+      ): () => void
       onVoiceModelProgress(
-        listener: (state: { phase: 'downloading' | 'loading' | 'ready'; percent?: number; detail?: string }) => void
+        listener: (state: {
+          phase: 'downloading' | 'loading' | 'ready'
+          percent?: number
+          detail?: string
+          received?: number
+          total?: number
+        }) => void
       ): () => void
       /** 助手回复语音播报：主进程合成返回采样（渲染层 WebAudio 播放）；
        *  engine 缺省 = kokoro（CPU），'cosyvoice3' = 本机 GPU、服务端同款模型 */
