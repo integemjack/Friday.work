@@ -303,10 +303,8 @@ watch(
   { immediate: true }
 )
 
-// 切会话/切换模式：窗口化的消息流变了，旧的完成边沿不重播，播报也停掉
-watch([conversationID, assistantChat], () => {
-  stopSpeaking()
-})
+// （切会话/切换模式不再停播报：播报游标按全局会话记录、新打开的会话已有内容
+//  由 freshConvs 当历史不播，切走时打断正在播的只会平白断流——2026-10 修复。）
 
 /** 播报状态行文案（下载/解压/加载/播报中/出错）；叠加在常规状态后面 */
 const ttsStatusLine = computed(() => {
