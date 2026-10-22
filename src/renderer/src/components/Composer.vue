@@ -1026,7 +1026,9 @@ onBeforeUnmount(() => {
             <span class="model-name">{{ currentWorkdirLabel }}</span>
             <span class="model-caret">▾</span>
           </button>
-          <div v-if="dirOpen" class="model-menu dir-menu">
+          <!-- 菜单内的点击不冒泡到 document：点「浏览」等会立刻重渲染菜单（v-if 切换），
+               事件还没冒到 document 时 target 已被移出 DOM，onDocClick 的 contains 会误判成「点在外面」把菜单关掉（真实鼠标点击才触发） -->
+          <div v-if="dirOpen" class="model-menu dir-menu" @click.stop>
             <!-- 列表模式：默认目录 + 最近目录 + 浏览入口 -->
             <template v-if="!browsing">
               <button class="model-item" :class="{ current: !currentWorkdir }" @click="chooseWorkdir()">
