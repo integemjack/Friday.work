@@ -17,9 +17,17 @@ import {
   replySpeakEnabled,
   setCurrentVoice,
   setReplySpeak,
+  setTtsDynamicSpeed,
+  setTtsSpeed,
+  setTtsSpeedMax,
+  setTtsSpeedMin,
   stopSpeaking,
   ttsDetail,
+  ttsDynamicSpeed,
   ttsPhase,
+  ttsSpeed,
+  ttsSpeedMax,
+  ttsSpeedMin,
   type VoiceOption
 } from '../lib/speechOutput.js'
 import { resample } from '../lib/voiceMedia.js'
@@ -146,6 +154,22 @@ onMounted(load)
 /** 全部可选音色：引擎内置 5 个 + 克隆的（克隆的排后面，可删） */
 const allVoices = computed<VoiceOption[]>(() => [...PRESET_VOICES, ...clonedVoices.value])
 
+/** 语速滑条（0.5×–2×）：v-model 双向，写入走 setTtsSpeed（localStorage 持久化 + 钳制） */
+const speedValue = computed<number>({
+  get: () => ttsSpeed.value,
+  set: (value: number) => setTtsSpeed(value)
+})
+
+/** 最慢 / 最快（动态语速的两端）：互钳在 setter 里，两行永远自洽 */
+const speedMinValue = computed<number>({
+  get: () => ttsSpeedMin.value,
+  set: (value: number) => setTtsSpeedMin(value)
+})
+const speedMaxValue = computed<number>({
+  get: () => ttsSpeedMax.value,
+  set: (value: number) => setTtsSpeedMax(value)
+})
+
 /** 克隆模型（前端两个 ONNX）还没装：向导里提醒首次会先下 ~260MB */
 const cloneModelHint = computed(() => (cloneSupported.value ? '' : '（首次克隆会先下载前端模型约 260MB）'))
 
@@ -271,14 +295,15 @@ async function extractClone(): Promise<void> {
   try {
     // 没给 text：引擎用 SenseVoice 听写当底稿（念什么都行）
     const result = await window.fridayBridge.cloneVoice({ name, audio })
-    cloneDone.value = `已克隆「${result.voice}」（${result.seconds.toFixed(1)} 秒录音，用时 ${result.took.toFixed(1)} 秒）`
+    cloneDone.value = `已克隆「${result.name}」（${result.seconds.toFixed(1)} 秒录音，用时 ${result.took.toFixed(1)} 秒）`
     cloneAudio.value = null
     cloneName.value = ''
     cloneOpen.value = false
     await refreshCosyVoiceStatus()
     setCurrentVoice(`cv3:${result.voice}`)
-    // 克隆完直接试听一句
-    previewVoice({ id: `cv3:${result.voice}`, name: result.voice, tag: '克隆', voice: result.voice, speed: 1.0, custom: true })
+    // 克隆完直接试听一句（voice 是引擎侧安全名，name 才是用户起的名字）
+    const option = clonedVoices.value.find((v) => v.id === `cv3:${result.voice}`)
+    previewVoice(option ?? { id: `cv3:${result.voice}`, name: result.name, tag: '克隆', voice: result.voice, speed: 1.0, custom: true })
   } catch (error) {
     cloneError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -508,6 +533,39 @@ async function pickVoiceFiles(): Promise<void> {
         </span>
       </div>
       <div class="note">回复完成时用本地语音引擎朗读文字部分（代码块、链接不念），完全离线、不联网、不花钱。首次使用会自动下载模型（约 1.2GB，本机 GPU 推理），之后不再下载。</div>
+
+      <div class="row">
+        <span class="key">语速调节</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: ttsDynamicSpeed }" @click="setTtsDynamicSpeed(true)">动态</button>
+          <button class="small-btn" :class="{ strong: !ttsDynamicSpeed }" @click="setTtsDynamicSpeed(false)">固定</button>
+        </span>
+      </div>
+
+      <div v-if="!ttsDynamicSpeed" class="row">
+        <span class="key">语速</span>
+        <span class="value range-cell">
+          <input v-model.number="speedValue" class="input range" type="range" min="0.5" max="2" step="0.05" />
+          <span class="range-val">{{ ttsSpeed.toFixed(2) }}×</span>
+        </span>
+      </div>
+      <template v-else>
+        <div class="row">
+          <span class="key">最慢语速</span>
+          <span class="value range-cell">
+            <input v-model.number="speedMinValue" class="input range" type="range" min="0.5" max="2" step="0.05" />
+            <span class="range-val">{{ ttsSpeedMin.toFixed(2) }}×</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="key">最快语速</span>
+          <span class="value range-cell">
+            <input v-model.number="speedMaxValue" class="input range" type="range" min="0.5" max="2" step="0.05" />
+            <span class="range-val">{{ ttsSpeedMax.toFixed(2) }}×</span>
+          </span>
+        </div>
+      </template>
+      <div class="note">动态：按本轮要念的字数在最慢~最快之间自动取值——短句从容、长文提速，不用听完漫长的播报；固定：所有句子一个倍率。改动即时保存，正在念的这句不变、下一句生效。</div>
 
       <div class="row">
         <span class="key">语音引擎</span>
@@ -941,6 +999,25 @@ h3.sub {
   padding: 0;
   border: none;
   accent-color: var(--text-2);
+}
+
+/* 语速行：滑条 + 当前倍率值并排 */
+.range-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-cell .input.range {
+  flex: 1;
+  max-width: 260px;
+}
+
+.range-val {
+  flex: 0 0 auto;
+  min-width: 44px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 [data-theme='jarvis'] .input.range {

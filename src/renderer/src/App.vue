@@ -29,6 +29,7 @@ import DesktopMediaStacks from './components/DesktopMediaStacks.vue'
 import MediaLightbox from './components/MediaLightbox.vue'
 import UpdateOverlay from './components/UpdateOverlay.vue'
 import CenterScene from './components/CenterScene.vue'
+import VoiceHud from './components/VoiceHud.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
 import SpaceVeil from './components/SpaceVeil.vue'
@@ -175,6 +176,8 @@ const calling = computed(() => store.calling)
              挂桌面上居中会相对整窗偏左半个栏差——挂主区，雷达才正对两栏之间的空白中心 -->
         <JarvisHUD v-if="jarvis" />
         <CenterScene v-if="!jarvis" />
+        <!-- 语音 HUD：TTS 实时波形 + 静音 + 音量，顶部居中（功能件，两主题都挂，不是装饰） -->
+        <VoiceHud />
         <DesktopMediaStacks />
         <div class="composer-dock">
           <Composer :conversation-id="conversationID" @submit="onComposerSubmit" />

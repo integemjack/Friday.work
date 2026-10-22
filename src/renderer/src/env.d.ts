@@ -58,11 +58,11 @@ declare global {
       cancelCosyVoice(): Promise<void>
       /** 音色克隆（v0.5）：8~15 秒 16 kHz 录音 → 本地音色（首次会先下前端模型，进度走 onVoiceModelProgress）；
        *  没给 text 就用引擎听写当底稿；返回克隆名、底稿和用时 */
-      cloneVoice(payload: { name: string; audio: Float32Array; text?: string }): Promise<{ voice: string; transcript: string; seconds: number; took: number }>
+      cloneVoice(payload: { name: string; audio: Float32Array; text?: string }): Promise<{ voice: string; name: string; transcript: string; seconds: number; took: number }>
       /** 克隆能力：本机平台支持否、前端模型装了没、引擎在跑否 */
       cloneVoiceStatus(): Promise<{ supported: boolean; installed: boolean; serving: boolean }>
       /** 引擎音色列表（内置 + 用户克隆的） */
-      listVoices(): Promise<{ voices: string[]; user: string[]; clone: boolean; default: string }>
+      listVoices(): Promise<{ voices: string[]; user: string[]; clone: boolean; default: string; userDisplay?: Record<string, string> }>
       /** 删掉一个克隆音色（内置的引擎会拒绝） */
       deleteVoice(name: string): Promise<void>
       /** 拖进来的音色 gguf：路径 preload 里换（渲染层接触不到），主进程复制进 user-voices 并验证 */

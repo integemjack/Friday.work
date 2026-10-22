@@ -4,7 +4,28 @@
 const test = require('node:test')
 const assert = require('node:assert')
 
-const { PRESET_VOICES, cleanForSpeech, textBlocksToSpeech, splitForSpeech } = require('../.tmp/speechoutput.cjs')
+const { PRESET_VOICES, cleanForSpeech, dynamicSpeedFor, speechSpeedFor, textBlocksToSpeech, splitForSpeech } = require('../.tmp/speechoutput.cjs')
+
+test('语速倍率：音色自带 × 全局倍率，夹进安全区间', () => {
+  assert.equal(speechSpeedFor(1.0, 1.0), 1.0, '默认原速')
+  assert.equal(speechSpeedFor(1.0, 1.5), 1.5, '全局 1.5× 生效')
+  assert.equal(speechSpeedFor(1.2, 0.5), 0.6, '乘在音色自带倍率上')
+  assert.equal(speechSpeedFor(0, 1.5), 1.5, '音色倍率缺失按 1 兜底')
+  assert.equal(speechSpeedFor(1.0, 0), 1, '全局倍率缺失按 1 兜底')
+  assert.equal(speechSpeedFor(1.0, 99), 3, '上限 3')
+  assert.equal(speechSpeedFor(1.0, 0.01), 0.25, '下限 0.25')
+})
+
+test('动态语速：按字数在最慢~最快间插值（短=慢、长=快）', () => {
+  assert.equal(dynamicSpeedFor(10, 0.9, 1.6), 0.9, '短句（≤40 字）用最慢')
+  assert.equal(dynamicSpeedFor(40, 0.9, 1.6), 0.9, '40 字边界还是最慢')
+  assert.equal(dynamicSpeedFor(520, 0.9, 1.6), 1.6, '520 字边界到最快')
+  assert.equal(dynamicSpeedFor(5000, 0.9, 1.6), 1.6, '更长也封顶最快')
+  const mid = dynamicSpeedFor(280, 0.9, 1.6)
+  assert.ok(Math.abs(mid - 1.25) < 1e-9, '中间点线性（280 字 → 1.25）')
+  assert.equal(dynamicSpeedFor(10, 1.5, 1.0), 1.0, 'min>max 传反了也自洽（短句取较小值当最慢）')
+  assert.equal(dynamicSpeedFor(5000, 1.5, 1.0), 1.5, '传反时长句取较大值当最快')
+})
 
 test('预置音色：引擎五个，id/音色名一一对应', () => {
   assert.equal(PRESET_VOICES.length, 5, '预置 5 个（引擎 voices/*.gguf）')

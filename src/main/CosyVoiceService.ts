@@ -28,12 +28,13 @@
 import { app, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { createWriteStream, existsSync } from 'node:fs'
+import { createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { copyFile, mkdir, open as openFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import WebSocket from 'ws'
+import iconv from 'iconv-lite'
 
 /** 引擎版本（本仓库 release tag voice-v0.5.0：CI 从 vendor/friday-voice 编出来的，含音色克隆） */
 const POWER_VERSION = '0.5.0'
@@ -769,6 +770,95 @@ function validVoiceName(name: string): boolean {
   return name.length > 0 && name.length <= 60 && /^[\p{L}\p{N}_-]+$/u.test(name)
 }
 
+// MARK: 引擎音色名的编码问题（Windows 实测）：引擎（C++）把收到的 UTF-8 名字按系统代码页
+// （GBK）转宽字符写盘/列目录，中文名落盘即乱码（「验证克隆」→「楠岃瘉鍏嬮殕」），
+// /v1/voices 里回的也是乱码名，和选中的名字永远对不上 → 选中不持久。引擎改不了，
+// 客户端侧的修法：送引擎的名字一律 ASCII 安全名（u+随机），用户起的名字（显示名）
+// 存 rootDir()/voice-names.json（和 user-voices 同目录，升级不丢），列表/选中/删除都走映射。
+
+/** 显示名映射（安全名 → 用户起的名字）落盘位置 */
+function displayNamesPath(): string {
+  return join(rootDir(), 'voice-names.json')
+}
+function loadDisplayNames(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(displayNamesPath(), 'utf8')) as Record<string, string>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+function saveDisplayNames(map: Record<string, string>): void {
+  try {
+    writeFileSync(displayNamesPath(), JSON.stringify(map, null, 2), 'utf8')
+  } catch {
+    // 写不进（权限/磁盘）：本次会话内内存映射仍有效
+  }
+}
+
+/** 生成不与现有名字冲突的 ASCII 安全名：引擎名/文件名全链路 ASCII，不再有编码问题 */
+function newSafeName(taken: Iterable<string>): string {
+  const used = new Set(taken)
+  for (;;) {
+    const name = `u${randomBytes(8).toString('hex').slice(0, 12)}`
+    if (!used.has(name)) return name
+  }
+}
+
+/** 乱码名反解：名字若是「UTF-8 字节被按 GBK 解码」的产物（引擎旧 bug 留下的存量文件），
+ *  还原出用户起的原名；反解不合法或名字纯 ASCII 则不是这种乱码，返回 null */
+function mojibakeOrigin(name: string): string | null {
+  if (!/[^\x00-\x7f]/.test(name)) return null
+  try {
+    const origin = iconv.decode(iconv.encode(name, 'gbk'), 'utf8')
+    if (origin !== name && validVoiceName(origin)) return origin
+  } catch {
+    // 名字里有 GBK 编不出的字符：不是这种乱码
+  }
+  return null
+}
+
+/** 一次性修复存量乱码音色文件（旧版克隆/导入的中文名落盘成了 GBK 乱码）：重命名成安全名 +
+ *  记显示名映射（显示名从乱码里反解回来）。改过文件返回 true（serve 在跑的话要重启才能看到新名） */
+async function repairMojibakeUserVoices(): Promise<boolean> {
+  const userDir = join(rootDir(), 'user-voices')
+  let files: string[]
+  try {
+    files = await readdir(userDir)
+  } catch {
+    return false
+  }
+  const ggufs = files.filter((f) => /\.gguf$/i.test(f))
+  const map = loadDisplayNames()
+  const taken = new Set(ggufs.map((f) => f.replace(/\.gguf$/i, '')))
+  let changed = false
+  for (const file of ggufs) {
+    const name = file.replace(/\.gguf$/i, '')
+    const origin = mojibakeOrigin(name)
+    if (!origin) continue
+    const safe = newSafeName(taken)
+    try {
+      await rename(join(userDir, file), join(userDir, `${safe}.gguf`))
+      map[safe] = origin
+      taken.add(safe)
+      changed = true
+    } catch {
+      // 改不动（被占用等）：留着下次再试
+    }
+  }
+  if (changed) saveDisplayNames(map)
+  return changed
+}
+
+/** 拉引擎当前用户音色列表（安全名）；失败给空（调用方自行决定要不要当错误） */
+async function fetchUserVoices(server: Running): Promise<string[]> {
+  const response = await fetch(`${server.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
+    headers: { Authorization: `Bearer ${server.token}` }
+  })
+  if (!response.ok) return []
+  return (((await response.json()) as { user_voices?: unknown[] }).user_voices ?? []).map(String)
+}
+
 /** 导入接口的结果：成功的给音色名，失败的给原文件名 + 人话原因 */
 interface VoiceImportResult {
   imported: string[]
@@ -791,10 +881,10 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
   const userDir = join(rootDir(), 'user-voices')
   const staging = join(rootDir(), 'import-staging') // 暂存区：serve 不扫，坏文件在这里毒不到引擎
   const failed: { file: string; error: string }[] = []
-  const staged: { name: string; from: string }[] = []
-  const stagedFile = (name: string): string => join(staging, `${name}.gguf`)
-  const userFile = (name: string): string => join(userDir, `${name}.gguf`)
-  const backupFile = (name: string): string => join(staging, `backup-${name}.gguf`)
+  const staged: { display: string; safe: string; from: string }[] = []
+  const stagedFile = (voice: string): string => join(staging, `${voice}.gguf`)
+  const userFile = (voice: string): string => join(userDir, `${voice}.gguf`)
+  const backupFile = (voice: string): string => join(staging, `backup-${voice}.gguf`)
   const invalidVoice = '引擎加载不了（不是有效的 CosyVoice 音色 gguf）'
 
   // ① 逐个校验 + 复制到 staging；同名重复导入 = 更新那个音色（先备份旧版，失败可恢复）
@@ -816,17 +906,22 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
       } finally {
         await fd.close()
       }
-      // 文件名 → 音色名：和克隆向导同款清洗（空格、路径分隔符等换 -）
-      const name = basename(file)
+      // 文件名 → 显示名：和克隆向导同款清洗（空格、路径分隔符等换 -）
+      const display = basename(file)
         .replace(/\.gguf$/i, '')
         .replace(/[\\/:*?"<>|\s.]/g, '-')
         .slice(0, 60)
-      if (!validVoiceName(name)) throw new Error('文件名清洗后不是合法音色名（字母、数字、下划线、连字符或中文）')
-      if (builtin.has(name)) throw new Error(`和内置音色「${name}」同名，改个文件名再导入`)
+      if (!validVoiceName(display)) throw new Error('文件名清洗后不是合法音色名（字母、数字、下划线、连字符或中文）')
+      if (builtin.has(display)) throw new Error(`和内置音色「${display}」同名，改个文件名再导入`)
+      // 引擎侧一律 ASCII 安全名（Windows 下中文名落盘会成 GBK 乱码）；
+      // 同名重复导入 = 更新那个音色：复用它已有的安全名，否则生成新的
+      const map = loadDisplayNames()
+      const existingSafe = Object.entries(map).find(([, d]) => d === display)?.[0]
+      const safe = existingSafe ?? newSafeName([display, ...Object.keys(map)])
       await mkdir(staging, { recursive: true })
-      if (existsSync(userFile(name))) await copyFile(userFile(name), backupFile(name)).catch(() => {})
-      await copyFile(file, stagedFile(name))
-      staged.push({ name, from: file })
+      if (existsSync(userFile(safe))) await copyFile(userFile(safe), backupFile(safe)).catch(() => {})
+      await copyFile(file, stagedFile(safe))
+      staged.push({ display, safe, from: file })
     } catch (error) {
       failed.push({ file: basename(file) || file, error: (error as Error)?.message ?? String(error) })
     }
@@ -849,15 +944,18 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
     if (!response.ok) throw new Error(`音色列表拉取失败（${response.status}）`)
     return new Set((((await response.json()) as { user_voices?: unknown[] }).user_voices ?? []).map(String))
   }
-  /** 一个文件验完的善后：成了记账，没成恢复备份的旧音色 */
-  const settle = (item: { name: string; from: string }, ok: boolean, error?: string): void => {
+  /** 一个文件验完的善后：成了记账（成功提示用显示名、映射落盘），没成恢复备份的旧音色 */
+  const settle = (item: { display: string; safe: string; from: string }, ok: boolean, error?: string): void => {
     if (ok) {
-      imported.push(item.name)
+      imported.push(item.display)
+      const map = loadDisplayNames()
+      map[item.safe] = item.display
+      saveDisplayNames(map)
       return
     }
-    rm(userFile(item.name), { force: true }).catch(() => {})
+    rm(userFile(item.safe), { force: true }).catch(() => {})
     // 恢复被覆盖的旧音色（同名更新失败 = 旧版还在）
-    if (existsSync(backupFile(item.name))) rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+    if (existsSync(backupFile(item.safe))) rename(backupFile(item.safe), userFile(item.safe)).catch(() => {})
     failed.push({ file: basename(item.from), error: error ?? invalidVoice })
   }
 
@@ -865,7 +963,7 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
     await mkdir(userDir, { recursive: true })
     try {
       // 快路径：一批全部移进 user-voices，一轮 serve 验完（绝大多数情况：文件都是好的）
-      for (const item of staged) await rename(stagedFile(item.name), userFile(item.name))
+      for (const item of staged) await rename(stagedFile(item.safe), userFile(item.safe))
       let loaded = await loadUserVoices()
       // loadUserVoices → ensureServe → ensureFiles：引擎目录里没有新版时会自动下载升级。
       // 还停在旧目录（0.4 无 --user-voices，用户音色列表必然为空）就整体回滚明说，
@@ -873,9 +971,9 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
       // --user-voices 看的就是目录，两者不一致的边缘状态（新 exe 在旧目录）也归到这里
       if (activeEngineDir() !== engineDir()) {
         for (const item of staged) {
-          await rm(userFile(item.name), { force: true }).catch(() => {})
-          if (existsSync(backupFile(item.name)))
-            await rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+          await rm(userFile(item.safe), { force: true }).catch(() => {})
+          if (existsSync(backupFile(item.safe)))
+            await rename(backupFile(item.safe), userFile(item.safe)).catch(() => {})
         }
         await rm(staging, { recursive: true, force: true }).catch(() => {})
         throw new Error(
@@ -883,34 +981,34 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
             '网络恢复后再点一次导入，或用一次语音播报/听写，都会自动重试升级'
         )
       }
-      for (const item of staged) settle(item, loaded.has(item.name))
+      for (const item of staged) settle(item, loaded.has(item.safe))
       // settle 里失败的（结构不对、引擎跳过的那种不致命坏文件）已删掉复制的文件：
       // user-voices 干净、引擎内存里也没加载它，不用再重启
     } catch {
       // serve 起不来：这批里有致命坏文件（实测会让引擎启动即退）。全部撤回 staging，逐个验
       for (const item of staged) {
-        if (existsSync(userFile(item.name))) {
-          await rm(userFile(item.name), { force: true }).catch(() => {})
+        if (existsSync(userFile(item.safe))) {
+          await rm(userFile(item.safe), { force: true }).catch(() => {})
           // 重新从源拷回 staging（被覆盖的旧音色也从备份恢复，保持导入前状态）
-          await copyFile(item.from, stagedFile(item.name)).catch(() => {})
-          if (existsSync(backupFile(item.name))) await rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+          await copyFile(item.from, stagedFile(item.safe)).catch(() => {})
+          if (existsSync(backupFile(item.safe))) await rename(backupFile(item.safe), userFile(item.safe)).catch(() => {})
         }
       }
       for (const item of staged) {
-        if (!existsSync(stagedFile(item.name))) continue
+        if (!existsSync(stagedFile(item.safe))) continue
         try {
-          await rm(userFile(item.name), { force: true }).catch(() => {})
-          await rename(stagedFile(item.name), userFile(item.name))
+          await rm(userFile(item.safe), { force: true }).catch(() => {})
+          await rename(stagedFile(item.safe), userFile(item.safe))
         } catch {
           continue
         }
         try {
           const loaded = await loadUserVoices()
-          settle(item, loaded.has(item.name))
+          settle(item, loaded.has(item.safe))
         } catch {
           // 单个也起不来：移走它再起一次对照——起来了才归罪于这个文件，起不来是环境问题
-          await rm(userFile(item.name), { force: true }).catch(() => {})
-          if (existsSync(backupFile(item.name))) await rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+          await rm(userFile(item.safe), { force: true }).catch(() => {})
+          if (existsSync(backupFile(item.safe))) await rename(backupFile(item.safe), userFile(item.safe)).catch(() => {})
           try {
             await loadUserVoices() // 对照成功（顺带把语音恢复可用）
             failed.push({ file: basename(item.from), error: '引擎加载不了（gguf 损坏，已跳过）' })
@@ -973,34 +1071,74 @@ export function registerCosyVoiceIpc(): void {
       serving: running?.caps.clone === true
     }
   })
-  // 克隆：audio 为 16 kHz Float32（8~15 秒）；没给 text 让引擎听写当底稿。首次会先下前端模型（进度走 voice:model-progress）
+  // 克隆：audio 为 16 kHz Float32（8~15 秒）；没给 text 让引擎听写当底稿。首次会先下前端模型（进度走 voice:model-progress）。
+  // 名字送引擎一律 ASCII 安全名（引擎在 Windows 会把中文名落盘成 GBK 乱码），显示名存 voice-names.json
   ipcMain.handle(
     'voice:clone',
     async (
       event: IpcMainInvokeEvent,
       payload: { name: string; audio: Float32Array; text?: string }
-    ): Promise<{ voice: string; transcript: string; seconds: number; took: number }> => {
+    ): Promise<{ voice: string; name: string; transcript: string; seconds: number; took: number }> => {
       if (!payload?.name || !payload.audio?.length) throw new Error('克隆要名字和录音')
+      if (!validVoiceName(payload.name)) throw new Error('音色名不合法（字母、数字、下划线、连字符或中文，最长 60）')
       const server = await ensureServe(event.sender, { forClone: true, progress: 'voice:model-progress' })
-      return cloneVoiceRequest(server, payload.name, payload.audio, payload.text)
+      const display = payload.name
+      const map = loadDisplayNames()
+      // 同名再克隆 = 更新那个音色：引擎对已存在的名字直接拒绝（已有同名音色），
+      // 所以先删旧的再沿用原安全名克隆
+      const taken = await fetchUserVoices(server)
+      const existing = Object.entries(map).find(([safe, d]) => d === display && taken.includes(safe))
+      if (existing) {
+        await fetch(`${server.wsUrl.replace(/^ws:/, 'http:')}/v1/voice/${encodeURIComponent(existing[0])}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${server.token}` }
+        }).catch(() => {})
+      }
+      const safe = existing?.[0] ?? newSafeName([...taken.filter((n) => n !== existing?.[0]), ...Object.keys(map)])
+      const result = await cloneVoiceRequest(server, safe, payload.audio, payload.text)
+      map[safe] = display
+      saveDisplayNames(map)
+      return { ...result, voice: safe, name: display }
     }
   )
-  // 引擎音色列表（内置 + 用户克隆的；带 default，供播报选音色）
-  ipcMain.handle('voice:voices', async () => {
-    if (!running) return { voices: await installedVoices(), user: [] as string[], clone: false, default: 'default' }
-    const response = await fetch(`${running.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
-      headers: { Authorization: `Bearer ${running.token}` }
-    })
-    if (!response.ok) throw new Error(`音色列表拉取失败（${response.status}）`)
-    const body = (await response.json()) as { voices?: string[]; user_voices?: string[]; clone?: boolean; default?: string }
-    return { voices: body.voices ?? [], user: body.user_voices ?? [], clone: body.clone === true, default: body.default ?? 'default' }
-  })
+  // 引擎音色列表（内置 + 用户克隆的；带 default，供播报选音色）。user 是引擎侧安全名，
+  // userDisplay 把安全名换回用户起的名字；顺手修存量乱码文件（改了文件 → 停 serve，下次使用重新扫）
+  ipcMain.handle(
+    'voice:voices',
+    async (): Promise<{
+      voices: string[]
+      user: string[]
+      clone: boolean
+      default: string
+      userDisplay: Record<string, string>
+    }> => {
+      if (await repairMojibakeUserVoices()) {
+        // 文件名改了：正在跑的引擎内存里还是旧名，停掉它（本次返回空 user 列表，下次使用重新拉起）
+        if (running) await stopServe()
+        return { voices: await installedVoices(), user: [], clone: false, default: 'default', userDisplay: loadDisplayNames() }
+      }
+      const userDisplay = loadDisplayNames()
+      if (!running) return { voices: await installedVoices(), user: [], clone: false, default: 'default', userDisplay }
+      const response = await fetch(`${running.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
+        headers: { Authorization: `Bearer ${running.token}` }
+      })
+      if (!response.ok) throw new Error(`音色列表拉取失败（${response.status}）`)
+      const body = (await response.json()) as { voices?: string[]; user_voices?: string[]; clone?: boolean; default?: string }
+      return { voices: body.voices ?? [], user: body.user_voices ?? [], clone: body.clone === true, default: body.default ?? 'default', userDisplay }
+    }
+  )
   ipcMain.handle('voice:delete-voice', async (_event: IpcMainInvokeEvent, name: string): Promise<void> => {
     if (!running) throw new Error('语音引擎没在跑')
     const response = await fetch(`${running.wsUrl.replace(/^ws:/, 'http:')}/v1/voice/${encodeURIComponent(name)}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${running.token}` }
     })
+    // 删的音色有显示名映射的一并清掉，避免映射越积越多
+    const map = loadDisplayNames()
+    if (map[name]) {
+      delete map[name]
+      saveDisplayNames(map)
+    }
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } }
       throw new Error(body.error?.message ?? `删除失败（${response.status}）`)

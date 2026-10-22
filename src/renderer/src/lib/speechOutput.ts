@@ -47,12 +47,32 @@ export const PRESET_VOICES: VoiceOption[] = [
 
 const KEY_ENABLED = 'voice.replySpeak'
 const KEY_CURRENT = 'voice.tts.current'
+const KEY_SPEED = 'voice.tts.speed'
+const KEY_SPEED_DYNAMIC = 'voice.tts.speedDynamic'
+const KEY_SPEED_MIN = 'voice.tts.speedMin'
+const KEY_SPEED_MAX = 'voice.tts.speedMax'
+const KEY_MUTED = 'voice.tts.muted'
+const KEY_VOLUME = 'voice.tts.volume'
 
 /** 回复语音播报总开关（默认开；合成本地免费、不联网，开着没有成本） */
 export const replySpeakEnabled = ref<boolean>(loadEnabled())
 
 /** 当前选中的音色 id */
 export const currentVoiceId = ref<string>(loadCurrentId())
+
+/** 全局语速倍率（设置页可调、localStorage 持久化；乘在音色自带语速上，改完下一句生效）。
+ *  动态语速开着时不用它，改用最慢/最快区间按本轮文本长度插值 */
+export const ttsSpeed = ref<number>(loadSpeed())
+/** 动态语速：按本轮要念的字数在最慢~最快之间自动取值（短句从容、长文提速） */
+export const ttsDynamicSpeed = ref<boolean>(loadDynamic())
+/** 动态语速下限（短回复用的倍率） */
+export const ttsSpeedMin = ref<number>(loadSpeedBound(KEY_SPEED_MIN, 0.9))
+/** 动态语速上限（长回复用的倍率） */
+export const ttsSpeedMax = ref<number>(loadSpeedBound(KEY_SPEED_MAX, 1.6))
+/** 静音：波形照走、gain 归零，但不停止播报队列（取消静音能接回正在念的那句） */
+export const ttsMuted = ref<boolean>(loadMuted())
+/** 音量 0-1（1 = 引擎原声；作用在播放链的 GainNode 上，播报中途拖动也即时生效） */
+export const ttsVolume = ref<number>(loadVolume())
 
 /** 引擎是否可用（本机平台有包且已下好） */
 export const cosyVoiceReady = ref(false)
@@ -72,23 +92,31 @@ export async function refreshCosyVoiceStatus(): Promise<void> {
   } catch {
     cosyVoiceReady.value = false
   }
+  let listAuthoritative = false
   try {
     const [voices, clone] = await Promise.all([window.fridayBridge.listVoices(), window.fridayBridge.cloneVoiceStatus()])
+    // user 是引擎侧 ASCII 安全名（引擎在 Windows 会把中文名落盘成 GBK 乱码）；
+    // 显示名从主进程的映射（voice-names.json）换回来，列表/选中/删除用安全名、展示用显示名
     clonedVoices.value = voices.user.map((name) => ({
       id: `cv3:${name}`,
-      name,
+      name: voices.userDisplay?.[name] ?? name,
       tag: '克隆',
       voice: name,
       speed: 1.0,
       custom: true
     }))
     cloneSupported.value = clone.installed
+    listAuthoritative = true
   } catch {
-    // 引擎没在跑：克隆列表清空（真删了还是引擎没起，等下次刷新对齐）
+    // 引擎没在跑：克隆列表清空（下次刷新对齐），但不动选中的音色——
+    // 引擎临时没起（模型在下载 / 服务还没拉起）不代表克隆被删了，
+    // 此时把选择重置成默认还会写进 localStorage，把用户的选择永久抹掉
     clonedVoices.value = []
   }
-  // 选中的音色没了（引擎侧被删 / 旧缓存是 kokoro id）：回落预置第一个
-  if (!allVoices().some((voice) => voice.id === currentVoiceId.value)) setCurrentVoice(PRESET_VOICES[0]!.id)
+  // 只在拿到了引擎权威列表时才回落：选中的音色确实不在了（引擎侧被删 / 旧缓存 kokoro id）
+  if (listAuthoritative && !allVoices().some((voice) => voice.id === currentVoiceId.value)) {
+    setCurrentVoice(PRESET_VOICES[0].id)
+  }
 }
 
 function loadEnabled(): boolean {
@@ -102,12 +130,60 @@ function loadEnabled(): boolean {
 function loadCurrentId(): string {
   try {
     const saved = localStorage.getItem(KEY_CURRENT)
-    // 旧缓存里的 kokoro / 自定义 id 一律回落预置
     if (saved && PRESET_VOICES.some((voice) => voice.id === saved)) return saved
+    // 克隆音色也保留：它的列表是启动后异步从引擎拉的（refreshCosyVoiceStatus），
+    // 模块初始化时 clonedVoices 还是空——不保留的话重启就回落默认，选择永久丢失。
+    // 保留后列表没到前 activeVoice() 临时用预置播，列表到了自然对上；
+    // 真被删了由 refreshCosyVoiceStatus 的成功路径回落。旧 kokoro id 不属于这两类 → 默认
+    if (saved && saved.startsWith('cv3:')) return saved
   } catch {
     // localStorage 不可用：默认
   }
   return PRESET_VOICES[0].id
+}
+
+function loadSpeed(): number {
+  try {
+    const raw = Number(localStorage.getItem(KEY_SPEED))
+    return Number.isFinite(raw) && raw > 0 ? Math.min(2, Math.max(0.5, raw)) : 1
+  } catch {
+    return 1
+  }
+}
+
+function loadDynamic(): boolean {
+  try {
+    return localStorage.getItem(KEY_SPEED_DYNAMIC) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** 最慢/最快语速的加载（合法区间 0.5-2；顺便保证 min ≤ max） */
+function loadSpeedBound(key: string, fallback: number): number {
+  try {
+    const raw = Number(localStorage.getItem(key))
+    return Number.isFinite(raw) && raw > 0 ? Math.min(2, Math.max(0.5, raw)) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function loadMuted(): boolean {
+  try {
+    return localStorage.getItem(KEY_MUTED) === '1'
+  } catch {
+    return false
+  }
+}
+
+function loadVolume(): number {
+  try {
+    const raw = Number(localStorage.getItem(KEY_VOLUME))
+    return Number.isFinite(raw) && raw > 0 ? Math.min(1, Math.max(0, raw)) : 1
+  } catch {
+    return 1
+  }
 }
 
 function allVoices(): VoiceOption[] {
@@ -136,6 +212,65 @@ export function setCurrentVoice(id: string): void {
   } catch {
     // 不可写：本次会话内生效即可
   }
+}
+
+export function setTtsSpeed(value: number): void {
+  ttsSpeed.value = Math.min(2, Math.max(0.5, value))
+  try {
+    localStorage.setItem(KEY_SPEED, String(ttsSpeed.value))
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+}
+
+export function setTtsDynamicSpeed(on: boolean): void {
+  ttsDynamicSpeed.value = on
+  try {
+    localStorage.setItem(KEY_SPEED_DYNAMIC, on ? '1' : '0')
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+}
+
+export function setTtsSpeedMin(value: number): void {
+  ttsSpeedMin.value = Math.min(2, Math.max(0.5, value))
+  // 互钳：最慢不能超过最快（超过就把最快抬上来，两个设置永远自洽）
+  if (ttsSpeedMin.value > ttsSpeedMax.value) setTtsSpeedMax(ttsSpeedMin.value)
+  try {
+    localStorage.setItem(KEY_SPEED_MIN, String(ttsSpeedMin.value))
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+}
+
+export function setTtsSpeedMax(value: number): void {
+  ttsSpeedMax.value = Math.min(2, Math.max(0.5, value))
+  if (ttsSpeedMax.value < ttsSpeedMin.value) setTtsSpeedMin(ttsSpeedMax.value)
+  try {
+    localStorage.setItem(KEY_SPEED_MAX, String(ttsSpeedMax.value))
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+}
+
+export function setTtsMuted(muted: boolean): void {
+  ttsMuted.value = muted
+  try {
+    localStorage.setItem(KEY_MUTED, muted ? '1' : '0')
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+  applyOutputGain()
+}
+
+export function setTtsVolume(value: number): void {
+  ttsVolume.value = Math.min(1, Math.max(0, value))
+  try {
+    localStorage.setItem(KEY_VOLUME, String(ttsVolume.value))
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+  applyOutputGain()
 }
 
 // MARK: 回复文本 → 朗读文本（纯函数，test/speechoutput.test.cjs 直接测）
@@ -202,6 +337,10 @@ export const ttsDetail = ref('')
 let audioContext: AudioContext | null = null
 let activeSource: AudioBufferSourceNode | null = null
 let speakToken = 0
+/** 主增益（静音/音量）与波形分析器：播放链固定 source → masterGain → analyser → destination。
+ *  analyser 挂在 gain 之后，波形反映的是「实际听到的」——静音即归零、音量小波形也矮。 */
+let masterGain: GainNode | null = null
+let outputAnalyser: AnalyserNode | null = null
 
 /** 待播片段队列 + 播放泵：整条播报（新回复 / 试听）先清队再入队（后到的优先）；
  *  流式增量（append）只接到队尾、不打断正在播的——回复气泡的文本一片片来，
@@ -210,8 +349,21 @@ let speechQueue: string[] = []
 let pumping = false
 /** 本轮泵指定音色（试听时非空）；流式增量为空 → 每句跟当前选中的音色 */
 let pumpVoice: VoiceOption | undefined
+/** 本轮逐句送引擎的全局倍率：动态语速开时按本轮要念的总字数插值（流式追加会重算，
+ *  后续句子随文本变多自动提速）；关时就是固定 ttsSpeed */
+let pumpScale = 1
+/** 本轮已入队总字数（含已播完的）：动态语速按整条回复长度取值，不是剩余队列——
+ *  否则越播到后面（队列越短）插值出的语速反而越慢 */
+let pumpChars = 0
 /** 引擎正在合成（stopSpeaking 靠它决定要不要 cancel 引擎里那句） */
 let engineBusy = false
+
+/** 重新取本轮的全局倍率（speakText 入队后调）：看本轮一共要念多少字 */
+function refreshPumpScale(): void {
+  pumpScale = ttsDynamicSpeed.value
+    ? dynamicSpeedFor(pumpChars, ttsSpeedMin.value, ttsSpeedMax.value)
+    : ttsSpeed.value
+}
 
 /** 模型准备进度（主进程事件 → 状态行 / 设置页进度条） */
 export function initTtsProgressListener(): void {
@@ -253,17 +405,44 @@ export function stopSpeaking(): void {
   if (ttsPhase.value === 'speaking' || ttsPhase.value === 'error') ttsPhase.value = 'idle'
 }
 
+/** 建好（或复用）gain→analyser→destination 那段公共链，返回主增益节点 */
+function ensureGraph(context: AudioContext): GainNode {
+  if (!masterGain || !outputAnalyser) {
+    masterGain = context.createGain()
+    outputAnalyser = context.createAnalyser()
+    outputAnalyser.fftSize = 1024
+    outputAnalyser.smoothingTimeConstant = 0.7
+    masterGain.connect(outputAnalyser)
+    outputAnalyser.connect(context.destination)
+    applyOutputGain()
+  }
+  return masterGain
+}
+
+/** 静音/音量落到 GainNode（20ms 平滑防爆音）；播放前、拖动/切换时都会走一遍 */
+function applyOutputGain(): void {
+  if (!masterGain || !audioContext) return
+  const target = ttsMuted.value ? 0 : ttsVolume.value
+  masterGain.gain.setTargetAtTime(target, audioContext.currentTime, 0.02)
+}
+
+/** 波形数据源（语音 HUD 的 rAF 从这里取时域数据；没播过声音时 AudioContext 还没建 → null） */
+export function getTtsAnalyser(): AnalyserNode | null {
+  return outputAnalyser
+}
+
 function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
   return new Promise((resolve) => {
     if (!audioContext) audioContext = new AudioContext()
     const context = audioContext
     // Electron 默认 autoplay 无手势要求；被挂起（罕见）时恢复
     if (context.state === 'suspended') void context.resume()
+    const gain = ensureGraph(context)
     const buffer = context.createBuffer(1, samples.length, sampleRate)
     buffer.getChannelData(0).set(samples)
     const source = context.createBufferSource()
     source.buffer = buffer
-    source.connect(context.destination)
+    source.connect(gain)
     source.onended = () => {
       if (activeSource === source) activeSource = null
       resolve()
@@ -302,6 +481,23 @@ export function splitForSpeech(clean: string, firstLimit = 16): string[] {
   return parts
 }
 
+/** 送引擎的语速 = 音色自带倍率 × 全局倍率，夹进安全区间。
+ *  CosyVoice3 的 speed 越大越快（实测 0.9/1.0/1.2 → 2.10s/1.87s/1.59s，见头注释）。 */
+export function speechSpeedFor(voiceSpeed: number, globalSpeed: number): number {
+  const speed = (Number.isFinite(voiceSpeed) && voiceSpeed > 0 ? voiceSpeed : 1) * (Number.isFinite(globalSpeed) && globalSpeed > 0 ? globalSpeed : 1)
+  return Math.min(3, Math.max(0.25, speed))
+}
+
+/** 动态语速插值（纯函数，test 直测）：按本轮要念的总字数在 min~max 间线性取值——
+ *  短回复（≤40 字，一两句话）用最慢，从容；长回复（≥520 字，一大段）用最快，
+ *  别让一篇长文念上两分钟；中间线性过渡。字数只在本函数里定义，设置页不暴露 */
+export function dynamicSpeedFor(length: number, min: number, max: number): number {
+  const lo = Math.min(min, max)
+  const hi = Math.max(min, max)
+  const t = Math.min(1, Math.max(0, (length - 40) / (520 - 40)))
+  return lo + (hi - lo) * t
+}
+
 /** 播一段文本（用当前选中的音色；分句流水线：首句 1-2 秒出声，后续句边播边合成）。
  *  整条播报（默认）：停掉并清空正在播的再入队（新回复 / 试听优先）。
  *  流式增量（append: true）：只把片段接到队尾不打断——回复气泡边显示边念，
@@ -314,10 +510,14 @@ export function speakText(text: string, options?: { voice?: VoiceOption; force?:
   if (!options?.append) {
     stopSpeaking() // 先停旧的、清空队列，再取新 token：此后任何新打断都会使 token 失配
     pumpVoice = options?.voice
+    pumpChars = 0
   } else if (!pumping) {
     pumpVoice = options?.voice // 泵停着（刚被打断 / 上一轮播完）：这次 append 启动新一轮
+    pumpChars = 0
   }
   speechQueue.push(...parts)
+  pumpChars += parts.reduce((sum, part) => sum + part.length, 0)
+  refreshPumpScale()
   if (!pumping) void pumpSpeech()
 }
 
@@ -335,7 +535,7 @@ async function pumpSpeech(): Promise<void> {
       try {
         return await window.fridayBridge.speakReply({
           text,
-          speed: voice.speed,
+          speed: speechSpeedFor(voice.speed, pumpScale),
           voice: voice.voice,
           instruction: voice.instruction
         })
