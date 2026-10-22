@@ -329,11 +329,17 @@ async function importVoiceFiles(files: File[]): Promise<void> {
   importBusy.value = true
   importError.value = ''
   importDone.value = ''
-  importProgress.value = '导入中…（会启动语音引擎验证，约几秒）'
+  importProgress.value = '导入中…（旧版引擎会先自动升级）'
   importProgressOff?.()
   importProgressOff =
     window.fridayBridge.onVoiceModelProgress?.((state) => {
-      importProgress.value = state.phase === 'loading' ? '启动语音引擎验证…' : ''
+      // 下载中 = 自动升级引擎（约 20MB）或补模型；loading = 起引擎验证导入的音色
+      importProgress.value =
+        state.phase === 'downloading'
+          ? `${state.detail ?? '下载中'}${state.percent !== undefined ? ` ${state.percent}%` : ''}`
+          : state.phase === 'loading'
+            ? '启动语音引擎验证…'
+            : ''
     }) ?? null
   try {
     await applyImportResult(await window.fridayBridge.importVoiceFiles(ggufs))

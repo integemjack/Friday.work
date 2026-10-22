@@ -236,12 +236,15 @@ async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressCha
       // 顺带校验版本号——防止镜像缓存了旧版本的包
       let expected = asset.sha256
       if (!expected) {
-        // 刚发布的资产在 GitHub CDN 上可能短暂 404（实测传播要几分钟）：重试 3 次
+        // 刚发布的资产在 GitHub CDN 上可能短暂 404（实测传播要几分钟）：重试 3 次。
+        // sidecar 命名是压缩包去掉扩展名再加 .json（…-vulkan.zip → …-vulkan.json，CI 打包
+        // 脚本同款）——不是简单往后拼 .json（那样拼出来 …vulkan.zip.json，Release 上没有，
+        // 引擎升级永远拉不到校验清单、只能停在旧引擎）
         let info: { sha256?: string; version?: string } | null = null
         let lastCode = 0
         for (let attempt = 0; attempt < 3 && !info; attempt++) {
           if (attempt) await new Promise((r) => setTimeout(r, 3000))
-          const sidecar = await fetch(`${url}.json`, { redirect: 'follow' })
+          const sidecar = await fetch(url.replace(/\.(zip|tar\.gz)$/i, '.json'), { redirect: 'follow' })
           if (sidecar.ok) info = (await sidecar.json()) as { sha256?: string; version?: string }
           else lastCode = sidecar.status
         }
@@ -782,11 +785,8 @@ interface VoiceImportResult {
  *  快路径一批全验；serve 起不来就撤回 staging 逐个验（单个起不来 → 移走再起一次对照，
  *  起来了才归罪于文件，起不来是环境问题 → 回滚本次导入、不碰 user-voices）。 */
 async function importVoiceFiles(to: WebContents, paths: string[]): Promise<VoiceImportResult> {
-  if (!engineInstalled()) throw new Error('语音引擎还没下载好，先下载（约 1.2GB）再导入音色')
-  // 旧引擎（0.4.x）没有 --user-voices，扫不到导入的文件——会被误报成「gguf 无效」，先挡住
-  const dir = activeEngineDir()
-  const modern = !!dir && (dir === engineDir() || versionAtLeast(detectEngineVersion(exeIn(dir)), POWER_VERSION))
-  if (!modern) throw new Error('本机的语音引擎还是旧版（导入音色需要 v0.5）：新版引擎还没下载好，稍后重试')
+  // 注意：这里不预判引擎新旧/有无——ensureServe → ensureFiles 会自动下载新版引擎（点导入
+  // 就是更新入口，进度走 voice:model-progress）；预判拦在前面的话旧引擎用户永远等不到升级
   const builtin = new Set(await installedVoices())
   const userDir = join(rootDir(), 'user-voices')
   const staging = join(rootDir(), 'import-staging') // 暂存区：serve 不扫，坏文件在这里毒不到引擎
@@ -864,6 +864,22 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
       // 快路径：一批全部移进 user-voices，一轮 serve 验完（绝大多数情况：文件都是好的）
       for (const item of staged) await rename(stagedFile(item.name), userFile(item.name))
       let loaded = await loadUserVoices()
+      // loadUserVoices → ensureServe → ensureFiles：引擎目录里没有新版时会自动下载升级。
+      // 还停在旧目录（0.4 无 --user-voices，用户音色列表必然为空）就整体回滚明说，
+      // 不然每个文件都会被误判成「gguf 无效」。按目录判而不是按版本号：serve 加不加
+      // --user-voices 看的就是目录，两者不一致的边缘状态（新 exe 在旧目录）也归到这里
+      if (activeEngineDir() !== engineDir()) {
+        for (const item of staged) {
+          await rm(userFile(item.name), { force: true }).catch(() => {})
+          if (existsSync(backupFile(item.name)))
+            await rename(backupFile(item.name), userFile(item.name)).catch(() => {})
+        }
+        await rm(staging, { recursive: true, force: true }).catch(() => {})
+        throw new Error(
+          '新版语音引擎没升级成功（已先自动尝试下载）：导入音色需要 v0.5 引擎。' +
+            '网络恢复后再点一次导入，或用一次语音播报/听写，都会自动重试升级'
+        )
+      }
       for (const item of staged) settle(item, loaded.has(item.name))
       // settle 里失败的（结构不对、引擎跳过的那种不致命坏文件）已删掉复制的文件：
       // user-voices 干净、引擎内存里也没加载它，不用再重启
