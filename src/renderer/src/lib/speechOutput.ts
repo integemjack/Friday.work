@@ -53,6 +53,7 @@ const KEY_SPEED_MIN = 'voice.tts.speedMin'
 const KEY_SPEED_MAX = 'voice.tts.speedMax'
 const KEY_MUTED = 'voice.tts.muted'
 const KEY_VOLUME = 'voice.tts.volume'
+const KEY_SINK = 'voice.tts.sink'
 
 /** 回复语音播报总开关（默认开；合成本地免费、不联网，开着没有成本） */
 export const replySpeakEnabled = ref<boolean>(loadEnabled())
@@ -73,6 +74,8 @@ export const ttsSpeedMax = ref<number>(loadSpeedBound(KEY_SPEED_MAX, 1.6))
 export const ttsMuted = ref<boolean>(loadMuted())
 /** 音量 0-1（1 = 引擎原声；作用在播放链的 GainNode 上，播报中途拖动也即时生效） */
 export const ttsVolume = ref<number>(loadVolume())
+/** 输出设备 id（'' = 系统默认；落到 AudioContext.setSinkId，选了具体设备重启后仍走它） */
+export const ttsSinkId = ref<string>(loadSinkId())
 
 /** 引擎是否可用（本机平台有包且已下好） */
 export const cosyVoiceReady = ref(false)
@@ -183,6 +186,14 @@ function loadVolume(): number {
     return Number.isFinite(raw) && raw > 0 ? Math.min(1, Math.max(0, raw)) : 1
   } catch {
     return 1
+  }
+}
+
+function loadSinkId(): string {
+  try {
+    return localStorage.getItem(KEY_SINK) ?? ''
+  } catch {
+    return ''
   }
 }
 
@@ -426,6 +437,29 @@ function applyOutputGain(): void {
   masterGain.gain.setTargetAtTime(target, audioContext.currentTime, 0.02)
 }
 
+/** 把选中的输出设备落到 AudioContext 的 sink（Chromium 110+ 支持且切换平滑，不中断正在播的）。
+ *  context 还没建（还没播过）就只记住选择，建时在 playSamples 里应用；
+ *  设备被拔等切换失败：保持原路出声。TS lib 对 setSinkId 没有类型，防御式取。 */
+async function applySink(): Promise<void> {
+  const ctx = audioContext as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null
+  if (!ctx || typeof ctx.setSinkId !== 'function') return
+  try {
+    await ctx.setSinkId(ttsSinkId.value)
+  } catch {
+    // 切不过去就算了：继续从当前设备出声
+  }
+}
+
+export function setTtsSinkId(id: string): void {
+  ttsSinkId.value = id
+  try {
+    localStorage.setItem(KEY_SINK, id)
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+  void applySink()
+}
+
 /** 波形数据源（语音 HUD 的 rAF 从这里取时域数据；没播过声音时 AudioContext 还没建 → null） */
 export function getTtsAnalyser(): AnalyserNode | null {
   return outputAnalyser
@@ -433,7 +467,10 @@ export function getTtsAnalyser(): AnalyserNode | null {
 
 function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
   return new Promise((resolve) => {
-    if (!audioContext) audioContext = new AudioContext()
+    if (!audioContext) {
+      audioContext = new AudioContext()
+      void applySink() // 新 context 建好立即落到已选的输出设备（'' = 系统默认，无感）
+    }
     const context = audioContext
     // Electron 默认 autoplay 无手势要求；被挂起（罕见）时恢复
     if (context.state === 'suspended') void context.resume()
