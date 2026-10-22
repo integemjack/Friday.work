@@ -236,9 +236,16 @@ async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressCha
       // 顺带校验版本号——防止镜像缓存了旧版本的包
       let expected = asset.sha256
       if (!expected) {
-        const sidecar = await fetch(`${url}.json`, { redirect: 'follow' })
-        if (!sidecar.ok) throw new Error(`校验清单拉取失败（HTTP ${sidecar.status}）`)
-        const info = (await sidecar.json()) as { sha256?: string; version?: string }
+        // 刚发布的资产在 GitHub CDN 上可能短暂 404（实测传播要几分钟）：重试 3 次
+        let info: { sha256?: string; version?: string } | null = null
+        let lastCode = 0
+        for (let attempt = 0; attempt < 3 && !info; attempt++) {
+          if (attempt) await new Promise((r) => setTimeout(r, 3000))
+          const sidecar = await fetch(`${url}.json`, { redirect: 'follow' })
+          if (sidecar.ok) info = (await sidecar.json()) as { sha256?: string; version?: string }
+          else lastCode = sidecar.status
+        }
+        if (!info) throw new Error(`校验清单拉取失败（HTTP ${lastCode}）`)
         if (info.version && info.version !== POWER_VERSION) throw new Error(`引擎包版本不符（Release 里是 ${info.version}）`)
         expected = info.sha256
         if (!expected) throw new Error('校验清单里没有 sha256')
@@ -365,6 +372,10 @@ async function ensureFiles(to: WebContents, need: ServeNeed = {}): Promise<void>
   ]
   for (const asset of wanted) {
     await downloadAsset(to, asset, channel)
+  }
+  // 新版就绪后旧目录就没用了（首次清理失败＝当时旧引擎进程还在跑，Windows 锁着 exe）：再试一次，失败就算了
+  if (existsSync(executablePath()) && existsSync(legacyExecutablePath())) {
+    await rm(legacyEngineDir(), { recursive: true, force: true }).catch(() => {})
   }
 }
 
