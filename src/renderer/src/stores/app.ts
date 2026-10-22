@@ -2226,10 +2226,14 @@ export const useAppStore = defineStore('app', {
      * 一个块一条气泡——同一条消息里多段思考/多段回复各自成泡，不并进同一条（并泡会把
      * 前后不相干的段拼在一起，中间只隔一个空格）。工具块顺手转成操作卡。
      * 首次见到整条消息只记下标、不补投历史（历史在聊天面板里看）；之后新出现的块整个当增量投（新开一条泡）。
+     * 已完结（收尾/出错/被打断）的消息不会再有真正的流式增量：服务端随新一轮活动重推历史时块 id
+     * 会换新（结束的会话里一执行新内容，已见过的消息会按新块 id 全部重弹成气泡），所以完结消息
+     * 一律只记下标不投。
      */
     noteAssistantStream(conversationID: string, message: ChatMessage) {
       const seen = this.streamMarks[message.id]
       const marks = seen ?? {}
+      const done = !!(message.finishedAt || message.error || message.stoppedByUser)
       for (const block of message.blocks ?? []) {
         const kind = blockCase(block)
         if (kind === 'tool') {
@@ -2239,7 +2243,7 @@ export const useAppStore = defineStore('app', {
         if (kind !== 'thinking' && kind !== 'text') continue
         const full = String(blockPayload<string>(block, kind) ?? '')
         const mark = marks[block.id] ?? 0
-        if (seen && full.length > mark) {
+        if (seen && !done && full.length > mark) {
           this.pushBubble(conversationID, kind, full.slice(mark), block.id)
         }
         marks[block.id] = full.length
