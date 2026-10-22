@@ -156,8 +156,9 @@ watch(queued, (next, prev) => {
 // MARK: 回复语音播报（本地 kokoro TTS，开关在设置 › 语音播报）：
 // 回复文本随显示的气泡实时播——桌面气泡（store.noteAssistantStream）按块增量投一片、
 // 语音就把那一片攒出的整句接进队列（句中不切、不抢话，代码块/链接等 cleanForSpeech
-// 清掉不念）；消息完成时把没等到句末标点的尾句播完。自己发言时先停掉正在播的，
-// 好比真人不会抢话。两种模式的信号：
+// 清掉不念）；消息完成时把没等到句末标点的尾句播完。自己发言不打断正在播的
+// （2026-12 改：发送内容把播报掐断体验差，新回复的句子 append 到队尾接着播）。
+// 两种模式的信号：
 //   - 助手模式：日志条 text 增量实时播，streaming false 收尾播尾句；
 //   - 会话模式：所有会话 assistant 消息的 text 块增量实时播（后台会话也播，不只当前会话），
 //     finishedAt 出现收尾。打断的 / 出错的 / 静默的不播尾巴；首次进入监听时已有的
@@ -175,11 +176,9 @@ watch(
     for (const entry of entries) {
       if (entry.kind === 'user') {
         if (entry.data?.silent) continue
-        // 记入已见再判边沿：deep 之下每帧都会重跑这里，不记的话每帧都 stopSpeaking，
-        // 会把正在播的回复挦掉（打断只能发生在「新出现自己发言」那一帧）
-        const first = !seenEntryStreaming.has(entry.id)
+        // 只登记已见（deep 之下每帧重跑，靠它跳过重复处理）；自己发言不断播报，
+        // 新回复的句子 append 到队尾接着播
         seenEntryStreaming.set(entry.id, {})
-        if (!initial && first) stopSpeaking() // 自己发言：打断播报（含清空待播队列）
         continue
       }
       if (entry.kind !== 'assistant') continue
@@ -265,11 +264,9 @@ watch(
     for (const conv of freshConvs) seenConversations.add(conv)
     for (const item of list) {
       if (item.user) {
-        // 记入已见再判边沿：快照每帧重跑这里，不记的话每帧都 stopSpeaking，
-        // 会把正在播的回复挦掉（打断只能发生在「新出现自己发言」那一帧）
-        const first = !seenMessageFinish.has(item.key)
+        // 只登记已见（快照每帧重跑，靠它跳过重复处理）；自己发言不断播报——
+        // 正在念的继续，新回复的句子 append 到队尾接着播（2026-12 改）
         seenMessageFinish.set(item.key, undefined)
-        if (!initial && first) stopSpeaking() // 自己发言：打断播报（含清空待播队列）
         continue
       }
       if (item.conv === undefined || item.msgID === undefined) continue
