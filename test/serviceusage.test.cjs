@@ -14,6 +14,7 @@ const {
   usageForEntry,
   usageKey,
   usageMenuLine,
+  usageMeter,
   usageMoney,
   usedFraction
 } = require('../.tmp/serviceusage.cjs')
@@ -191,4 +192,42 @@ test('usageForEntry：查的过程中写「正在查余额…」，查不到的�
     now
   )
   assert.equal(failed.line.text, '查不到余额和用量：连不上')
+})
+
+test('meter：胶囊边框描多少（== 桌面端 ServiceUsage::meter 的同一组样例）', () => {
+  const brief = (meter) =>
+    !meter ? '-' : `${Math.round(meter.used * 100)}%${meter.warning ? ' 橙' : ''}${meter.exhausted ? ' 满' : ''}${meter.note ? ' ' + meter.note : ''}`
+  // 只有余额的按 100 元算满（美元也按 100）：剩 5 元描 95%，50 元 50%，充多了不描，没钱了整圈
+  const balance = (amount, currency = 'CNY') => ({ balances: [{ amount, currency }] })
+  assert.equal(brief(usageMeter(balance(110), undefined, now)), '0%')
+  assert.equal(brief(usageMeter(balance(5), undefined, now)), '95% 橙')
+  assert.equal(brief(usageMeter(balance(50), undefined, now)), '50%')
+  assert.equal(brief(usageMeter(balance(250), undefined, now)), '0%')
+  assert.equal(brief(usageMeter(balance(0), undefined, now)), '100% 橙 满 余额不足')
+  assert.equal(brief(usageMeter(balance(5, 'USD'), undefined, now)), '95% 橙')
+  // 服务明说不够调用：整圈
+  assert.equal(
+    brief(usageMeter({ balances: [{ amount: 0, currency: 'CNY' }], available: false }, undefined, now)),
+    '100% 橙 满 余额不足'
+  )
+  // 套餐窗口取用得最多的：每周剩 15% → 描 85%（80% 以上橙色）
+  const windows = { windows: [{ title: '5 小时', remainingPercent: 70 }, { title: '每周', remainingPercent: 15 }] }
+  assert.equal(brief(usageMeter(windows, undefined, now)), '85% 橙')
+  assert.equal(brief(usageMeter({ windows: [{ title: '5 小时', remainingPercent: 91 }] }, undefined, now)), '9%')
+  // 窗口用完了：整圈 + 重置时间
+  const full = { windows: [{ title: '5 小时', remainingPercent: 0, resetAt: '2026-10-21T13:00:00Z' }] }
+  // 12:00Z → 13:00Z 在任何时区都不跨本地午夜，when 只写钟点；钟点按本地时区拼，CI 时区不定
+  const localHM = (iso) => {
+    const d = new Date(iso)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+  assert.equal(brief(usageMeter(full, undefined, now)), `100% 橙 满 ${localHM('2026-10-21T13:00:00Z')} 恢复`)
+  // 顺手记的额度用完（还没过去）：整圈 + 恢复时间；余额不足也一样
+  const waiting = { quotaAt: '2026-10-21T11:59:00Z', quotaKind: 'usage', resumeAt: '2026-10-21T13:00:00Z' }
+  assert.equal(brief(usageMeter(balance(110), waiting, now)), `100% 橙 满 ${localHM('2026-10-21T13:00:00Z')} 恢复`)
+  const broke = { quotaAt: '2026-10-21T11:59:00Z', quotaKind: 'balance' }
+  assert.equal(brief(usageMeter(balance(110), broke, now)), '100% 橙 满 余额不足')
+  // 没什么可描的（只有警告）：不描
+  assert.equal(usageMeter({ warnings: ['没有生效中的套餐'] }, undefined, now), undefined)
+  assert.equal(usageMeter(undefined, undefined, now), undefined)
 })

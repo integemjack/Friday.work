@@ -85,6 +85,18 @@ export interface UsageLine {
   warning: boolean
 }
 
+/** 输入框模型胶囊的边框（== ServiceUsage::Meter）：已用的部分描成实色 */
+export interface UsageMeter {
+  /** 已用的比例 0–1 */
+  used: number
+  /** 用了 80% 以上（橙色） */
+  warning: boolean
+  /** 用完了 / 余额不足（整圈橙色，名字后面写 note） */
+  exhausted: boolean
+  /** 用完了时胶囊上模型名后面写的：「15:20 恢复」「额度用完」「余额不足」 */
+  note: string
+}
+
 /** 手里记着的一份用量（按接口地址 + 密钥名） */
 export interface UsageEntry {
   key: string
@@ -330,6 +342,54 @@ export function usageMenuLine(report: UsageReport | undefined, observed: UsageOb
   return { text: parts.join('，'), warning }
 }
 
+/** 只有余额（没有套餐窗口）时，边框按这么多算满（剩 5 元 = 已用 95%；== ServiceUsage::balanceScale，货币不换算，美元也按 100） */
+export const usageBalanceScale = 100
+
+/**
+ * 模型胶囊的边框（== ServiceUsage::meter）：额度用完 / 余额不足整圈橙色；套餐窗口取用得最多的那个；
+ * 只有余额的按 100 元算（剩得越少描得越多）。没有可描的（不支持查询、又没什么记下的）返回 undefined
+ */
+export function usageMeter(report: UsageReport | undefined, observed: UsageObserved | undefined, now: Date): UsageMeter | undefined {
+  const quota = activeQuota(observed, report, now)
+  if (quota) {
+    if (quota.balance) return { used: 1, warning: true, exhausted: true, note: '余额不足' }
+    return {
+      used: 1,
+      warning: true,
+      exhausted: true,
+      note: quota.resumeAt ? `${usageWhen(quota.resumeAt, now)} 恢复` : '额度用完'
+    }
+  }
+  if (!report) return undefined
+  if (report.available === false) return { used: 1, warning: true, exhausted: true, note: '余额不足' }
+  let tightest: number | undefined
+  let resetAt: Date | undefined
+  for (const window of report.windows ?? []) {
+    const used = usedFraction(window, now)
+    if (used !== undefined && (tightest === undefined || used > tightest)) {
+      tightest = used
+      resetAt = usageDate(window.resetAt)
+    }
+  }
+  if (tightest === undefined) {
+    // 只有余额的：按 100 元算（剩 5 元 = 已用 95%）
+    const balance = (report.balances ?? [])[0]
+    if (!balance) return undefined
+    if (balance.amount <= 0) return { used: 1, warning: true, exhausted: true, note: '余额不足' }
+    const used = Math.min(Math.max(1 - balance.amount / usageBalanceScale, 0), 1)
+    return { used, warning: used >= 0.8, exhausted: false, note: '' }
+  }
+  if (tightest >= 1) {
+    return {
+      used: 1,
+      warning: true,
+      exhausted: true,
+      note: resetAt && resetAt.getTime() > now.getTime() ? `${usageWhen(resetAt, now)} 恢复` : '额度用完'
+    }
+  }
+  return { used: tightest, warning: tightest >= 0.8, exhausted: false, note: '' }
+}
+
 /**
  * 悬停时的明细（== ServiceUsage::summaryLines 的几条）：余额、套餐窗口、额度用完、限流余量。
  * 每一项一行文字
@@ -406,17 +466,18 @@ export function usageDetailLines(report: UsageReport | undefined, observed: Usag
   return lines
 }
 
-/** 一条模型条目要显示什么：那一句 + 悬停明细（没有可显示的就都是空） */
+/** 一条模型条目要显示什么：那一句 + 悬停明细 + 胶囊边框（没有可显示的就都是空） */
 export function usageForEntry(
   entry: UsageEntry | undefined,
   now: Date
-): { line?: UsageLine; detail: UsageLine[] } {
+): { line?: UsageLine; detail: UsageLine[]; meter?: UsageMeter } {
   if (!entry) return { detail: [] }
   if (entry.loading && !entry.checked) return { line: { text: '正在查余额…', warning: false }, detail: [] }
   const line = usageMenuLine(entry.report, entry.observed, now)
   const detail = usageDetailLines(entry.report, entry.observed, now)
+  const meter = usageMeter(entry.report, entry.observed, now)
   if (!line && entry.error && !entry.supported) {
     return { line: { text: `查不到余额和用量：${entry.error}`, warning: false }, detail }
   }
-  return { line, detail }
+  return { line, detail, meter }
 }

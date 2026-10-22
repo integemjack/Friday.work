@@ -7,7 +7,7 @@ import type { EngineView } from '../stores/app.js'
 import type { CommandInfo } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
-import { usageForEntry, usageKey, type UsageLine } from '../lib/serviceUsage.js'
+import { usageForEntry, usageKey, canQueryUsage, type UsageLine, type UsageMeter } from '../lib/serviceUsage.js'
 
 const emit = defineEmits<{ submit: [text: string, attachments: Array<{ path: string; name: string }>] }>()
 
@@ -72,19 +72,39 @@ function toggleModelMenu() {
   }
 }
 
-// 模型菜单开着：订服务端的用量推送（serviceUsage 事件）并查一遍各家余额 / 套餐用量；
-// 关掉就退订。所有关闭路径（再点一下、点外面、选定、切到目录菜单）都改 modelOpen，所以用 watch 看着它。
-watch(modelOpen, (open) => {
-  void store.watchServiceUsage(open)
-})
+// 用量数据（serviceUsage 推送 + services.usage 查询）：模型选择器显示着就一直订（边框要一直跟着推，
+// 不只菜单开着）；菜单开着也不另订。所有路径（切到助手模式、组件卸载）都改它，用 watch 看着。
+watch(
+  () => !store.assistantChat,
+  (shown) => void store.watchServiceUsage(shown),
+  { immediate: true }
+)
 onBeforeUnmount(() => {
-  if (modelOpen.value) void store.watchServiceUsage(false)
+  if (!store.assistantChat) void store.watchServiceUsage(false)
 })
+// 换到哪家查哪家（== Friday：菜单里选了别的模型、默认引擎到了，那家的边框才有数）
+watch(
+  () => effectiveEngine.value?.id,
+  (id) => {
+    if (store.assistantChat || !id) return
+    const engine = effectiveEngine.value
+    if (!engine) return
+    const target = {
+      key: usageKey(engine.baseURL ?? '', engine.apiKeySecret ?? ''),
+      baseURL: engine.baseURL ?? '',
+      secretName: engine.apiKeySecret ?? '',
+      custom: true
+    }
+    if (!canQueryUsage(target.baseURL)) return
+    void store.queryServiceUsage(target)
+  }
+)
 
-/** 这家服务现在要说的一句话（余额 / 套餐用量 / 额度用完；按接口地址 + 密钥名取，同一家的模型共用一份） */
-const engineUsage = computed<Map<string, { line?: UsageLine; detail: UsageLine[] }>>(() => {
-  const now = new Date()
-  const map = new Map<string, { line?: UsageLine; detail: UsageLine[] }>()
+/** 这家服务现在要说的一句话（余额 / 套餐用量 / 额度用完；按接口地址 + 密钥名取，同一家的模型共用一份）。
+ *  边框（meter）也在里面：当前模型那家已用的部分描在 chip 边框上 */
+const engineUsage = computed<Map<string, { line?: UsageLine; detail: UsageLine[]; meter?: UsageMeter }>>(() => {
+  const now = usageNow.value
+  const map = new Map<string, { line?: UsageLine; detail: UsageLine[]; meter?: UsageMeter }>()
   for (const engine of availableEngines.value) {
     const key = usageKey(engine.baseURL ?? '', engine.apiKeySecret ?? '')
     const entry = store.serviceUsage[key]
@@ -94,9 +114,22 @@ const engineUsage = computed<Map<string, { line?: UsageLine; detail: UsageLine[]
   return map
 })
 
-function usageOf(engineID: string): { line?: UsageLine; detail: UsageLine[] } {
+function usageOf(engineID: string): { line?: UsageLine; detail: UsageLine[]; meter?: UsageMeter } {
   return engineUsage.value.get(engineID) ?? { detail: [] }
 }
+
+/** 当前模型那家的用量边框（Friday v2.27 模型胶囊的边框：已用的部分从左往右描成实色，80% 以上、用完了橙色） */
+const engineMeter = computed(() => usageOf(effectiveEngine.value?.id ?? '').meter)
+
+/** 用量里的时间（「15:20 恢复」到点消失）：每分钟走一次重算（菜单里那一句、chip 边框、note 共用） */
+const usageNow = ref(new Date())
+let usageTimer = 0
+onMounted(() => {
+  usageTimer = window.setInterval(() => {
+    usageNow.value = new Date()
+  }, 60_000)
+})
+onBeforeUnmount(() => window.clearInterval(usageTimer))
 
 /** 菜单项的悬停提示：服务商 · 模型 + 余额 / 用量的明细（有的话一项一行） */
 function engineTip(engine: EngineView): string {
@@ -774,7 +807,18 @@ onBeforeUnmount(() => {
             @click="toggleModelMenu"
           >
             <span class="model-name">{{ currentEngineLabel }}</span>
+            <span v-if="engineMeter?.exhausted && engineMeter.note" class="model-note">{{ engineMeter.note }}</span>
             <span class="model-caret">▾</span>
+            <!-- Friday v2.27 模型胶囊的边框：一圈淡的底圈，当前模型那家已用的部分从左往右描成实色
+                 （80% 以上、用完了橙色；clip-path 按比例裁剪，同 Qt 的裁剪 Item） -->
+            <span v-if="engineMeter && engineMeter.used > 0" class="meter" aria-hidden="true">
+              <span class="meter-base"></span>
+              <span
+                class="meter-fill"
+                :class="{ warning: engineMeter.warning }"
+                :style="{ clipPath: `inset(0 ${((1 - engineMeter.used) * 100).toFixed(2)}% 0 0)` }"
+              ></span>
+            </span>
           </button>
           <div v-if="modelOpen" class="model-menu">
             <div v-if="availableEngines.length === 0" class="model-empty">这台机器没有可用引擎</div>
@@ -1237,6 +1281,7 @@ textarea::placeholder {
 }
 
 .model-chip {
+  position: relative; /* 用量边框层（.meter）贴着 chip 定位 */
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1253,6 +1298,44 @@ textarea::placeholder {
 .model-chip.open {
   background: var(--hover);
   color: var(--text);
+}
+
+/* Friday v2.27 模型胶囊的边框：底圈一圈淡的，当前模型那家已用的部分从左往右描成实色
+   （80% 以上、用完了橙色）；clip-path inset 按自身宽度百分比裁剪，不需要知道像素宽 */
+.meter {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.meter-base,
+.meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+}
+
+.meter-base {
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.meter-fill {
+  border-color: color-mix(in srgb, var(--text) 50%, transparent);
+  transition: clip-path 0.3s cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.meter-fill.warning {
+  border-color: var(--warn);
+}
+
+/* 用完了时模型名后面写的（「15:20 恢复」「额度用完」，== Friday Capsule 的 detail：淡色小字） */
+.model-note {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
 }
 
 .model-name {

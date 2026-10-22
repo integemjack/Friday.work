@@ -326,7 +326,7 @@ const activitySubscribed = new Set<string>()
 // 已订阅助手日志的机器（同上，模块级）。开着「和助手说」才订，退出/切机器就退（REMOTE.md §6「助手」）。
 const assistantSubscribed = new Set<string>()
 
-// 订了 config 的机器（服务端只把 serviceUsage 事件推给订着 config.subscribe 的客户端；模型选择器开着才订，关掉退订）。
+// 订了 config 的机器（服务端只把 serviceUsage 事件推给订着 config.subscribe 的客户端；模型选择器显示着才订，收起退订）。
 // 模块级，原因同上（放进 state 会被布局持久化序列化）。
 const usageSubscribed = new Set<string>()
 
@@ -469,7 +469,7 @@ export const useAppStore = defineStore('app', {
     /** 各家在线服务的余额 / 套餐用量（services.usage 查 + serviceUsage 事件推；
      *  键 = usageKey(接口地址, 密钥名)，和事件里的 observedKey 同一套写法） */
     serviceUsage: {} as Record<string, UsageEntry>,
-    /** 模型选择器开着（要服务端推 serviceUsage）：打开时订 config.subscribe，关掉退订 */
+    /** 模型选择器显示着（要服务端推 serviceUsage，边框要一直跟着）：显示时订 config.subscribe，收起退订 */
     usageWanted: false,
     /** 新对话默认引擎（liveState；输入框的模型选择器在未选过时显示它） */
     defaultEngineID: '',
@@ -763,7 +763,7 @@ export const useAppStore = defineStore('app', {
         }
         // 连上的机器订阅 activity（审批、动静总览的数据源）；刚连上的取一次实时卡片状态
         for (const machine of info.machines) {
-          // 模型选择器开着：服务端只把 serviceUsage 事件推给订着 config 的客户端——重连 / 切机器后补订一次，
+          // 模型选择器显示着：服务端只把 serviceUsage 事件推给订着 config 的客户端——重连 / 切机器后补订一次，
           // 从别处回来时补查一遍数（订阅是按连接的，断了就没了）
           if (
             machine.state === 'ready' &&
@@ -1717,8 +1717,9 @@ export const useAppStore = defineStore('app', {
 
     // MARK: 各家服务的余额 / 套餐用量（REMOTE.md §6「在线服务」）
 
-    /** 模型选择器开着（要推送）：订 config.subscribe —— 服务端只把 serviceUsage 事件推给订着 config 的客户端。
-     *  同时查一遍（菜单一打开就有数）。旧服务端没有 config：只手动查，没有推送。 */
+    /** 模型选择器显示着（输入框的模型 chip——边框要一直跟着推，不只菜单开着）就订 config.subscribe ——
+     *  服务端只把 serviceUsage 事件推给订着 config 的客户端。同时查一遍（一显示就有数）。
+     *  旧服务端没有 config：只手动查，没有推送。 */
     async watchServiceUsage(on: boolean) {
       this.usageWanted = on
       const machine = this.currentMachine
