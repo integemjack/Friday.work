@@ -41,10 +41,11 @@ function pushProgress(
   to: WebContents,
   phase: 'downloading' | 'loading' | 'ready',
   percent?: number,
-  detail?: string
+  detail?: string,
+  bytes?: { received: number; total: number }
 ): void {
   try {
-    to.send('voice:model-progress', { phase, percent, detail })
+    to.send('voice:model-progress', { phase, percent, detail, ...bytes })
   } catch {
     // 窗口已关：忽略
   }
@@ -68,11 +69,19 @@ async function download(to: WebContents, url: string, dest: string): Promise<voi
     const now = Date.now()
     if (now - lastPush > 400) {
       lastPush = now
-      pushProgress(to, 'downloading', total ? Math.round((received / total) * 100) : undefined, undefined)
+      pushProgress(
+        to,
+        'downloading',
+        total ? Math.round((received / total) * 100) : undefined,
+        undefined,
+        total ? { received, total } : undefined
+      )
     }
   })
   try {
     await pipeline(stream, createWriteStream(part))
+    // 完成时补推一次 100%：节流可能错过收尾，渲染层按字节累计多文件总量要靠它对账
+    if (total) pushProgress(to, 'downloading', 100, undefined, { received, total })
     await rename(part, dest)
   } catch (error) {
     await rm(part, { force: true })

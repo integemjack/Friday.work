@@ -55,10 +55,11 @@ function pushProgress(
   to: WebContents,
   phase: 'downloading' | 'loading' | 'ready',
   percent?: number,
-  detail?: string
+  detail?: string,
+  bytes?: { received: number; total: number }
 ): void {
   try {
-    to.send('voice:model-progress', { phase, percent, detail })
+    to.send('voice:model-progress', { phase, percent, detail, ...bytes })
   } catch {
     // 窗口已关：忽略
   }
@@ -74,14 +75,24 @@ function loadTranscriber(to: WebContents, size: WhisperSize): Promise<Transcribe
     }
     mod.env.cacheDir = join(app.getPath('userData'), 'whisper-models')
     const modelId = WHISPER_MODELS[size]
-    const onProgress = (info: { status: string; progress?: number; file?: string }): void => {
+    const onProgress = (info: {
+      status: string
+      progress?: number
+      loaded?: number
+      total?: number
+      file?: string
+    }): void => {
       if (info.status === 'progress' && info.file) {
         // progress 按文件各算各的：只在下载大文件（模型本体）时报百分比
         if (
           (info.file.endsWith('.onnx') || info.file.endsWith('.onnx_data')) &&
           typeof info.progress === 'number'
         ) {
-          pushProgress(to, 'downloading', Math.round(info.progress))
+          const bytes =
+            typeof info.loaded === 'number' && typeof info.total === 'number' && info.total > 0
+              ? { received: info.loaded, total: info.total }
+              : undefined
+          pushProgress(to, 'downloading', Math.round(info.progress), undefined, bytes)
         }
       } else if (info.status === 'ready') {
         pushProgress(to, 'ready')

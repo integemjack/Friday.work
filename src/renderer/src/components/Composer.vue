@@ -693,20 +693,81 @@ function onVoiceClick(): void {
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && listening.value) stopListen()
 }
-/* 主进程推模型准备进度（首次使用要下载 ~80MB）：显示在提示行 */
+/* 主进程推模型准备进度（首次使用要下载模型）：下载中显示在输入框上方的下载条
+   （进度 + 速度 + 已下/总量），下载完的加载阶段回落到底行提示「准备中」。速度按
+   字节增量算指数滑动平均；主进程每个文件完成补推一次 100%，多文件（多引擎回退链）
+   按字节累计，字节倒退 = 换了下一个文件，把上一个记进累计、速度窗重开 */
+const modelDl = ref<{ label: string; percent: number; received: number; total: number; speed: number } | null>(null)
+let dlAcc = { received: 0, total: 0, lastReceived: 0, lastTotal: 0, at: 0, speed: 0 }
+type VoiceModelProgress = {
+  phase: 'downloading' | 'loading' | 'ready'
+  percent?: number
+  detail?: string
+  received?: number
+  total?: number
+}
+function onModelProgress(state: VoiceModelProgress): void {
+  if (state.phase === 'downloading') {
+    modelPrep.value = ''
+    if (typeof state.received === 'number') {
+      const now = Date.now()
+      if (state.received < dlAcc.lastReceived) {
+        // 换文件：上一个文件的最后进度记进累计（靠完成时的 100% 对账）
+        dlAcc.received += dlAcc.lastReceived
+        dlAcc.total += dlAcc.lastTotal
+        dlAcc.speed = 0
+      }
+      if (dlAcc.at > 0) {
+        const dt = (now - dlAcc.at) / 1000
+        const delta = state.received - dlAcc.lastReceived
+        if (dt > 0 && delta >= 0) dlAcc.speed = dlAcc.speed ? dlAcc.speed * 0.7 + (delta / dt) * 0.3 : delta / dt
+      }
+      dlAcc.at = now
+      dlAcc.lastReceived = state.received
+      dlAcc.lastTotal = typeof state.total === 'number' ? state.total : 0
+      const received = dlAcc.received + state.received
+      const total = dlAcc.total + dlAcc.lastTotal
+      modelDl.value = {
+        label: state.detail || '语音模型',
+        percent: total > 0 ? Math.min(100, Math.round((received / total) * 100)) : (state.percent ?? 0),
+        received,
+        total,
+        speed: dlAcc.speed
+      }
+    } else if (modelDl.value) {
+      // 没字节的下载事件（解压中等）：留着已累计的字节和进度，只换标签、速度归零
+      modelDl.value = { ...modelDl.value, label: state.detail || modelDl.value.label, speed: 0 }
+    } else {
+      modelDl.value = { label: state.detail || '语音模型', percent: state.percent ?? 0, received: 0, total: 0, speed: 0 }
+    }
+  } else if (state.phase === 'loading') {
+    modelDl.value = null
+    modelPrep.value = '语音模型准备中…'
+  } else {
+    modelDl.value = null
+    modelPrep.value = ''
+  }
+}
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${Math.max(0, Math.round(n / 1024))} KB`
+}
+function fmtSpeed(n: number): string {
+  return `${(n / 1024 / 1024).toFixed(1)} MB/s`
+}
+/** 下载条右侧文案：45% · 123.4 / 234.5 MB · 2.8 MB/s（总量未知时只报百分比） */
+const dlText = computed(() => {
+  const dl = modelDl.value
+  if (!dl) return ''
+  const parts = [`${dl.percent}%`]
+  if (dl.total > 0) parts.push(`${fmtBytes(dl.received)} / ${fmtBytes(dl.total)}`)
+  if (dl.speed > 0) parts.push(fmtSpeed(dl.speed))
+  return parts.join(' · ')
+})
 let offModelProgress: (() => void) | null = null
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown)
-  offModelProgress = window.fridayBridge.onVoiceModelProgress((state) => {
-    if (state.phase === 'downloading') {
-      modelPrep.value =
-        typeof state.percent === 'number' ? `语音模型下载中 ${state.percent}%` : '语音模型下载中…'
-    } else if (state.phase === 'loading') {
-      modelPrep.value = '语音模型准备中…'
-    } else {
-      modelPrep.value = ''
-    }
-  })
+  offModelProgress = window.fridayBridge.onVoiceModelProgress(onModelProgress)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
@@ -746,6 +807,13 @@ onBeforeUnmount(() => {
           <span class="att-size">{{ (attachment.size / 1024).toFixed(0) }} KB</span>
           <button class="att-remove" title="移除" @click="removeAttachment(index)">×</button>
         </div>
+      </div>
+
+      <!-- 语音识别模型下载条（首次使用拉模型时）：进度 + 速度 + 已下/总量，贴在输入框上方 -->
+      <div v-if="modelDl" class="model-download" role="status">
+        <span class="dl-label" :title="modelDl.label">{{ modelDl.label }}</span>
+        <span class="dl-track"><i class="dl-bar" :style="{ width: modelDl.percent + '%' }" /></span>
+        <span class="dl-bytes">{{ dlText }}</span>
       </div>
 
       <!-- 输入区：文本区左边挂「开新会话」「和助手说」按钮组（分段式一体，显眼位置，不藏在底行一排按钮里）；
@@ -1170,6 +1238,48 @@ onBeforeUnmount(() => {
 
 .att-remove:hover {
   color: var(--fail);
+}
+
+/* 语音识别模型下载条：贴在附件区下、输入区上；窄面板里标签自己收缩，右侧字节文案不折行 */
+.model-download {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 0;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.dl-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl-track {
+  flex: 1 1 48px;
+  min-width: 48px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--chip);
+  overflow: hidden;
+}
+
+.dl-bar {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.dl-bytes {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 textarea {
