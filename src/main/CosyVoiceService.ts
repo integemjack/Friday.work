@@ -859,6 +859,17 @@ async function fetchUserVoices(server: Running): Promise<string[]> {
   return (((await response.json()) as { user_voices?: unknown[] }).user_voices ?? []).map(String)
 }
 
+/** 扫 user-voices 目录列用户音色——引擎没跑时的列表来源。目录就是持久化清单：
+ *  导入的文件都验证过「引擎列表看得到才算成功」、克隆也落这里，扫目录不会多出不存在的音色。 */
+async function listUserVoiceFiles(): Promise<string[]> {
+  try {
+    const files = await readdir(join(rootDir(), 'user-voices'))
+    return files.filter((f) => /\.gguf$/i.test(f)).map((f) => f.replace(/\.gguf$/i, ''))
+  } catch {
+    return []
+  }
+}
+
 /** 导入接口的结果：成功的给音色名，失败的给原文件名 + 人话原因 */
 interface VoiceImportResult {
   imported: string[]
@@ -1118,7 +1129,12 @@ export function registerCosyVoiceIpc(): void {
         return { voices: await installedVoices(), user: [], clone: false, default: 'default', userDisplay: loadDisplayNames() }
       }
       const userDisplay = loadDisplayNames()
-      if (!running) return { voices: await installedVoices(), user: [], clone: false, default: 'default', userDisplay }
+      // 引擎懒启动（重启后 / 闲置停掉后都不跑）：不能为了看列表拉起它（要好几秒还占 GPU）。
+      // user-voices 目录本身就是持久化清单，直接扫；引擎起来后扫的也是同一个目录，两边一致。
+      // clone: false 只代表引擎此刻没在跑，克隆能力看 clone-status。
+      if (!running) {
+        return { voices: await installedVoices(), user: await listUserVoiceFiles(), clone: false, default: 'default', userDisplay }
+      }
       const response = await fetch(`${running.wsUrl.replace(/^ws:/, 'http:')}/v1/voices`, {
         headers: { Authorization: `Bearer ${running.token}` }
       })
