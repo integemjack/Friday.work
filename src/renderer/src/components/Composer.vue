@@ -442,6 +442,7 @@ function removeAttachment(index: number) {
 // 再交给模型，对话里照旧显示打的原文（docs/COMMANDS.md §1）。
 const commandMenuOpen = ref(false)
 const commandIndex = ref(0)
+const commandMenuEl = ref<HTMLElement | null>(null)
 /** 用户按 Esc 关过菜单：在途的 commands.list 回执到了也不自动重开；再打字（prefix 变）才复位 */
 const commandDismissed = ref(false)
 /** 「/」后面的名字前缀；null = 正文不是「/名字」形态（不是 / 开头、中间有空白 / 已带参数），菜单收起 */
@@ -482,7 +483,19 @@ function moveCommand(delta: number) {
   const count = commandItems.value.length
   if (count === 0) return
   commandIndex.value = (commandIndex.value + delta + count) % count
+  scrollCommandIntoView()
 }
+
+/** 选中项滚进菜单视口（照桌面端 list.positionViewAtIndex(Contain)；nearest = 已可见就不动） */
+function scrollCommandIntoView() {
+  void nextTick(() => {
+    commandMenuEl.value?.querySelector('.command-item.current')?.scrollIntoView({ block: 'nearest' })
+  })
+}
+// 打字过滤后列表变短：选中（第 0 条）若被滚出视口也拉回来
+watch(commandItems, () => {
+  if (commandMenuOpen.value) scrollCommandIntoView()
+})
 
 /** 选中一条：填成「/名字 」（接着写参数），光标到末尾；正文带空格后不再匹配命令形态，watchEffect 会收起菜单 */
 function chooseCommand(name: string) {
@@ -844,26 +857,29 @@ onBeforeUnmount(() => {
 <template>
   <div class="composer" @drop.prevent="onDrop" @dragover.prevent>
     <div class="composer-card" :class="{ focused }">
-      <!-- 「/」命令菜单：正文是「/」+ 没空白的名字时弹在输入台上方（照 Friday 桌面端 v2.16 CommandMenu） -->
-      <div v-if="commandMenuOpen && commandItems.length > 0" class="command-menu">
-        <button
-          v-for="(command, index) in commandItems"
-          :key="command.name"
-          class="command-item"
-          :class="{ current: index === commandIndex }"
-          :title="command.description || `/${command.name}`"
-          @mouseenter="commandIndex = index"
-          @click="chooseCommand(command.name)"
-        >
-          <span class="command-line">
-            <span class="command-name">/{{ command.name }}</span>
-            <span v-if="command.argumentHint" class="command-hint">{{ command.argumentHint }}</span>
-            <span class="command-spacer" />
-            <span v-if="command.sourceTitle" class="command-source">{{ command.sourceTitle }}</span>
-          </span>
-          <span v-if="command.description" class="command-desc">{{ command.description }}</span>
-        </button>
-      </div>
+      <!-- 「/」命令菜单：正文是「/」+ 没空白的名字时弹在输入台上方（照 Friday 桌面端 v2.16 CommandMenu；
+           出入场 90/70ms 淡入淡出也照它） -->
+      <Transition name="command-menu">
+        <div v-if="commandMenuOpen && commandItems.length > 0" ref="commandMenuEl" class="command-menu">
+          <button
+            v-for="(command, index) in commandItems"
+            :key="command.name"
+            class="command-item"
+            :class="{ current: index === commandIndex }"
+            :title="command.description || `/${command.name}`"
+            @mouseenter="commandIndex = index"
+            @click="chooseCommand(command.name)"
+          >
+            <span class="command-line">
+              <span class="command-name">/{{ command.name }}</span>
+              <span v-if="command.argumentHint" class="command-hint">{{ command.argumentHint }}</span>
+              <span class="command-spacer" />
+              <span v-if="command.sourceTitle" class="command-source">{{ command.sourceTitle }}</span>
+            </span>
+            <span v-if="command.description" class="command-desc">{{ command.description }}</span>
+          </button>
+        </div>
+      </Transition>
 
       <!-- 附件 chips：卡片内、文本区上方 -->
       <div v-if="attachments.length > 0" class="attachments">
@@ -1912,7 +1928,8 @@ textarea::placeholder {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
-  right: 0;
+  /* 宽度照桌面端 min(520, 输入框宽)，从左边贴齐 */
+  width: min(520px, 100%);
   max-height: 320px;
   overflow-y: auto;
   background: var(--panel);
@@ -1928,6 +1945,20 @@ textarea::placeholder {
   gap: 1px;
 }
 
+/* 出入场：90ms 进 / 70ms 出（照桌面端 enter/exit Transition） */
+.command-menu-enter-active {
+  transition: opacity 0.09s ease-out;
+}
+
+.command-menu-leave-active {
+  transition: opacity 0.07s ease-in;
+}
+
+.command-menu-enter-from,
+.command-menu-leave-to {
+  opacity: 0;
+}
+
 .command-item {
   flex: none;
   display: flex;
@@ -1938,12 +1969,25 @@ textarea::placeholder {
   text-align: left;
 }
 
-.command-item:hover {
-  background: var(--hover);
+/* 悬停 / 键盘选中 = 强调色实底、文字反色（照桌面端 Theme.menuHighlight：== NSMenu；
+   悬停即选中——mouseenter 已把 index 指过来，两处同款防闪变） */
+.command-item:hover,
+.command-item.current {
+  background: var(--accent);
 }
 
-.command-item.current {
-  background: var(--selected);
+.command-item:hover .command-name,
+.command-item.current .command-name {
+  color: var(--accent-foreground);
+}
+
+.command-item:hover .command-hint,
+.command-item:hover .command-source,
+.command-item:hover .command-desc,
+.command-item.current .command-hint,
+.command-item.current .command-source,
+.command-item.current .command-desc {
+  color: color-mix(in srgb, var(--accent-foreground) 80%, transparent);
 }
 
 .command-line {
@@ -1955,6 +1999,10 @@ textarea::placeholder {
 
 .command-name {
   flex: none;
+  max-width: 62%; /* 名字特别长时省略（防把来源/提示顶出菜单） */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
@@ -2313,6 +2361,15 @@ textarea::placeholder {
 
 [data-theme='jarvis'] .model-menu {
   /* 全息面板：深色玻璃 + 青色描边（模糊背景照加，透出底下网格） */
+  background: var(--panel-glass-deep);
+  border-color: var(--accent-a30);
+  box-shadow:
+    0 0 18px var(--accent-a10),
+    0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme='jarvis'] .command-menu {
+  /* 同 model-menu 的全息面板；选中行的青色实底 + 黑字在上面照样成立（对比度 11.6:1） */
   background: var(--panel-glass-deep);
   border-color: var(--accent-a30);
   box-shadow:
