@@ -472,20 +472,32 @@ function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
       void applySink() // 新 context 建好立即落到已选的输出设备（'' = 系统默认，无感）
     }
     const context = audioContext
-    // Electron 默认 autoplay 无手势要求；被挂起（罕见）时恢复
-    if (context.state === 'suspended') void context.resume()
-    const gain = ensureGraph(context)
-    const buffer = context.createBuffer(1, samples.length, sampleRate)
-    buffer.getChannelData(0).set(samples)
-    const source = context.createBufferSource()
-    source.buffer = buffer
-    source.connect(gain)
-    source.onended = () => {
-      if (activeSource === source) activeSource = null
-      resolve()
-    }
-    activeSource = source
-    source.start()
+    // Electron 默认 autoplay 无手势要求；被挂起（输出设备被拔/被独占，罕见）时先恢复。
+    // 恢复被拒（设备真没了）时 start 的 onended 不会派发——靠看门狗按音频时长兜底放弃
+    // 这句，泵才能继续走：后续句子照常合成入队，设备回来后自动恢复出声，
+    // 不至于整个会话从此哑掉（2026-10 修；此前泵会永久挂在等待里，增量只入队不播）
+    const resume = context.state === 'suspended' ? context.resume().catch(() => {}) : Promise.resolve()
+    void resume.then(() => {
+      const gain = ensureGraph(context)
+      const buffer = context.createBuffer(1, samples.length, sampleRate)
+      buffer.getChannelData(0).set(samples)
+      const source = context.createBufferSource()
+      source.buffer = buffer
+      source.connect(gain)
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(watchdog)
+        if (activeSource === source) activeSource = null
+        resolve()
+      }
+      // 看门狗：onended 丢失（context 卡 suspended 等）时按时长 + 3s 放弃，不挂泵
+      const watchdog = setTimeout(finish, (samples.length / sampleRate) * 1000 + 3000)
+      source.onended = finish
+      activeSource = source
+      source.start()
+    })
   })
 }
 
@@ -616,6 +628,10 @@ async function pumpSpeech(): Promise<void> {
     if (token === speakToken) ttsPhase.value = 'idle'
   } catch (error) {
     if (token === speakToken) {
+      // 失败时清掉没播到的句子：不清的话下一轮 append 重起泵会先播这些旧句（串台），
+      // 而引擎故障时它们也只会再失败一遍。新回复的句子照常入队重试——serve 死亡由
+      // 主进程回收句柄，下次合成会重新拉起引擎，自动恢复。
+      speechQueue = []
       ttsPhase.value = 'error'
       ttsDetail.value = error instanceof Error ? error.message : String(error)
     }

@@ -544,6 +544,21 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
     })
     next.wsUrl = info.replace(/^http:/, 'ws:')
     running = next
+    // 运行期死亡（GPU 驱动重置 / 引擎崩溃 / 被杀）：清掉句柄，下次播报重新拉起。
+    // 不清的话 ensureServe 会一直复用死实例——每次 speakReply 都「和语音引擎的连接断了」，
+    // 而每次复用的 touchIdle 还在给 4 分钟闲置自愈续命（重试越勤越不自愈），一个会话
+    // 从此不再出声（2026-10 修，实测杀掉 serve 后所有 TTS 全灭）。启动期的 close 由上面
+    // Promise 里的 once 处理（那时 running 还没置，这里不会重复抢）；stopServe 主动停时
+    // running 已先置 null，同样不会误触发。
+    child.once('close', () => {
+      if (running === next) {
+        running = null
+        if (idleTimer) {
+          clearTimeout(idleTimer)
+          idleTimer = null
+        }
+      }
+    })
     touchIdle()
     pushProgress(to, 'ready', undefined, undefined, channel)
     return next
