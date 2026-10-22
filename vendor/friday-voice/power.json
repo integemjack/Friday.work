@@ -1,0 +1,169 @@
+{
+  "schema": 1,
+  "id": "voice",
+  "title": "本地语音",
+  "detail": "用本机 GPU 实时听写（边说边出字幕，说完一句出带标点的定稿；中英混说的英文词用 Whisper 认）和边写边读（大模型边出字边念，可打断；带五个音色）、声纹（只认登记过的人说的话）、音色克隆（8~15 秒录音克隆成自己的声音，全程本地）；不联网、不花钱。",
+  "executable": "friday-voice",
+  "serve": [
+    "serve",
+    "--models",
+    "{models}",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "0",
+    "--token",
+    "{token}",
+    "--parent-stdin"
+  ],
+  "capabilities": [
+    "transcription",
+    "realtimeTranscription",
+    "speech",
+    "realtimeSpeech",
+    "speakerEmbedding",
+    "voiceCloning"
+  ],
+  "models": [
+    {
+      "id": "sensevoice-small-q8",
+      "file": "sensevoice-small-q8.gguf",
+      "url": "https://modelscope.cn/models/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/master/sensevoice-small-q8.gguf",
+      "sha256": "4ae45c94422de949b387e2e0fb10d7e14e4c42c69db30c3444ecc7d4b844b7c5",
+      "size": 254208320,
+      "purpose": "听写（SenseVoice-Small，中英日韩粤）",
+      "license": "FunASR 模型许可（https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE）"
+    },
+    {
+      "id": "fsmn-vad",
+      "file": "fsmn-vad.gguf",
+      "url": "https://modelscope.cn/models/FunAudioLLM/fsmn-vad-GGUF/resolve/master/fsmn-vad.gguf",
+      "sha256": "1270f2559c495f4e7b6e739541151027d360761a3fda43fc147034f5719f5479",
+      "size": 1720512,
+      "purpose": "断句（FSMN-VAD）",
+      "license": "FunASR 模型许可（https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE）"
+    },
+    {
+      "id": "whisper-large-v3-turbo-q5",
+      "file": "whisper/ggml-large-v3-turbo-q5_0.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+      "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+      "size": 574041195,
+      "purpose": "听写定稿（Whisper large-v3-turbo，中英混说时认英文词）",
+      "license": "MIT（https://github.com/openai/whisper/blob/main/LICENSE）"
+    },
+    {
+      "id": "cosyvoice3-q8",
+      "file": "cosyvoice3/CosyVoice3-2512_Q8_0.gguf",
+      "url": "https://modelscope.cn/models/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/CosyVoice3-2512_Q8_0.gguf",
+      "sha256": "be133cb6154ca73cd1d213b1c9496def99ba9c1f7c14cd99f6b350af2eb7963d",
+      "size": 943933536,
+      "purpose": "合成（Fun-CosyVoice3-0.5B，Q8_0）",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "cosyvoice3-q4km",
+      "file": "cosyvoice3/CosyVoice3-2512_Q4_K_M.gguf",
+      "url": "https://modelscope.cn/models/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/CosyVoice3-2512_Q4_K_M.gguf",
+      "sha256": "eb40867e270abdcde4ea958e634d5932702e16545d46336659fed9f8f462bc02",
+      "size": 629141792,
+      "purpose": "合成（Fun-CosyVoice3-0.5B，Q4_K_M，省显存）",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "campplus",
+      "file": "frontend-onnx/campplus.onnx",
+      "url": "https://modelscope.cn/models/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/frontend-onnx/campplus.onnx",
+      "sha256": "a6ac6a63997761ae2997373e2ee1c47040854b4b759ea41ec48e4e42df0f4d73",
+      "size": 28303423,
+      "purpose": "声纹（CAM++，只认登记过的人说的话）",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "speech-tokenizer-v3-int8",
+      "file": "frontend-onnx/speech_tokenizer_v3.int8.onnx",
+      "url": "https://modelscope.cn/models/Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF/resolve/master/frontend-onnx/speech_tokenizer_v3.int8.onnx",
+      "sha256": "d7caa04fbc2f54af196906469471b607ce2594b7e92ac07dddfb315103a74c72",
+      "size": 244237335,
+      "purpose": "音色克隆（把参考录音提成本地音色；克隆才下载，不克隆不用）",
+      "license": "Apache-2.0"
+    }
+  ],
+  "targets": {
+    "windows-x64-vulkan": {
+      "detail": "Windows x64，Vulkan（单个 exe；NVIDIA / AMD / Intel 显卡都能用，RTX 5080 上比 CUDA 还快）",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "whisper-large-v3-turbo-q5",
+        "cosyvoice3-q8",
+        "campplus",
+        "speech-tokenizer-v3-int8"
+      ]
+    },
+    "windows-x64-cuda13": {
+      "detail": "Windows x64，NVIDIA CUDA（cuBLAS 在共用的 CUDA 13 运行库里，第一次装 CUDA 版时下载；Vulkan 不好用时再选）",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "whisper-large-v3-turbo-q5",
+        "cosyvoice3-q8",
+        "campplus"
+      ],
+      "runtime": "cuda13"
+    },
+    "macos-arm64-metal": {
+      "detail": "macOS（Apple 芯片），Metal",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "whisper-large-v3-turbo-q5",
+        "cosyvoice3-q8",
+        "campplus",
+        "speech-tokenizer-v3-int8"
+      ]
+    },
+    "linux-x64-vulkan": {
+      "detail": "Linux x64，Vulkan（NVIDIA / AMD / Intel 显卡都能用；默认）",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "whisper-large-v3-turbo-q5",
+        "cosyvoice3-q8",
+        "campplus",
+        "speech-tokenizer-v3-int8"
+      ]
+    },
+    "linux-x64-cuda": {
+      "detail": "Linux x64，NVIDIA CUDA（cudart、cuBLAS 静态链接，包大；Vulkan 有问题时备选）",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "whisper-large-v3-turbo-q5",
+        "cosyvoice3-q8",
+        "campplus",
+        "speech-tokenizer-v3-int8"
+      ]
+    },
+    "linux-arm64-jetson-orin": {
+      "detail": "Jetson Orin（JetPack 6.x）",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "whisper-large-v3-turbo-q5",
+        "cosyvoice3-q4km",
+        "campplus",
+        "speech-tokenizer-v3-int8"
+      ]
+    },
+    "linux-arm64-vulkan": {
+      "detail": "ARM64 Linux，Vulkan（高通 Adreno 等；要 ARMv8.2 的 CPU）",
+      "models": [
+        "sensevoice-small-q8",
+        "fsmn-vad",
+        "cosyvoice3-q8",
+        "campplus"
+      ]
+    }
+  }
+}
