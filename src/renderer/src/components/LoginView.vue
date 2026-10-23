@@ -56,11 +56,14 @@ const statusLine = computed(() => {
 })
 
 async function renderQr(): Promise<void> {
-  if (stage.value !== 'qr' || !state.value.qrPayload) {
+  const payload = state.value.qrPayload
+  if (stage.value !== 'qr' || !payload) {
     svg.value = ''
     return
   }
-  svg.value = await QRCode.toString(state.value.qrPayload, { type: 'svg', margin: 1, width: 228 })
+  const text = await QRCode.toString(payload, { type: 'svg', margin: 1, width: 228 })
+  // 等待期间换了码（旧的一轮生成还没落地）：旧码不能覆盖新码，不然扫旧码登不上
+  if (stage.value === 'qr' && state.value.qrPayload === payload) svg.value = text
 }
 
 watch(() => [state.value.qrPayload, stage.value], () => void renderQr(), { immediate: true })

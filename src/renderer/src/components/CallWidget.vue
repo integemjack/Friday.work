@@ -157,11 +157,21 @@ async function attachLocalPreview(): Promise<void> {
   if (localVideoEl.value) localVideoEl.value.srcObject = localStream
 }
 
-/**
- * 建 PC。incoming=true 表示我是被叫：等对端的 offer，收到后 answer。
- * 视频通话（callType=video）：一起开摄像头；麦克风不可用时尽力只发视频。
- */
-async function buildPeer(asCallee = false): Promise<void> {
+/** 建 PC。incoming=true 表示我是被叫：等对端的 offer，收到后 answer。
+ *  视频通话（callType=video）：一起开摄像头；麦克风不可用时尽力只发视频。
+ *  并发重入共用同一次构建：轮询刚进 buildPeer、offer 信令同时到达时，
+ *  各建一个 PC + 各开一次麦，先建的那套泄漏还照常采集 */
+let building: Promise<void> | null = null
+
+function buildPeer(asCallee = false): Promise<void> {
+  if (building) return building
+  building = doBuildPeer(asCallee).finally(() => {
+    building = null
+  })
+  return building
+}
+
+async function doBuildPeer(asCallee = false): Promise<void> {
   const wantVideo = callType.value === 'video'
   const iceServers = (await store.callIce()) as RTCIceServer[]
   pc = new RTCPeerConnection({ iceServers, bundlePolicy: 'max-bundle' })
@@ -462,7 +472,13 @@ watch(phase, (now, before) => {
 /** 轮询信令队列（协议进程 → 渲染进程） */
 function pump(): void {
   const signals = store.drainCallSignals() as CallSignal[]
-  for (const signal of signals) void handleSignal(signal)
+  for (const signal of signals) {
+    // 不吞拒绝：setRemoteDescription/createAnswer 失败（重复 offer / 信令乱序 / PC 已关）
+    // 静默卡死比报错更难查
+    handleSignal(signal).catch((err) => {
+      error.value = err instanceof Error ? err.message : String(err)
+    })
+  }
 }
 
 onMounted(() => {

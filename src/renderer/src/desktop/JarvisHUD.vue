@@ -335,6 +335,8 @@ async function pollRemote(): Promise<void> {
   // 不然卸掉的 HUD（切主题、热更新）会在后台一直轮询下去
   const next = (delay: number): void => {
     if (disposed) return
+    // 一次只留一个排程：不清的话两条链并存（下面的 polling 分支就出过这事）
+    window.clearTimeout(remoteTimer)
     remoteTimer = window.setTimeout(() => void pollRemote(), delay)
   }
   const machineID = store.currentMachine
@@ -354,8 +356,9 @@ async function pollRemote(): Promise<void> {
     resetRemote('…')
   }
   if (polling) {
-    // 上一轮还挂着（通道慢）：不并发发第二轮，1 秒后再看
-    next(1000)
+    // 上一轮还挂着（通道慢）：不并发发第二轮。这里不排下一轮——在飞的那轮结束时
+    // 必然自己排（下面两个分支都排），这里再排就是第二条链，从此 1 秒 3 秒各走各的、
+    // 对远端的 fs.read 探测频率翻倍且永不恢复
     return
   }
   polling = true

@@ -2,7 +2,7 @@
 // 设置窗口（M4）：两个 tab——「机器」（这台远程机器的引擎、Agent 设置、服务状态，只读）
 // 和「语音播报」（回复 TTS：开关、音色、自定义音色、模型下载）。
 // 语音播报是本机行为（本地 kokoro 模型合成），不依赖连接哪台机器。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { loadTheme, setTheme, type UITheme } from '../lib/theme.js'
 import {
@@ -267,6 +267,13 @@ async function startCloneRecording(): Promise<void> {
     cloneProcessor.connect(cloneContext.destination)
     cloneRecording.value = true
   } catch (error) {
+    // getUserMedia 成功但 AudioContext/处理器建不起来时，把刚拿到的流停掉再报错，
+    // 不然麦克风一直占着
+    for (const track of cloneStream?.getTracks() ?? []) track.stop()
+    cloneStream = null
+    void cloneContext?.close().catch(() => {})
+    cloneContext = null
+    cloneProcessor = null
     cloneError.value = `麦克风开不起来：${error instanceof Error ? error.message : String(error)}`
   }
 }
@@ -392,6 +399,16 @@ async function importVoiceFiles(files: File[]): Promise<void> {
     importProgressOff = null
   }
 }
+
+// 录音/导入进行中直接关掉设置窗口（卸载组件）：麦克风轨道、AudioContext、进度监听全要释放，
+// 不然麦克风指示灯常亮、监听越积越多
+onBeforeUnmount(() => {
+  if (cloneRecording.value) stopCloneRecording()
+  cloneProgressOff?.()
+  cloneProgressOff = null
+  importProgressOff?.()
+  importProgressOff = null
+})
 
 function onVoiceDrop(event: DragEvent): void {
   importOver.value = false

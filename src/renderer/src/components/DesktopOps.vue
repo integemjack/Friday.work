@@ -22,6 +22,12 @@ const statusMark: Record<string, string> = {
   failed: '✗',
   denied: '⊘'
 }
+
+function onCardClick(card: { id: string; status: string }): void {
+  // 拖选卡里的命令/结果后松开也算 click：有选中文字就不当成「点没」（那是想复制）
+  if (window.getSelection()?.toString()) return
+  if (card.status !== 'awaitingApproval' && card.status !== 'running') store.fadeOp(card.id)
+}
 </script>
 
 <template>
@@ -33,7 +39,7 @@ const statusMark: Record<string, string> = {
         class="op cast"
         :class="[card.status, { fading: card.fading }]"
         :style="{ left: `${card.x}px`, top: `${card.y}px`, zIndex: card.z }"
-        @click="card.status !== 'awaitingApproval' && card.status !== 'running' && store.fadeOp(card.id)"
+        @click="onCardClick(card)"
       >
         <div class="from cast-head">来自 {{ titleOf(card.conversationID) }}</div>
         <div class="line cmd">

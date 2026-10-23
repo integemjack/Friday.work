@@ -111,7 +111,10 @@ function onMove(event: MouseEvent): void {
     y = startRect.y + (startRect.h - nextH)
     h = nextH
   }
-  emit('resize', { x, y, w, h })
+  // 缩放的四个方向也要钳回桌面：w/n 手柄能把标题栏推出桌面外，
+  // 整个窗口再也抓不回来（move 有钳，缩放没有）
+  const clamped = clampPosition(x, y, w)
+  emit('resize', { x: clamped.x, y: clamped.y, w, h })
 }
 
 function onUp(): void {

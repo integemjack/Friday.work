@@ -75,13 +75,16 @@ function doFit(): void {
 /** 接上一个终端：清屏 → 按回执尺寸重放最近输出 → 再按本地尺寸重排（REMOTE.md §6） */
 async function attach(id: string): Promise<void> {
   if (!term || !store.currentMachine) return
+  const machine = store.currentMachine
   currentID = id
   store.activeTerminalID = id
   loading.value = true
   term.reset()
   try {
-    const result = (await rpc(store.currentMachine, 'term.attach', { id })) as TermAttachResult
-    if (!term) return // 等回执的时候窗口可能已经关了
+    const result = (await rpc(machine, 'term.attach', { id })) as TermAttachResult
+    // 等回执的时候窗口可能已经关了，或者已经切到别的标签/机器（快速连点）：
+    // 旧标签的回执不能重放，不然画面串台、按键发错终端
+    if (!term || currentID !== id || machine !== store.currentMachine) return
     term.reset()
     if (result.data) term.write(b64ToBytes(result.data))
     if (result.cols > 0 && result.rows > 0) term.resize(result.cols, result.rows)
@@ -95,10 +98,11 @@ async function attach(id: string): Promise<void> {
       (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable)
     if (!editing) term.focus()
   } catch (error) {
-    if (!term) return
+    if (!term || currentID !== id || machine !== store.currentMachine) return
     term.write(`\r\n\x1b[31m接不上这个终端：${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`)
   } finally {
-    loading.value = false
+    // 已切到别的标签时不转 loading：那笔账由新标签自己的 attach 管
+    if (!term || currentID === id) loading.value = false
   }
 }
 

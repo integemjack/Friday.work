@@ -58,7 +58,10 @@ function toViewport(event: MouseEvent): { x: number; y: number } {
   const element = canvas.value
   const viewport = frame.value?.viewport ?? tab.value?.viewport ?? [1280, 800]
   if (!element) return { x: 0, y: 0 }
-  const rect = element.getBoundingClientRect()
+  // 画面是按比例缩放居中显示的（容器比≠远端比例时有留白）：要用 img 的实际矩形换算，
+  // 用容器矩形的话留白也算进去，点击/滚轮落点系统性偏移
+  const img = element.querySelector('img.frame')
+  const rect = (img ?? element).getBoundingClientRect()
   const x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * viewport[0]
   const y = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * viewport[1]
   return { x: Math.round(x), y: Math.round(y) }
@@ -122,15 +125,22 @@ function onPaste(event: ClipboardEvent): void {
   send('text', { text })
 }
 
+/** watch 的代数：快速换标签时慢回执不能覆盖新标签（不然画面/输入落在旧标签上） */
+let watchSeq = 0
+
 async function watchTab(tabID: string): Promise<void> {
   if (!store.currentMachine || !tabID) return
+  const machine = store.currentMachine
+  const seq = ++watchSeq
   const width = Math.round(canvas.value?.clientWidth || 1280)
   const height = Math.round(canvas.value?.clientHeight || 800)
   try {
-    await rpc(store.currentMachine, 'browser.watch', { tab: tabID, width, height })
+    await rpc(machine, 'browser.watch', { tab: tabID, width, height })
+    if (seq !== watchSeq || machine !== store.currentMachine) return
     watchedTab.value = tabID
     scheduleFrameRetry()
   } catch (error) {
+    if (seq !== watchSeq) return
     store.error = error instanceof Error ? error.message : String(error)
   }
 }
