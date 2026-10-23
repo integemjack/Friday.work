@@ -194,7 +194,7 @@ export interface DesktopWindow {
 /** 每类窗口的默认大小（只剩子 Agent / 设置两个浮动窗口，其余内容常驻桌面） */
 const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH: number }> = {
   terminals: { w: 820, h: 500, minW: 420, minH: 260 },
-  files: { w: 640, h: 540, minW: 360, minH: 300 },
+  files: { w: 920, h: 580, minW: 480, minH: 320 },
   browser: { w: 820, h: 620, minW: 420, minH: 320 },
   agents: { w: 580, h: 460, minW: 360, minH: 240 },
   settings: { w: 620, h: 560, minW: 420, minH: 320 }

@@ -58,12 +58,22 @@ const speedText = computed(() => {
   return speed >= 100 ? speed.toFixed(0) : speed.toFixed(1)
 })
 
-// 窗口启动器：只剩子 Agent / 设置两个浮动窗口——
-// 终端/文件/浏览器是桌面面板（会话用到才展开），会话列表/聊天/通话都是常驻面板，不在这里
+// 窗口启动器：终端 / 浏览器 / 文件（会话用到时也会自己弹出，这里随时手动开）+ 子 Agent / 设置；
+// 会话列表 / 聊天 / 通话是常驻面板，不在这里
 const launchers: Array<{ kind: WindowKind; label: string }> = [
+  { kind: 'terminals', label: '终端' },
+  { kind: 'browser', label: '浏览器' },
+  { kind: 'files', label: '文件' },
   { kind: 'agents', label: '子 Agent' },
   { kind: 'settings', label: '设置' }
 ]
+
+/** 终端数角标（有在跑的终端时显示） */
+function badgeOf(kind: WindowKind): number {
+  if (kind === 'terminals') return store.terminals.length
+  if (kind === 'browser') return store.browserTabs.length
+  return 0
+}
 
 function launch(kind: WindowKind) {
   store.openWindow(kind)
@@ -89,9 +99,22 @@ const bridge = window.fridayBridge
         class="launch-btn"
         :class="{ open: kindOpen(entry.kind) }"
         :title="entry.label"
+        :disabled="entry.kind !== 'settings' && !store.connected"
         @click="launch(entry.kind)"
       >
-        <svg v-if="entry.kind === 'agents'" class="ico" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <svg v-if="entry.kind === 'terminals'" class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2" stroke="currentColor" stroke-width="1.3" />
+          <path d="m4.6 6.2 2 1.8-2 1.8M8.4 10.2h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <svg v-else-if="entry.kind === 'browser'" class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.3" />
+          <path d="M1.8 8h12.4M8 1.8c1.8 1.7 2.7 3.8 2.7 6.2S9.8 12.5 8 14.2M8 1.8C6.2 3.5 5.3 5.6 5.3 8s.9 4.5 2.7 6.2" stroke="currentColor" stroke-width="1.2" />
+        </svg>
+        <svg v-else-if="entry.kind === 'files'" class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M1.8 4.3c0-.7.5-1.2 1.2-1.2h3.1l1.5 1.6H13c.7 0 1.2.5 1.2 1.2v6.3c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+          <path d="M1.8 7h12.4" stroke="currentColor" stroke-width="1.2" />
+        </svg>
+        <svg v-else-if="entry.kind === 'agents'" class="ico" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
           <path d="M7 4.8 9.2 7 7 9.2 4.8 7Z" fill="currentColor" />
         </svg>
@@ -99,6 +122,7 @@ const bridge = window.fridayBridge
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
           <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" />
         </svg>
+        <span v-if="badgeOf(entry.kind)" class="launch-badge">{{ badgeOf(entry.kind) }}</span>
       </button>
     </nav>
 
@@ -227,6 +251,51 @@ const bridge = window.fridayBridge
 .launch-btn:hover {
   background: var(--hover);
   opacity: 1;
+}
+
+.launch-btn {
+  position: relative;
+}
+
+.launch-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.launch-btn:disabled:hover {
+  background: transparent;
+}
+
+/* 数量角标（在跑的终端数 / 浏览器标签数） */
+.launch-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}
+
+/* 工具窗口组（终端/浏览器/文件）和设置类之间留一道细分隔 */
+.launch-btn:nth-child(3) {
+  margin-right: 6px;
+}
+
+.launch-btn:nth-child(3)::after {
+  content: '';
+  position: absolute;
+  right: -5px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--border);
 }
 
 .launch-btn.open {

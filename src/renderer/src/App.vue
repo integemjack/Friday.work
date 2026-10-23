@@ -140,7 +140,7 @@ const componentFor: Record<WindowKind, unknown> = {
 
 const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = {
   terminals: { minWidth: 420, minHeight: 260 },
-  files: { minWidth: 360, minHeight: 300 },
+  files: { minWidth: 480, minHeight: 320 },
   browser: { minWidth: 420, minHeight: 320 },
   agents: { minWidth: 360, minHeight: 240 },
   settings: { minWidth: 420, minHeight: 320 }
@@ -440,10 +440,13 @@ const calling = computed(() => store.calling)
   z-index: 40;
 }
 
-/* 浮动窗口层：铺满桌面（只剩子 Agent / 设置） */
+/* 浮动窗口层：铺满桌面。z-index 50 压过语音波形屏 / 输入台（45）和投层（40）：
+   窗口自己的 z 从 10 起随交互递增，原来新开的窗口标题栏会被顶部的波形屏盖住；
+   层内各窗口仍按自己的 z 互相叠放 */
 .windows-layer {
   position: absolute;
   inset: 0;
+  z-index: 50;
   pointer-events: none;
 }
 

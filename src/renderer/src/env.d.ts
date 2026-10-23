@@ -87,6 +87,14 @@ declare global {
       listStackMedia(): Promise<string[]>
       /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
       systemStats(): Promise<SysStats>
+      /** 文件管理器下载到本地（保存位置由用户在系统对话框里选；之后按会话 id 分块写） */
+      downloadBegin(mode: 'file' | 'dir', suggestedName: string, count: number): Promise<{ id: string; target: string } | null>
+      downloadWrite(id: string, rel: string, offset: number, data: Uint8Array): Promise<boolean>
+      downloadCloseFile(id: string, rel: string): Promise<boolean>
+      downloadMkdir(id: string, rel: string): Promise<boolean>
+      /** 收尾：ok=false 时删掉这次写出的半成品；成功返回要定位的本机路径 */
+      downloadEnd(id: string, ok: boolean): Promise<string | null>
+      downloadReveal(id: string): Promise<boolean>
       /** 系统通知 */
       notify(payload: { title: string; body?: string; conversationID?: string }): void
       /** 界面主题底色（贾维斯深空蓝 / 跟随系统深浅） */

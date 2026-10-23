@@ -130,6 +130,16 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   listStackMedia: (): Promise<string[]> => ipcRenderer.invoke('media-stack:list'),
   /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
   systemStats: (): Promise<SysStats> => ipcRenderer.invoke('sys:stats'),
+  /** 文件管理器下载到本地：begin 弹保存 / 选文件夹对话框（取消返回 null），之后按会话 id 分块写；
+   *  rel 是会话内的相对路径（单个文件模式不用），越界的主进程拒绝 */
+  downloadBegin: (mode: 'file' | 'dir', suggestedName: string, count: number): Promise<{ id: string; target: string } | null> =>
+    ipcRenderer.invoke('download:begin', { mode, suggestedName, count }),
+  downloadWrite: (id: string, rel: string, offset: number, data: Uint8Array): Promise<boolean> =>
+    ipcRenderer.invoke('download:write', { id, rel, offset, data }),
+  downloadCloseFile: (id: string, rel: string): Promise<boolean> => ipcRenderer.invoke('download:close-file', { id, rel }),
+  downloadMkdir: (id: string, rel: string): Promise<boolean> => ipcRenderer.invoke('download:mkdir', { id, rel }),
+  downloadEnd: (id: string, ok: boolean): Promise<string | null> => ipcRenderer.invoke('download:end', { id, ok }),
+  downloadReveal: (id: string): Promise<boolean> => ipcRenderer.invoke('download:reveal', { id }),
   /** 系统通知（attention / 任务跑完） */
   notify: (payload: { title: string; body?: string; conversationID?: string }): void => {
     ipcRenderer.send('notify:show', payload)
