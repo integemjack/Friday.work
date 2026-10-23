@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 设备窗口（方案-客户端设备）：这台电脑上有什么能交给远端用、现在谁在用、哪些「始终允许」了。
-//   服务端：所连机器接不接得住（Friday 2.73 起）、装没装「客户端设备」能力（设置 › 能力里装，装了智能体才有工具）；
+//   服务端：所连机器接不接得住（Friday 2.78 起）、装没装「客户端设备」能力（设置 › 能力里装，装了智能体才有工具）；
 //   本机设备：串口（ESP / Arduino / STM32 板子）、摄像头、安卓手机（adb）、iOS 设备（usbmuxd）、UF2 盘；
 //   使用中：同桌面上的提示条，可断开；始终允许：可撤销（同设置 › 本机设备授权）。
 // 这里只列、不动设备：真正打开设备都是远端发请求、这边问过人之后。
@@ -51,7 +51,7 @@ const server = computed(() => {
   if (!info || info.state !== 'ready') return { tone: 'muted', text: '还没连上机器：连上以后远端才能用这里的设备' }
   const serverInfo = info.serverInfo as (typeof info.serverInfo & { clientDevices?: { power?: boolean } }) | undefined
   if (!serverInfo?.features?.includes('clientDevices')) {
-    return { tone: 'warn', text: `${info.name} 的 Friday 太旧（${serverInfo?.version ?? '?'}），要 2.73 以上才能用这台电脑的设备` }
+    return { tone: 'warn', text: `${info.name} 的 Friday 太旧（${serverInfo?.version ?? '?'}），要 2.78 以上才能用这台电脑的设备` }
   }
   if (!serverInfo.clientDevices?.power) {
     return { tone: 'warn', text: `${info.name} 还没装「客户端设备」能力：在它的设置 › 能力里装上，智能体才有串口 / 烧录 / adb / 隧道这些工具` }
