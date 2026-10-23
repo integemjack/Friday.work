@@ -156,16 +156,32 @@ function scheduleFrameRetry(): void {
   }, 3000)
 }
 
+let opening = false
 async function openTab(): Promise<void> {
-  if (!store.currentMachine || !store.detail) return
+  if (!store.currentMachine || opening) return
+  opening = true
   try {
-    const result = (await rpc(store.currentMachine, 'browser.open', { conversationID: store.detail.conversationID })) as { tab: string }
+    // 挂在当前会话上；没选会话时用最近一段（原来要求必须有选中的会话，否则点 ＋ 毫无反应）
+    const conversationID = await store.toolConversationID()
+    if (!conversationID) throw new Error('还没有可以挂浏览器标签的会话')
+    const result = (await rpc(store.currentMachine, 'browser.open', { conversationID })) as { tab: string }
     selectedTab.value = result.tab
     await watchTab(result.tab)
   } catch (error) {
     store.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    opening = false
   }
 }
+
+/** 标题栏要求开一个新标签（窗口刚打开、里面还没有标签） */
+function consumeNewTabRequest(): void {
+  if (!store.newTabRequest.browser) return
+  store.newTabRequest.browser = false
+  if (store.browserTabs.length === 0 && (store.browserAvailable || !store.browserReason)) void openTab()
+}
+watch(() => store.newTabRequest.browser, consumeNewTabRequest)
+onMounted(consumeNewTabRequest)
 
 async function navigate(action: 'back' | 'forward' | 'reload'): Promise<void> {
   if (!store.currentMachine || !tab.value) return
@@ -191,6 +207,11 @@ async function selectTab(tabID: string): Promise<void> {
 
 async function closeTab(tabID: string): Promise<void> {
   if (!store.currentMachine) return
+  // 本地先摘掉标签（服务端的 browser 事件回来只是确认）：关的是最后一个时窗口立刻跟着收，
+  // 原来标签全关了浏览器窗口还空挂着
+  const hadTabs = store.browserTabs.length > 0
+  store.browserTabs = store.browserTabs.filter((item) => item.id !== tabID)
+  store.closeBrowserWindowIfEmpty(hadTabs)
   await rpc(store.currentMachine, 'browser.close', { tab: tabID }).catch(() => {})
   if (watchedTab.value === tabID) watchedTab.value = ''
   // 关的是手选的标签：清掉手选，回落到「最新」（tab 一变下面的 watch 会接着换台）

@@ -102,21 +102,43 @@ async function attach(id: string): Promise<void> {
   }
 }
 
+let opening = false
 async function openTerminal(): Promise<void> {
-  if (!term || !store.currentMachine || !store.detail) return
+  if (!term || !store.currentMachine || opening) return
+  opening = true
   const id = crypto.randomUUID()
   try {
+    // 挂在当前会话上；没选会话时用最近一段（原来要求必须有选中的会话，否则点 ＋ 毫无反应）
+    const conversationID = await store.toolConversationID()
+    if (!conversationID) throw new Error('还没有可以挂终端的会话')
     await rpc(store.currentMachine, 'term.open', {
       id,
-      conversationID: store.detail.conversationID,
+      conversationID,
       cols: term.cols || 80,
       rows: term.rows || 24
     })
+    // 先把新标签放进本地列表并选中（服务端的 terminals 事件回来只是确认），标签栏立刻出现
+    if (!store.terminals.some((terminal) => terminal.id === id)) {
+      store.terminals = [
+        ...store.terminals,
+        { id, conversationID, title: 'shell', shell: '', running: true, cols: term.cols || 80, rows: term.rows || 24 }
+      ]
+    }
     await attach(id)
   } catch (error) {
-    term.write(`\r\n\x1b[31m开不了终端：${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`)
+    term?.write(`\r\n\x1b[31m开不了终端：${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`)
+  } finally {
+    opening = false
   }
 }
+
+/** 标题栏要求开一个新标签（窗口刚打开、里面还没有终端）：xterm 准备好之后开 */
+function consumeNewTabRequest(): void {
+  if (!store.newTabRequest.terminals || !term) return
+  store.newTabRequest.terminals = false
+  if (store.terminals.length === 0 && !unavailable.value) void openTerminal()
+}
+watch(() => store.newTabRequest.terminals, consumeNewTabRequest)
 
 async function closeTerminal(id: string): Promise<void> {
   if (!store.currentMachine) return
@@ -195,6 +217,7 @@ onMounted(async () => {
   // 直接 attach 会在空标签栏下面写一行「接不上这个终端」——那也是一种残留
   const want = wantedTerminal()
   if (want) await attach(want)
+  consumeNewTabRequest()
 })
 
 // 切主题时热切换终端配色（xterm 支持运行时改 options.theme）

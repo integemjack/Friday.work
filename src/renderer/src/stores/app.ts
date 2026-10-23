@@ -504,6 +504,8 @@ export const useAppStore = defineStore('app', {
     activeTerminalID: '',
     /** 文件面板里选中的文件（null = 只开目录树） */
     activeFile: null as null | { path: string; name: string },
+    /** 从标题栏打开终端 / 浏览器窗口时里面一个标签都没有：请卡片自己开一个（卡片挂好后消费并清掉） */
+    newTabRequest: { terminals: false, browser: false },
     /** 全局提示（错误横幅） */
     error: '',
     /** 客户端更新状态（主进程 ClientUpdate 推送；设置窗口 + 桌面浮层展示） */
@@ -917,6 +919,29 @@ export const useAppStore = defineStore('app', {
     /** 终端标签从「有」变成「一个都不剩」：终端窗口跟着关掉——空窗口里只剩一句提示，留着没意义。
      *  只在真的清空过的那一下关（hadTerminals 是赋值前的状态）：用户自己点开窗口、还没按 ＋ 的时候
      *  列表本来就是空的，不能一开就被关掉。 */
+    /** 终端 / 浏览器标签要挂的会话（协议的 term.open / browser.open 都必须带 conversationID）：
+     *  当前选中的会话；没选（「新对话」默认态）就用最近更新的一段；一段都没有才新建一段。
+     *  原来只认当前会话，没选会话时点 ＋ 什么都不发生 */
+    async toolConversationID(): Promise<string> {
+      if (this.activeConversationID) return this.activeConversationID
+      const latest = [...this.summaries].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+      if (latest) return latest.id
+      return (await this.createConversation()) ?? ''
+    },
+
+    /** 标题栏开终端 / 浏览器：窗口里还没有标签就顺手开一个（已经有的话只是把窗口拿到前面） */
+    launchToolWindow(kind: 'terminals' | 'browser') {
+      const empty = kind === 'terminals' ? this.terminals.length === 0 : this.browserTabs.length === 0
+      if (empty) this.newTabRequest[kind] = true
+      this.openWindow(kind)
+    },
+
+    closeBrowserWindowIfEmpty(hadTabs: boolean) {
+      if (!hadTabs || this.browserTabs.length > 0) return
+      const win = this.windows.find((item) => item.kind === 'browser')
+      if (win) this.closeWindow(win.id)
+    },
+
     closeTerminalWindowIfEmpty(hadTerminals: boolean) {
       if (!hadTerminals || this.terminals.length > 0) return
       const win = this.windows.find((item) => item.kind === 'terminals')
@@ -1329,11 +1354,14 @@ export const useAppStore = defineStore('app', {
         case 'browser': {
           const state = params as { available: boolean; reason?: string; tabs: BrowserTab[] }
           const before = new Set(this.browserTabs.map((tab) => tab.id))
+          const hadTabs = this.browserTabs.length > 0
           this.browserTabs = state.tabs ?? []
           this.browserAvailable = state.available
           this.browserReason = state.reason ?? ''
           // 会话开新浏览器标签 = 在用浏览器：立刻开浏览器窗口（已有就置顶）
           if (this.browserTabs.some((tab) => !before.has(tab.id))) this.openWindow('browser')
+          // 标签全关了（用户点 × / 智能体关掉）：浏览器窗口跟着收（同终端）
+          this.closeBrowserWindowIfEmpty(hadTabs)
           break
         }
         case 'browser.frame': {

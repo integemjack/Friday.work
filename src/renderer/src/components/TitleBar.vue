@@ -76,7 +76,9 @@ function badgeOf(kind: WindowKind): number {
 }
 
 function launch(kind: WindowKind) {
-  store.openWindow(kind)
+  // 终端 / 浏览器：窗口里一个标签都没有时顺手开一个（不然打开的是个空窗口，还得再点 ＋）
+  if (kind === 'terminals' || kind === 'browser') store.launchToolWindow(kind)
+  else store.openWindow(kind)
 }
 
 function kindOpen(kind: WindowKind): boolean {
