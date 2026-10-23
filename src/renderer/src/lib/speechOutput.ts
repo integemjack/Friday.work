@@ -54,6 +54,8 @@ const KEY_SPEED_MAX = 'voice.tts.speedMax'
 const KEY_MUTED = 'voice.tts.muted'
 const KEY_VOLUME = 'voice.tts.volume'
 const KEY_SINK = 'voice.tts.sink'
+const KEY_BG_VOLUME = 'voice.tts.bgVolume'
+const KEY_BG_VOICE_SWAP = 'voice.tts.bgVoiceSwap'
 
 /** 回复语音播报总开关（默认开；合成本地免费、不联网，开着没有成本） */
 export const replySpeakEnabled = ref<boolean>(loadEnabled())
@@ -76,6 +78,10 @@ export const ttsMuted = ref<boolean>(loadMuted())
 export const ttsVolume = ref<number>(loadVolume())
 /** 输出设备 id（'' = 系统默认；落到 AudioContext.setSinkId，选了具体设备重启后仍走它） */
 export const ttsSinkId = ref<string>(loadSinkId())
+/** 后台会话的音量：前台出声时后台压到这么低（0-1；0 = 后台会话不播） */
+export const ttsBackgroundVolume = ref<number>(loadBackgroundVolume())
+/** 后台会话自动换一个内置快音色：和前台的声音错开好分辨，也少占引擎 */
+export const ttsBackgroundVoiceSwap = ref<boolean>(loadBackgroundVoiceSwap())
 
 /** 引擎是否可用（本机平台有包且已下好） */
 export const cosyVoiceReady = ref(false)
@@ -197,6 +203,25 @@ function loadSinkId(): string {
   }
 }
 
+function loadBackgroundVolume(): number {
+  try {
+    const saved = localStorage.getItem(KEY_BG_VOLUME)
+    const raw = Number(saved)
+    // 0 是合法值（后台不播），所以先判有没有存过，不能像音量那样按 > 0 兜底
+    return saved !== null && Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.25
+  } catch {
+    return 0.25
+  }
+}
+
+function loadBackgroundVoiceSwap(): boolean {
+  try {
+    return localStorage.getItem(KEY_BG_VOICE_SWAP) !== '0'
+  } catch {
+    return true
+  }
+}
+
 function allVoices(): VoiceOption[] {
   return [...PRESET_VOICES, ...clonedVoices.value]
 }
@@ -284,6 +309,25 @@ export function setTtsVolume(value: number): void {
   applyOutputGain()
 }
 
+export function setTtsBackgroundVolume(value: number): void {
+  ttsBackgroundVolume.value = Math.min(1, Math.max(0, value))
+  try {
+    localStorage.setItem(KEY_BG_VOLUME, String(ttsBackgroundVolume.value))
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+  applyMix()
+}
+
+export function setTtsBackgroundVoiceSwap(on: boolean): void {
+  ttsBackgroundVoiceSwap.value = on
+  try {
+    localStorage.setItem(KEY_BG_VOICE_SWAP, on ? '1' : '0')
+  } catch {
+    // 不可写：本次会话内生效即可
+  }
+}
+
 // MARK: 回复文本 → 朗读文本（纯函数，test/speechoutput.test.cjs 直接测）
 
 /** 取消息的 text 块拼成朗读文本（thinking / 工具调用 / 媒体不念） */
@@ -337,7 +381,7 @@ export function cleanForSpeech(raw: string): string {
   return text.trim()
 }
 
-// MARK: 播放（WebAudio；单例 AudioContext，后到的播放打断前面的）
+// MARK: 播放（WebAudio；单例 AudioContext，每个来源一条通道，可同时出声）
 
 export type TtsPhase = 'idle' | 'downloading' | 'extracting' | 'loading' | 'speaking' | 'error'
 
@@ -346,35 +390,86 @@ export const ttsPhase: Ref<TtsPhase> = ref('idle')
 export const ttsDetail = ref('')
 
 let audioContext: AudioContext | null = null
-let activeSource: AudioBufferSourceNode | null = null
-let speakToken = 0
-/** 主增益（静音/音量）与波形分析器：播放链固定 source → masterGain → analyser → destination。
- *  analyser 挂在 gain 之后，波形反映的是「实际听到的」——静音即归零、音量小波形也矮。 */
+/** 主增益（静音/音量）与波形分析器：播放链 source → 通道 gain → 通道 panner → masterGain → analyser → destination。
+ *  analyser 挂在主增益之后，波形反映的是「实际听到的」（各通道混起来）——静音即归零、音量小波形也矮。 */
 let masterGain: GainNode | null = null
 let outputAnalyser: AnalyserNode | null = null
 
-/** 待播片段队列 + 播放泵：整条播报（新回复 / 试听）先清队再入队（后到的优先）；
- *  流式增量（append）只接到队尾、不打断正在播的——回复气泡的文本一片片来，
- *  句子按先后接播，这才是「跟气泡实时」。 */
-let speechQueue: string[] = []
-let pumping = false
-/** 本轮泵指定音色（试听时非空）；流式增量为空 → 每句跟当前选中的音色 */
-let pumpVoice: VoiceOption | undefined
-/** 本轮逐句送引擎的全局倍率：动态语速开时按本轮要念的总字数插值（流式追加会重算，
- *  后续句子随文本变多自动提速）；关时就是固定 ttsSpeed */
-let pumpScale = 1
-/** 本轮已入队总字数（含已播完的）：动态语速按整条回复长度取值，不是剩余队列——
- *  否则越播到后面（队列越短）插值出的语速反而越慢 */
-let pumpChars = 0
-/** 引擎正在合成（stopSpeaking 靠它决定要不要 cancel 引擎里那句） */
-let engineBusy = false
+// 多来源并行播报：每个来源（一个会话 / 助手日志 / 试听）一条通道——自己的待合成队列、
+// 已合成待播缓冲、增益和声像节点。前台（正在看的会话或助手、试听）居中原声；后台偏到
+// 一侧、前台出声时压低（闪避）。同一时刻最多听到「前台 + 一个后台」：后台按先来后到
+// 占麦，占麦的空下来一会儿（等模型 / 跑工具）才让给下一个，免得几个后台一句一句穿插。
+//
+// 瓶颈是合成不是播放：引擎串行（GPU 并发只会互相拖慢），女声 RTF ~0.6，两路同时播就要
+// 1.2，必然断流。所以合成名额在这里排优先级：前台垫着的不够 2 句先给前台，够了才给后台
+// 占麦的那个；主进程队列里同时只放一句，优先级才排得上。后台再提速、换快音色少占引擎，
+// 偶有停顿也压着音量，不碍事。
 
-/** 重新取本轮的全局倍率（speakText 入队后调）：看本轮一共要念多少字 */
-function refreshPumpScale(): void {
-  pumpScale = ttsDynamicSpeed.value
-    ? dynamicSpeedFor(pumpChars, ttsSpeedMin.value, ttsSpeedMax.value)
-    : ttsSpeed.value
+/** 未指定来源（试听 / 旧调用方）：恒为前台 */
+const DEFAULT_SOURCE = ''
+/** 助手日志的来源名（会话 id 是 uuid，不会撞） */
+export const ASSISTANT_SPEECH_SOURCE = '__assistant__'
+/** 前台多合成几句垫着：后台那句占着引擎时前台不至于断流 */
+const FRONT_LOOKAHEAD = 2
+const BACK_LOOKAHEAD = 1
+/** 后台语速再乘的倍率：说得快 = 合成出的音频短 = 少占引擎 */
+const BACKGROUND_SPEED_BOOST = 1.2
+/** 前台不出声时后台抬回的音量（下限；后台音量设成 0 的照样不出声） */
+const BACKGROUND_IDLE_GAIN = 0.7
+/** 前台一句播完到下一句开口通常只隔几百毫秒：停顿超过这么久才把后台抬回来，免得后台忽大忽小 */
+const DUCK_RELEASE_MS = 800
+/** 占麦的后台来源空了多久才让出（流式中途等模型 / 跑工具） */
+const BACKGROUND_HOLD_MS = 3000
+/** 后台的声像位置（按来源 id 哈希固定：同一个会话每次都从同一侧出声） */
+const BACKGROUND_PANS = [-0.6, 0.6, -0.85, 0.85]
+/** 增益 / 声像过渡的时间常数（setTargetAtTime，约 3 倍到位：切前台时 0.4s 左右滑过去） */
+const MIX_TIME_CONSTANT = 0.13
+
+interface SynthAudio {
+  samples: Float32Array
+  sampleRate: number
 }
+
+interface SpeechChannel {
+  id: string
+  /** 待合成的句子 */
+  queue: string[]
+  /** 已合成、待播 */
+  ready: SynthAudio[]
+  /** 引擎里正在合成本通道的一句 */
+  synthesizing: boolean
+  /** 播放循环在跑 */
+  playing: boolean
+  /** 正在出声的那句 */
+  current: AudioBufferSourceNode | null
+  /** 本轮指定音色（试听时非空）；空 = 每句跟当前选中的音色 */
+  voice?: VoiceOption
+  /** 本轮已入队总字数（含已播完的）：动态语速按整条回复长度取值，不是剩余队列——
+   *  否则越播到后面（队列越短）插值出的语速反而越慢 */
+  chars: number
+  /** 通道级打断令牌：stopSpeaking 加一，迟到的合成结果 / 播放循环据此作废 */
+  token: number
+  /** 这一轮排上队的先后（后台按先来后到占麦） */
+  since: number
+  gain: GainNode | null
+  panner: StereoPannerNode | null
+}
+
+const channels = new Map<string, SpeechChannel>()
+let arrivals = 0
+/** 前台来源（AssistantChat 按当前模式 / 会话设置）；DEFAULT_SOURCE 也恒为前台 */
+let foregroundSource = DEFAULT_SOURCE
+/** 占着后台麦的来源 */
+let backgroundHolder: string | null = null
+let holderTimer: ReturnType<typeof setTimeout> | null = null
+/** 闪避中：前台在出声，或刚停下还不到 DUCK_RELEASE_MS */
+let ducking = false
+let duckTimer: ReturnType<typeof setTimeout> | null = null
+/** 引擎里正在合成的那句属于哪个通道；全部停止时换代，迟到的结果直接丢 */
+let inFlight: { channel: string; gen: number } | null = null
+let engineGen = 0
+/** 最近一次合成失败、之后还没有新句子入队：空闲时状态行停在「出错」 */
+let failed = false
 
 /** 模型准备进度（主进程事件 → 状态行 / 设置页进度条） */
 export function initTtsProgressListener(): void {
@@ -398,22 +493,134 @@ export function initTtsProgressListener(): void {
   })
 }
 
-/** 停掉当前播放并清空待播队列（新整条回复到来 / 开关关闭 / 手动停止时调用）。
- *  引擎正在合成这句时一并 cancel（实测 7ms 就回 cancelled，不会让下一句排队等它）。 */
-export function stopSpeaking(): void {
-  speakToken += 1
-  speechQueue = []
-  pumping = false
-  if (engineBusy) void window.fridayBridge.cancelCosyVoice?.().catch(() => {})
-  if (activeSource) {
-    try {
-      activeSource.stop()
-    } catch {
-      // 已自然播完：忽略
+/** 停掉播放并清空待播（试听 / 开关关闭 / 手动停止时调用）。不带 source 停全部通道；
+ *  带 source 只停那一个，其余照常播。引擎正在合成被停通道的那句时一并 cancel
+ *  （实测 7ms 就回 cancelled，不会让下一句排队等它）。 */
+export function stopSpeaking(source?: string): void {
+  const all = source === undefined
+  const targets = all ? [...channels.values()] : [channels.get(source)].filter((ch): ch is SpeechChannel => !!ch)
+  for (const ch of targets) {
+    ch.token += 1
+    ch.queue = []
+    ch.ready = []
+    ch.synthesizing = false
+    ch.playing = false
+    if (ch.current) {
+      try {
+        ch.current.stop()
+      } catch {
+        // 已自然播完：忽略
+      }
+      ch.current = null
     }
-    activeSource = null
   }
-  if (ttsPhase.value === 'speaking' || ttsPhase.value === 'error') ttsPhase.value = 'idle'
+  if (inFlight && (all || inFlight.channel === source)) {
+    void window.fridayBridge.cancelCosyVoice?.().catch(() => {})
+    // 全停：换代后立刻放出合成名额（被 cancel 的那句迟到的结果按代作废）；
+    // 只停一个：等它回 cancelled 再放，别让下一句和被取消的那句在引擎里叠着
+    if (all) {
+      engineGen += 1
+      inFlight = null
+    }
+  }
+  if (all || backgroundHolder === source) releaseBackground()
+  if (all) {
+    failed = false
+    if (ttsPhase.value === 'error') ttsPhase.value = 'idle'
+  }
+  onAudibleChange()
+  kick()
+}
+
+/** 前台来源：正在看的会话 id，或助手模式的 ASSISTANT_SPEECH_SOURCE。切换时不打断任何一路：
+ *  新前台从侧面滑到正中、旧前台滑到侧面压低，正在说的那句都说完 */
+export function setSpeechForeground(source: string): void {
+  if (source === foregroundSource) return
+  foregroundSource = source
+  if (backgroundHolder === source) releaseBackground() // 占麦的后台成了前台：后台麦空出来
+  onAudibleChange()
+  applyMix()
+  kick()
+}
+
+function channelFor(id: string): SpeechChannel {
+  let ch = channels.get(id)
+  if (!ch) {
+    ch = { id, queue: [], ready: [], synthesizing: false, playing: false, current: null, chars: 0, token: 0, since: 0, gain: null, panner: null }
+    channels.set(id, ch)
+  }
+  return ch
+}
+
+function isFront(id: string): boolean {
+  return id === DEFAULT_SOURCE || id === foregroundSource
+}
+
+function channelBusy(ch: SpeechChannel): boolean {
+  return ch.queue.length > 0 || ch.ready.length > 0 || ch.synthesizing || ch.playing
+}
+
+function releaseBackground(): void {
+  backgroundHolder = null
+  if (holderTimer) {
+    clearTimeout(holderTimer)
+    holderTimer = null
+  }
+}
+
+/** 后台麦归谁：占着的继续占；没人占就让这一轮排队最早、手上有句子的后台通道来占 */
+function claimBackground(): SpeechChannel | null {
+  if (backgroundHolder !== null) {
+    const held = channels.get(backgroundHolder)
+    if (held && !isFront(held.id)) return held
+    releaseBackground()
+  }
+  let pick: SpeechChannel | null = null
+  for (const ch of channels.values()) {
+    if (isFront(ch.id) || (!ch.queue.length && !ch.ready.length)) continue
+    if (!pick || ch.since < pick.since) pick = ch
+  }
+  if (pick) backgroundHolder = pick.id
+  return pick
+}
+
+function mayPlay(ch: SpeechChannel): boolean {
+  return isFront(ch.id) || claimBackground()?.id === ch.id
+}
+
+/** 占麦的后台通道空下来：等 BACKGROUND_HOLD_MS 还没有新句子才让给下一个（流式中途的停顿不算说完） */
+function settle(ch: SpeechChannel): void {
+  if (ch.id !== backgroundHolder || channelBusy(ch) || holderTimer) return
+  holderTimer = setTimeout(() => {
+    holderTimer = null
+    const held = backgroundHolder === null ? undefined : channels.get(backgroundHolder)
+    if (held && channelBusy(held)) return
+    backgroundHolder = null
+    kick()
+  }, BACKGROUND_HOLD_MS)
+}
+
+/** 状态变了之后统一推一把：能播的开播、空出来的合成名额派下去、状态行跟上 */
+function kick(): void {
+  for (const ch of channels.values()) {
+    if (ch.ready.length && !ch.playing) void runPlayback(ch)
+  }
+  schedule()
+  updatePhase()
+}
+
+function updatePhase(): void {
+  const all = [...channels.values()]
+  if (all.some((ch) => ch.current)) {
+    ttsPhase.value = 'speaking'
+  } else if (inFlight || all.some((ch) => ch.queue.length || ch.ready.length)) {
+    // 下载 / 解压由模型进度事件管，这里不盖掉
+    if (ttsPhase.value !== 'downloading' && ttsPhase.value !== 'extracting') ttsPhase.value = 'loading'
+  } else if (failed) {
+    ttsPhase.value = 'error'
+  } else if (ttsPhase.value === 'speaking' || ttsPhase.value === 'loading') {
+    ttsPhase.value = 'idle'
+  }
 }
 
 /** 建好（或复用）gain→analyser→destination 那段公共链，返回主增益节点 */
@@ -435,6 +642,69 @@ function applyOutputGain(): void {
   if (!masterGain || !audioContext) return
   const target = ttsMuted.value ? 0 : ttsVolume.value
   masterGain.gain.setTargetAtTime(target, audioContext.currentTime, 0.02)
+}
+
+/** 某通道此刻该有的增益与声像：前台居中原声；后台偏到固定一侧，前台出声时压到后台音量、
+ *  前台安静时抬回 BACKGROUND_IDLE_GAIN */
+function mixFor(ch: SpeechChannel): { gain: number; pan: number } {
+  if (isFront(ch.id)) return { gain: 1, pan: 0 }
+  const low = ttsBackgroundVolume.value
+  return { gain: ducking || low === 0 ? low : Math.max(low, BACKGROUND_IDLE_GAIN), pan: backgroundPan(ch.id) }
+}
+
+function backgroundPan(id: string): number {
+  let hash = 0
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0
+  return BACKGROUND_PANS[Math.abs(hash) % BACKGROUND_PANS.length]
+}
+
+/** 把每个通道的增益 / 声像平滑推到目标值（切前台、闪避起落、改后台音量时调） */
+function applyMix(): void {
+  if (!audioContext) return
+  const now = audioContext.currentTime
+  for (const ch of channels.values()) {
+    if (!ch.gain || !ch.panner) continue
+    const { gain, pan } = mixFor(ch)
+    ch.gain.gain.setTargetAtTime(gain, now, MIX_TIME_CONSTANT)
+    ch.panner.pan.setTargetAtTime(pan, now, MIX_TIME_CONSTANT)
+  }
+}
+
+/** 前台出不出声变了：出声立刻压低后台；停下等 DUCK_RELEASE_MS 仍没出声才抬回（句间停顿不抬） */
+function onAudibleChange(): void {
+  const frontAudible = [...channels.values()].some((ch) => ch.current && isFront(ch.id))
+  if (frontAudible) {
+    if (duckTimer) {
+      clearTimeout(duckTimer)
+      duckTimer = null
+    }
+    if (!ducking) {
+      ducking = true
+      applyMix()
+    }
+  } else if (ducking && !duckTimer) {
+    duckTimer = setTimeout(() => {
+      duckTimer = null
+      if ([...channels.values()].some((ch) => ch.current && isFront(ch.id))) return
+      ducking = false
+      applyMix()
+    }, DUCK_RELEASE_MS)
+  }
+  updatePhase()
+}
+
+/** 通道自己那段 gain → panner（接到公共主增益上），首次出声时建；初值直接落位不做渐变 */
+function ensureChannelNodes(context: AudioContext, ch: SpeechChannel): GainNode {
+  if (!ch.gain || !ch.panner) {
+    ch.gain = context.createGain()
+    ch.panner = context.createStereoPanner()
+    const { gain, pan } = mixFor(ch)
+    ch.gain.gain.value = gain
+    ch.panner.pan.value = pan
+    ch.gain.connect(ch.panner)
+    ch.panner.connect(ensureGraph(context))
+  }
+  return ch.gain
 }
 
 /** 把选中的输出设备落到 AudioContext 的 sink（Chromium 110+ 支持且切换平滑，不中断正在播的）。
@@ -465,7 +735,7 @@ export function getTtsAnalyser(): AnalyserNode | null {
   return outputAnalyser
 }
 
-function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
+function playSamples(ch: SpeechChannel, token: number, samples: Float32Array, sampleRate: number): Promise<void> {
   return new Promise((resolve) => {
     if (!audioContext) {
       audioContext = new AudioContext()
@@ -478,24 +748,29 @@ function playSamples(samples: Float32Array, sampleRate: number): Promise<void> {
     // 不至于整个会话从此哑掉（2026-10 修；此前泵会永久挂在等待里，增量只入队不播）
     const resume = context.state === 'suspended' ? context.resume().catch(() => {}) : Promise.resolve()
     void resume.then(() => {
-      const gain = ensureGraph(context)
+      if (token !== ch.token) return resolve() // 恢复期间这路被停了
+      const input = ensureChannelNodes(context, ch)
       const buffer = context.createBuffer(1, samples.length, sampleRate)
       buffer.getChannelData(0).set(samples)
       const source = context.createBufferSource()
       source.buffer = buffer
-      source.connect(gain)
+      source.connect(input)
       let settled = false
       const finish = () => {
         if (settled) return
         settled = true
         clearTimeout(watchdog)
-        if (activeSource === source) activeSource = null
+        if (ch.current === source) {
+          ch.current = null
+          onAudibleChange()
+        }
         resolve()
       }
-      // 看门狗：onended 丢失（context 卡 suspended 等）时按时长 + 3s 放弃，不挂泵
+      // 看门狗：onended 丢失（context 卡 suspended 等）时按时长 + 3s 放弃，不挂播放循环
       const watchdog = setTimeout(finish, (samples.length / sampleRate) * 1000 + 3000)
       source.onended = finish
-      activeSource = source
+      ch.current = source
+      onAudibleChange()
       source.start()
     })
   })
@@ -561,12 +836,16 @@ export function dynamicSpeedFor(length: number, min: number, max: number): numbe
   return lo + (hi - lo) * t
 }
 
-/** 播一段文本（用当前选中的音色；分句流水线：首句 1-2 秒出声，后续句边播边合成）。
- *  整条播报（默认）：停掉并清空正在播的再入队（新回复 / 试听优先）。
- *  流式增量（append: true）：只把片段接到队尾不打断——回复气泡边显示边念，
- *  收尾的整条播报也不冲掉前面还没播完的句子。
- *  开关关着时不播（试听用 force 跳过）。 */
-export function speakText(text: string, options?: { voice?: VoiceOption; force?: boolean; append?: boolean }): void {
+/** 播一段文本（分句流水线：首句 1-2 秒出声，后续句边播边合成）。
+ *  source：属于哪一路（会话 id / ASSISTANT_SPEECH_SOURCE；不给 = 前台默认路，试听用）。
+ *  整条播报（默认）：停掉并清空所有正在播的再入队（试听优先）。
+ *  流式增量（append: true）：只把片段接到这一路的队尾不打断——回复气泡边显示边念，
+ *  别的会话同时在念也不互相打断（前台居中、后台压低偏到一侧）。
+ *  开关关着时不播（试听用 force 跳过）；后台音量调到 0 时后台会话不播。 */
+export function speakText(
+  text: string,
+  options?: { voice?: VoiceOption; force?: boolean; append?: boolean; source?: string }
+): void {
   // 首句上限只对非流式的整条播报生效（一次性给全文时首句切短、快开口）。
   // 流式 append 的句子已在 SpeechIncrement 攒到自然句边界，一律整句送合成——
   // 再按 16 字切会把每句话剁成「半句 + 孤儿标点」两段，串行合成两遍，中间的
@@ -575,70 +854,129 @@ export function speakText(text: string, options?: { voice?: VoiceOption; force?:
   const parts = splitForSpeech(cleanForSpeech(text), firstLimit)
   if (!parts.length) return
   if (!options?.force && !replySpeakEnabled.value) return
+  const source = options?.source ?? DEFAULT_SOURCE
+  // 后台不播：直接丢，不攒着——攒下来等切过去再念的是过时的内容
+  if (!options?.force && !isFront(source) && ttsBackgroundVolume.value === 0) return
+  const ch = channelFor(source)
   if (!options?.append) {
-    stopSpeaking() // 先停旧的、清空队列，再取新 token：此后任何新打断都会使 token 失配
-    pumpVoice = options?.voice
-    pumpChars = 0
-  } else if (!pumping) {
-    pumpVoice = options?.voice // 泵停着（刚被打断 / 上一轮播完）：这次 append 启动新一轮
-    pumpChars = 0
+    stopSpeaking() // 先全停、清空，再取新 token：此后任何新打断都会使 token 失配
+    ch.voice = options?.voice
+    ch.chars = 0
+    ch.since = ++arrivals
+  } else if (!channelBusy(ch)) {
+    // 这一路闲着（刚被打断 / 上一轮播完）：这次 append 启动新一轮
+    ch.voice = options?.voice
+    ch.chars = 0
+    ch.since = ++arrivals
   }
-  speechQueue.push(...parts)
-  pumpChars += parts.reduce((sum, part) => sum + part.length, 0)
-  refreshPumpScale()
-  if (!pumping) void pumpSpeech()
+  if (ch.id === backgroundHolder && holderTimer) {
+    // 占麦的后台在让出前等到了新句子：接着说，不让
+    clearTimeout(holderTimer)
+    holderTimer = null
+  }
+  failed = false
+  ch.queue.push(...parts)
+  ch.chars += parts.reduce((sum, part) => sum + part.length, 0)
+  schedule()
+  updatePhase()
 }
 
-/** 播放泵：逐句「合成下一句与播放并行」地消费队列（RTF < 1，播放始终追得上合成）；
- *  流式增量随时往队尾加。token 失配（被 stopSpeaking 打断）即退出，
- *  残留队列已由 stopSpeaking 清空。 */
-async function pumpSpeech(): Promise<void> {
-  const token = speakToken
-  pumping = true
-  ttsPhase.value = 'loading'
-  try {
-    const synth = async (text: string) => {
-      const voice = pumpVoice ?? activeVoice()
-      engineBusy = true
-      try {
-        // 结尾完全没标点的片段（硬切截断 / 尾句）补个句号收韵律；逗号、冒号等
-        // 未完标点结尾的保持原样——引擎实测都能出声，保留自然的未完语气，
-        // 别叠加出「，。」「：。」这种连续标点
-        const spoken = /[,，、:：;；.。!！?？…]\s*$/.test(text) ? text : `${text}。`
-        return await window.fridayBridge.speakReply({
-          text: spoken,
-          speed: speechSpeedFor(voice.speed, pumpScale),
-          voice: voice.voice,
-          instruction: voice.instruction
-        })
-      } finally {
-        engineBusy = false
+/** 下一个合成名额给谁：前台垫着的不够 FRONT_LOOKAHEAD 句先给前台；够了才给占后台麦的 */
+function nextToSynthesize(): SpeechChannel | null {
+  let front: SpeechChannel | null = null
+  for (const ch of channels.values()) {
+    if (!isFront(ch.id) || !ch.queue.length || ch.ready.length >= FRONT_LOOKAHEAD) continue
+    if (!front || ch.since < front.since) front = ch
+  }
+  if (front) return front
+  const back = claimBackground()
+  return back && back.queue.length && back.ready.length < BACK_LOOKAHEAD ? back : null
+}
+
+/** 合成调度：引擎里同时只放一句（主进程本来就串行，多塞只会让优先级失效）；
+ *  一句回来就派下一句。合成与播放各走各的——播放循环从 ready 里取，取走一句就再调度。 */
+function schedule(): void {
+  if (inFlight) return
+  const ch = nextToSynthesize()
+  if (!ch) return
+  const text = ch.queue.shift()!
+  const gen = engineGen
+  const token = ch.token
+  inFlight = { channel: ch.id, gen }
+  ch.synthesizing = true
+  const done = (audio: SynthAudio | null, error?: unknown) => {
+    if (gen !== engineGen) return // 全停过：这句作废，名额早已放出
+    inFlight = null
+    ch.synthesizing = false
+    if (token === ch.token) {
+      if (audio && audio.samples.length) ch.ready.push(audio)
+      if (error !== undefined) {
+        // 失败时清掉这一路没播到的句子：不清的话下一轮 append 会先播这些旧句（串台），
+        // 而引擎故障时它们也只会再失败一遍。新回复的句子照常入队重试——serve 死亡由
+        // 主进程回收句柄，下次合成会重新拉起引擎，自动恢复。
+        ch.queue = []
+        failed = true
+        ttsDetail.value = error instanceof Error ? error.message : String(error)
       }
     }
-    let next = speechQueue.length ? synth(speechQueue.shift()!) : null
-    while (next) {
-      const audio = await next
-      if (token !== speakToken) return // 等待期间被打断（来了更新的整条回复或手动停止）
-      next = speechQueue.length ? synth(speechQueue.shift()!) : null
-      if (!audio.samples.length) continue
-      ttsPhase.value = 'speaking'
-      await playSamples(audio.samples, audio.sampleRate)
-      if (token !== speakToken) return
-    }
-    if (token === speakToken) ttsPhase.value = 'idle'
-  } catch (error) {
-    if (token === speakToken) {
-      // 失败时清掉没播到的句子：不清的话下一轮 append 重起泵会先播这些旧句（串台），
-      // 而引擎故障时它们也只会再失败一遍。新回复的句子照常入队重试——serve 死亡由
-      // 主进程回收句柄，下次合成会重新拉起引擎，自动恢复。
-      speechQueue = []
-      ttsPhase.value = 'error'
-      ttsDetail.value = error instanceof Error ? error.message : String(error)
+    if (ch.ready.length && !ch.playing) void runPlayback(ch)
+    settle(ch)
+    schedule()
+    updatePhase()
+  }
+  void synthesize(ch, text).then(
+    (audio) => done(audio),
+    (error: unknown) => done(null, error ?? new Error('合成失败'))
+  )
+  updatePhase()
+}
+
+/** 后台用的音色：开了「后台换音色」就挑一个和前台不同的快女声（RTF 最低的两个） */
+function backgroundVoice(): VoiceOption {
+  const main = activeVoice()
+  if (!ttsBackgroundVoiceSwap.value) return main
+  return main.voice === PRESET_VOICES[0].voice ? PRESET_VOICES[1] : PRESET_VOICES[0]
+}
+
+/** 一句送引擎：音色、语速按合成这一刻是前台还是后台取（切前台后下一句就换回来） */
+function synthesize(ch: SpeechChannel, text: string): Promise<SynthAudio> {
+  const front = isFront(ch.id)
+  const voice = ch.voice ?? (front ? activeVoice() : backgroundVoice())
+  // 动态语速开时按这一路本轮要念的总字数插值（流式追加会变多，后续句子自动提速）；关时就是固定 ttsSpeed
+  const base = ttsDynamicSpeed.value ? dynamicSpeedFor(ch.chars, ttsSpeedMin.value, ttsSpeedMax.value) : ttsSpeed.value
+  // 结尾完全没标点的片段（硬切截断 / 尾句）补个句号收韵律；逗号、冒号等
+  // 未完标点结尾的保持原样——引擎实测都能出声，保留自然的未完语气，
+  // 别叠加出「，。」「：。」这种连续标点
+  const spoken = /[,，、:：;；.。!！?？…]\s*$/.test(text) ? text : `${text}。`
+  return window.fridayBridge.speakReply({
+    text: spoken,
+    speed: speechSpeedFor(voice.speed, front ? base : base * BACKGROUND_SPEED_BOOST),
+    voice: voice.voice,
+    instruction: voice.instruction
+  })
+}
+
+/** 一路的播放循环：按序播 ready 里的句子；后台的每句开口前确认自己还占着麦
+ *  （切前台后旧前台变成后台、麦在别人手里：说完这句就停下排队）。
+ *  token 失配（被 stopSpeaking 打断）即退出。 */
+async function runPlayback(ch: SpeechChannel): Promise<void> {
+  if (ch.playing || !ch.ready.length || !mayPlay(ch)) return
+  const token = ch.token
+  ch.playing = true
+  try {
+    while (ch.ready.length && token === ch.token && mayPlay(ch)) {
+      const audio = ch.ready.shift()!
+      schedule() // 垫着的少了一句：空着的合成名额可以给这一路补上
+      await playSamples(ch, token, audio.samples, audio.sampleRate)
     }
   } finally {
-    // 自然播完才归还泵；被打断的（token 失配）不动 pumping——stopSpeaking 已把它复位，
-    // 免得旧泵迟到的 finally 把新一轮泵的标志清掉（那会让后续增量只排队不出声）
-    if (token === speakToken) pumping = false
+    // 自然播完 / 让麦才归还；被打断的（token 失配）不动——stopSpeaking 已复位，
+    // 免得迟到的 finally 把新一轮的标志清掉（那会让后续增量只排队不出声）
+    if (token === ch.token) {
+      ch.playing = false
+      settle(ch)
+      kick()
+    }
   }
 }
 
@@ -665,7 +1003,8 @@ const SENTENCE_END = '。！？!?；;：\n'
 /** 跨行结构的围栏（开闭同一个记号）：里面的内容不念 */
 const SPEECH_FENCES = ['```', '$$']
 
-export function createSpeechIncrement(): SpeechIncrement {
+/** source：这个游标的句子送哪一路（会话 id / ASSISTANT_SPEECH_SOURCE；不给 = 前台默认路） */
+export function createSpeechIncrement(source: string = DEFAULT_SOURCE): SpeechIncrement {
   let buffer = '' // 围栏外、还没成句的文本
   let pending = '' // 还没判定的原始增量（可能卡着半个围栏记号，如片尾的「``」）
   let muted = 0 // pending 开头有几个字来自 skip：只参与围栏判定，不进句缓冲
@@ -686,13 +1025,13 @@ export function createSpeechIncrement(): SpeechIncrement {
     buffer += text
     for (let i = buffer.length - 1; i >= 0; i--) {
       if (SENTENCE_END.includes(buffer[i])) {
-        speakText(buffer.slice(0, i + 1), { append: true })
+        speakText(buffer.slice(0, i + 1), { append: true, source })
         buffer = buffer.slice(i + 1)
         break
       }
     }
     if (buffer.length >= 120) {
-      speakText(buffer, { append: true })
+      speakText(buffer, { append: true, source })
       buffer = ''
     }
   }
@@ -754,7 +1093,7 @@ export function createSpeechIncrement(): SpeechIncrement {
       pending = ''
       muted = 0
       fence = null
-      if (buffer.trim()) speakText(buffer, { append: true })
+      if (buffer.trim()) speakText(buffer, { append: true, source })
       buffer = ''
     }
   }

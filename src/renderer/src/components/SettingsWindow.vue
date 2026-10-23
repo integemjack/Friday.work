@@ -17,11 +17,15 @@ import {
   replySpeakEnabled,
   setCurrentVoice,
   setReplySpeak,
+  setTtsBackgroundVoiceSwap,
+  setTtsBackgroundVolume,
   setTtsDynamicSpeed,
   setTtsSpeed,
   setTtsSpeedMax,
   setTtsSpeedMin,
   stopSpeaking,
+  ttsBackgroundVoiceSwap,
+  ttsBackgroundVolume,
   ttsDetail,
   ttsDynamicSpeed,
   ttsPhase,
@@ -168,6 +172,12 @@ const speedMinValue = computed<number>({
 const speedMaxValue = computed<number>({
   get: () => ttsSpeedMax.value,
   set: (value: number) => setTtsSpeedMax(value)
+})
+
+/** 后台会话音量（0–100%）：前台说话时后台压到这么低；0 = 后台会话不播 */
+const backgroundVolumeValue = computed<number>({
+  get: () => ttsBackgroundVolume.value,
+  set: (value: number) => setTtsBackgroundVolume(value)
 })
 
 /** 克隆模型（前端两个 ONNX）还没装：向导里提醒首次会先下 ~260MB */
@@ -566,6 +576,22 @@ async function pickVoiceFiles(): Promise<void> {
         </div>
       </template>
       <div class="note">动态：按本轮要念的字数在最慢~最快之间自动取值——短句从容、长文提速，不用听完漫长的播报；固定：所有句子一个倍率。改动即时保存，正在念的这句不变、下一句生效。</div>
+
+      <div class="row">
+        <span class="key">后台会话音量</span>
+        <span class="value range-cell">
+          <input v-model.number="backgroundVolumeValue" class="input range" type="range" min="0" max="1" step="0.05" />
+          <span class="range-val">{{ ttsBackgroundVolume === 0 ? '不播' : `${Math.round(ttsBackgroundVolume * 100)}%` }}</span>
+        </span>
+      </div>
+      <div class="row">
+        <span class="key">后台换音色</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: ttsBackgroundVoiceSwap }" @click="setTtsBackgroundVoiceSwap(true)">开</button>
+          <button class="small-btn" :class="{ strong: !ttsBackgroundVoiceSwap }" @click="setTtsBackgroundVoiceSwap(false)">关</button>
+        </span>
+      </div>
+      <div class="note">几个会话同时回复时一起念：正在看的会话居中、原声；其他会话偏到左右一侧，前台说话时压到这个音量、前台安静时稍抬高。同一时刻最多再加一个后台会话，其余的排队。后台换音色：后台自动用一个和前台不同的快音色，好分辨，也少占本机合成。调到「不播」就只念正在看的会话。</div>
 
       <div class="row">
         <span class="key">语音引擎</span>

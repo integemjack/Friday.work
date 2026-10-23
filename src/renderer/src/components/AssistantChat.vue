@@ -10,7 +10,9 @@ import { blockCase, blockPayload } from '../../../protocol/rpc/protocol.js'
 import MessageItem from './MessageItem.vue'
 import AskPanel from './AskPanel.vue'
 import {
+  ASSISTANT_SPEECH_SOURCE,
   createSpeechIncrement,
+  setSpeechForeground,
   stopSpeaking,
   ttsDetail,
   ttsPhase,
@@ -153,11 +155,13 @@ watch(queued, (next, prev) => {
   }
 })
 
-// MARK: 回复语音播报（本地 kokoro TTS，开关在设置 › 语音播报）：
+// MARK: 回复语音播报（本地 friday-voice 引擎，开关在设置 › 语音播报）：
 // 回复文本随显示的气泡实时播——桌面气泡（store.noteAssistantStream）按块增量投一片、
 // 语音就把那一片攒出的整句接进队列（句中不切、不抢话，代码块/链接等 cleanForSpeech
 // 清掉不念）；消息完成时把没等到句末标点的尾句播完。自己发言不打断正在播的
 // （2026-12 改：发送内容把播报掐断体验差，新回复的句子 append 到队尾接着播）。
+// 每个会话、助手日志各走一路（speechOutput 的通道）：可以同时出声——正在看的那路
+// 居中原声，后台的偏到一侧、前台说话时压低，不再一句 A 一句 B 地穿插。
 // 两种模式的信号：
 //   - 助手模式：日志条 text 增量实时播，streaming false 收尾播尾句；
 //   - 会话模式：所有会话 assistant 消息的 text 块增量实时播（后台会话也播，不只当前会话），
@@ -188,7 +192,7 @@ watch(
         !entry.data?.silent && !entry.interrupted && !entry.data?.error && entry.text.trim().length > 0
       let stream = entryStreams.get(entry.id)
       if (!stream) {
-        stream = { inc: createSpeechIncrement(), len: 0 }
+        stream = { inc: createSpeechIncrement(ASSISTANT_SPEECH_SOURCE), len: 0 }
         entryStreams.set(entry.id, stream)
       }
       // 首帧已有的文本当历史不补播；之后流式长出来的部分实时送播（新条目直接落地也
@@ -302,7 +306,7 @@ watch(
           // 完结消息里「新出现的块」= 服务端重推历史换了块 id（noteAssistantStream 同款
           // 场景：新一轮活动把已见过的消息按新块 id 重弹）：内容念过了，游标直接对齐、
           // 不重播；未完成消息的新块才是流式新段，从头播
-          stream = { inc: createSpeechIncrement(), len: 0 }
+          stream = { inc: createSpeechIncrement(item.conv), len: 0 }
           blockStreams.set(key, stream)
           if (historical || done) {
             stream.inc.skip(full)
@@ -330,6 +334,12 @@ watch(
 
 // （切会话/切换模式不再停播报：播报游标按全局会话记录、新打开的会话已有内容
 //  由 freshConvs 当历史不播，切走时打断正在播的只会平白断流——2026-10 修复。）
+// 切会话 / 进出助手模式只换前台：新前台滑到正中、旧前台滑到侧面压低，两边都不打断。
+watch(
+  [assistantChat, conversationID],
+  ([assistant, conv]) => setSpeechForeground(assistant ? ASSISTANT_SPEECH_SOURCE : (conv ?? '')),
+  { immediate: true }
+)
 
 /** 播报状态行文案（下载/解压/加载/播报中/出错）；叠加在常规状态后面 */
 const ttsStatusLine = computed(() => {

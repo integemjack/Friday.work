@@ -13,7 +13,7 @@ const { reactive, computed, watch, nextTick } = require('vue')
 
 const speech = require('../.tmp/speechoutput.cjs')
 const { blockCase, blockPayload } = require('../.tmp/protocol.cjs')
-const { createSpeechIncrement } = speech
+const { createSpeechIncrement, setSpeechForeground } = speech
 
 // ---- mock 桥：记录每次合成调用、手动放行（空 samples 让泵跳过播放，不碰 AudioContext） ----
 function mockBridge() {
@@ -56,6 +56,8 @@ function mockBridge() {
 // ---- 复刻 AssistantChat.vue 会话模式 watch（与产品代码保持一致，仅替换依赖名） ----
 function setupWatch(store) {
   const conversationID = computed(() => store.activeConversationID)
+  // 前台跟当前会话（产品里还看助手模式，这里只有会话模式）
+  const stopForeground = watch(conversationID, (conv) => setSpeechForeground(conv ?? ''), { immediate: true })
   const seenConversations = new Set()
   const seenMessageFinish = new Map()
   const blockStreams = new Map()
@@ -119,7 +121,7 @@ function setupWatch(store) {
           let stream = blockStreams.get(key)
           if (!stream) {
             // 完结消息里「新出现的块」= 服务端重推历史换了块 id：念过了，不重播
-            stream = { inc: createSpeechIncrement(), len: 0 }
+            stream = { inc: createSpeechIncrement(item.conv), len: 0 }
             blockStreams.set(key, stream)
             if (historical || done) {
               stream.inc.skip(full)
@@ -140,7 +142,15 @@ function setupWatch(store) {
     },
     { immediate: true }
   )
-  return { stop, seenConversations, blockStreams, seenMessageFinish }
+  return {
+    stop: () => {
+      stop()
+      stopForeground()
+    },
+    seenConversations,
+    blockStreams,
+    seenMessageFinish
+  }
 }
 
 // ---- store / 消息模拟 ----
@@ -400,6 +410,42 @@ test('中途起播：已有文本停在代码块里，后面长出来的代码�
     await flushMicro()
     await drain()
     assert.deepEqual(calls, ['运行即可。'], `代码下半截不进合成（calls=${JSON.stringify(calls)}）`)
+  } finally {
+    w.stop()
+    restore()
+  }
+})
+
+// ---- 多会话并行：前台 A 与后台 B 同时流式，各走各的通道，不再一句 A 一句 B 穿插着排队 ----
+test('并行：前台 A 和后台 B 同时流式，前台优先合成，后台排在前台垫满之后', async () => {
+  const { calls, release, flushMicro, drain, restore } = mockBridge()
+  const w = setupWatch(store)
+  try {
+    store.details.B = newDetail()
+    await nextTick()
+    const a = assistantMsg()
+    const b = assistantMsg()
+    pushMessage('A', a)
+    pushMessage('B', b)
+    await nextTick()
+    streamChunk('B', b, 'B 的第一句。')
+    await nextTick()
+    streamChunk('A', a, 'A 的第一句。')
+    await nextTick()
+    streamChunk('B', b, 'B 的第二句。')
+    await nextTick()
+    streamChunk('A', a, 'A 的第二句。')
+    await nextTick()
+    await flushMicro()
+    assert.deepEqual(calls, ['B 的第一句。'], '引擎空着时先到的后台句子直接送合成')
+    release()
+    await flushMicro()
+    assert.deepEqual(calls.slice(1), ['A 的第一句。'], '之后前台优先拿合成名额')
+    release()
+    await flushMicro()
+    assert.deepEqual(calls.slice(2), ['A 的第二句。'], '前台垫着的不够两句，接着给前台')
+    await drain()
+    assert.deepEqual(calls.slice(3), ['B 的第二句。'], '前台排空后才轮到后台')
   } finally {
     w.stop()
     restore()

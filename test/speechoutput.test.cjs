@@ -356,3 +356,111 @@ test('中途起播：历史经 skip 过游标，停在代码块中间时后面�
     restore()
   }
 })
+
+// ---- 多来源并行播报：每个会话一路，前台优先合成、后台一次只让一路占麦 ----
+// 这个 mock 记下送合成的整个 payload（语速 / 音色），并能按调用顺序放行
+function payloadBridge() {
+  const calls = []
+  const pending = []
+  globalThis.window = {
+    fridayBridge: {
+      speakReply: (payload) => {
+        calls.push(payload)
+        return new Promise((resolve) => pending.push(resolve))
+      },
+      cancelCosyVoice: () => Promise.resolve()
+    }
+  }
+  const flushMicro = async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+  const release = () => (pending.shift() ?? (() => {}))({ samples: new Float32Array(0), sampleRate: 24000 })
+  const restore = () => {
+    speech.stopSpeaking()
+    for (const resolve of pending.splice(0)) resolve({ samples: new Float32Array(0), sampleRate: 24000 })
+    speech.setSpeechForeground('')
+    delete globalThis.window
+  }
+  return { calls, release, flushMicro, restore, texts: () => calls.map((c) => c.text) }
+}
+
+test('并行：后台一次只让一路占麦，占麦的空下来要等一会儿才让给下一路', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { release, flushMicro, restore, texts } = payloadBridge()
+  try {
+    speech.setSpeechForeground('A')
+    speech.speakText('B 说一句。', { force: true, append: true, source: 'B' })
+    speech.speakText('C 说一句。', { force: true, append: true, source: 'C' })
+    await flushMicro()
+    assert.deepEqual(texts(), ['B 说一句。'], 'B 先来，占后台麦')
+    release()
+    await flushMicro()
+    assert.deepEqual(texts(), ['B 说一句。'], 'B 刚说完（可能在等模型下一片），C 还不能插进来')
+
+    speech.speakText('B 接着说。', { force: true, append: true, source: 'B' })
+    await flushMicro()
+    assert.deepEqual(texts().slice(1), ['B 接着说。'], '让出前等到了新句子：B 接着占麦')
+    release()
+    await flushMicro()
+
+    t.mock.timers.tick(3000)
+    await flushMicro()
+    assert.deepEqual(texts().slice(2), ['C 说一句。'], 'B 空了 3 秒才让麦给 C')
+    release()
+    await flushMicro()
+  } finally {
+    restore()
+  }
+})
+
+test('并行：后台提速、换一个和前台不同的快音色；前台照常', async () => {
+  const { calls, release, flushMicro, restore } = payloadBridge()
+  try {
+    speech.setTtsDynamicSpeed(false)
+    speech.setTtsSpeed(1)
+    speech.setTtsBackgroundVoiceSwap(true)
+    speech.setSpeechForeground('A')
+    speech.speakText('前台的句子。', { force: true, append: true, source: 'A' })
+    await flushMicro()
+    release()
+    await flushMicro()
+    speech.speakText('后台的句子。', { force: true, append: true, source: 'B' })
+    await flushMicro()
+    const [front, back] = calls
+    assert.equal(front.speed, 1, '前台原速')
+    assert.equal(front.voice, speech.activeVoice().voice, '前台用选中的音色')
+    assert.ok(Math.abs(back.speed - 1.2) < 1e-9, `后台提速 1.2×（实际 ${back.speed}）`)
+    assert.notEqual(back.voice, front.voice, '后台换了个音色')
+    release()
+    await flushMicro()
+  } finally {
+    restore()
+  }
+})
+
+test('并行：切前台后下一句按新身份合成；后台音量 0 时后台不播', async () => {
+  const { calls, release, flushMicro, restore, texts } = payloadBridge()
+  try {
+    speech.setTtsDynamicSpeed(false)
+    speech.setTtsSpeed(1)
+    speech.setSpeechForeground('A')
+    speech.speakText('B 第一句。', { force: true, append: true, source: 'B' })
+    speech.speakText('B 第二句。', { force: true, append: true, source: 'B' })
+    await flushMicro()
+    speech.setSpeechForeground('B') // 用户切到 B：正在合成的那句不动，下一句起按前台
+    release()
+    await flushMicro()
+    assert.deepEqual(texts(), ['B 第一句。', 'B 第二句。'])
+    assert.equal(calls[1].speed, 1, '切成前台后的句子不再提速')
+    release()
+    await flushMicro()
+
+    speech.setTtsBackgroundVolume(0)
+    speech.speakText('A 现在是后台。', { force: false, append: true, source: 'A' })
+    await flushMicro()
+    assert.ok(!texts().includes('A 现在是后台。'), '后台音量 0：后台会话的句子直接丢，不攒着过后再念')
+  } finally {
+    speech.setTtsBackgroundVolume(0.25)
+    restore()
+  }
+})
