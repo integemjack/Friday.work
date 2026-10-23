@@ -245,7 +245,10 @@ async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressCha
         let lastCode = 0
         for (let attempt = 0; attempt < 3 && !info; attempt++) {
           if (attempt) await new Promise((r) => setTimeout(r, 3000))
-          const sidecar = await fetch(url.replace(/\.(zip|tar\.gz)$/i, '.json'), { redirect: 'follow' })
+          const sidecar = await fetch(url.replace(/\.(zip|tar\.gz)$/i, '.json'), {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(30_000)
+          })
           if (sidecar.ok) info = (await sidecar.json()) as { sha256?: string; version?: string }
           else lastCode = sidecar.status
         }
@@ -254,25 +257,41 @@ async function downloadAsset(to: WebContents, asset: Asset, channel: ProgressCha
         expected = info.sha256
         if (!expected) throw new Error('校验清单里没有 sha256')
       }
-      const res = await fetch(url, { redirect: 'follow' })
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
-      const total = Number(res.headers.get('content-length') ?? 0)
-      const hash = createHash('sha256')
-      let received = 0
-      let lastPush = 0
-      const stream = Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream)
-      stream.on('data', (chunk: Uint8Array) => {
-        hash.update(chunk)
-        received += chunk.length
-        const now = Date.now()
-        if (now - lastPush > 400) {
-          lastPush = now
-          pushProgress(to, 'downloading', total ? Math.round((received / total) * 100) : undefined, asset.label, channel)
+      // 连接停摆（服务器收下请求不回数据）时这个下载会永久挂起，starting 永不落定、
+      // 语音功能从此卡死到重启：挂一个「60 秒没新数据就捨断」的看门狗
+      const abort = new AbortController()
+      let watchdog: NodeJS.Timeout | null = null
+      const kick = (): void => {
+        if (watchdog) watchdog.refresh()
+        else {
+          watchdog = setTimeout(() => abort.abort(new Error('下载停摆（60 秒没有新数据）')), 60_000)
+          watchdog.unref?.()
         }
-      })
-      await pipeline(stream, createWriteStream(part))
-      const digest = hash.digest('hex')
-      if (digest !== expected) throw new Error(`校验不过（sha256 ${digest.slice(0, 12)}…）`)
+      }
+      try {
+        const res = await fetch(url, { redirect: 'follow', signal: abort.signal })
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+        const total = Number(res.headers.get('content-length') ?? 0)
+        const hash = createHash('sha256')
+        let received = 0
+        let lastPush = 0
+        const stream = Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream)
+        stream.on('data', (chunk: Uint8Array) => {
+          kick()
+          hash.update(chunk)
+          received += chunk.length
+          const now = Date.now()
+          if (now - lastPush > 400) {
+            lastPush = now
+            pushProgress(to, 'downloading', total ? Math.round((received / total) * 100) : undefined, asset.label, channel)
+          }
+        })
+        await pipeline(stream, createWriteStream(part), { signal: abort.signal })
+        const digest = hash.digest('hex')
+        if (digest !== expected) throw new Error(`校验不过（sha256 ${digest.slice(0, 12)}…）`)
+      } finally {
+        if (watchdog) clearTimeout(watchdog)
+      }
       await rename(part, dest)
       return
     } catch (error) {
@@ -438,7 +457,17 @@ async function ensureServe(to: WebContents, need: ServeNeed = {}): Promise<Runni
     }
     await stopServe() // 缺本次需要的能力（模型是后来下的）：重启换参数
   }
-  if (starting) return starting
+  if (starting) {
+    const current = await starting
+    const ok =
+      (!need.forTts || current.caps.tts) &&
+      (!need.forDictation || current.caps.whisper) &&
+      (!need.forClone || current.caps.clone)
+    if (ok) return current
+    // 在跑的这轮启动不满足本次要的能力（比如 TTS 先触发启动、期间听写请求进来，
+    // 拿到无 whisper 的 serve 听写必失败，要等闲置重启才自愈）：按缺的能力重启再给
+    await stopServe()
+  }
   const task = (async () => {
     await ensureFiles(to, need)
     // 用哪个引擎：本版本目录优先，没有（下载失败/未发布）回落旧目录（0.4.x），参数按版本兼容
@@ -1010,7 +1039,10 @@ async function importVoiceFiles(to: WebContents, paths: string[]): Promise<Voice
       for (const item of staged) settle(item, loaded.has(item.safe))
       // settle 里失败的（结构不对、引擎跳过的那种不致命坏文件）已删掉复制的文件：
       // user-voices 干净、引擎内存里也没加载它，不用再重启
-    } catch {
+    } catch (error) {
+      // 「引擎没升级成功」是我们主动抛的分类结果，不是 serve 起不来：直接上抛给用户，
+      // 别掉进下面的逐文件验证，最后把锅甩给环境/坏文件
+      if (error instanceof Error && error.message.startsWith('新版语音引擎没升级成功')) throw error
       // serve 起不来：这批里有致命坏文件（实测会让引擎启动即退）。全部撤回 staging，逐个验
       for (const item of staged) {
         if (existsSync(userFile(item.safe))) {
@@ -1164,15 +1196,15 @@ export function registerCosyVoiceIpc(): void {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${running.token}` }
     })
-    // 删的音色有显示名映射的一并清掉，避免映射越积越多
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } }
+      throw new Error(body.error?.message ?? `删除失败（${response.status}）`)
+    }
+    // 删成功了才清显示名映射：先清的话引擎删除失败时映射已丢，音色还在但 UI 只能显示安全名
     const map = loadDisplayNames()
     if (map[name]) {
       delete map[name]
       saveDisplayNames(map)
-    }
-    if (!response.ok) {
-      const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } }
-      throw new Error(body.error?.message ?? `删除失败（${response.status}）`)
     }
   })
   // 拖拽导入音色 gguf：路径是 preload 用 webUtils 从拖放的 File 里换出来的（和 upload:register-drop

@@ -10,6 +10,8 @@ export class ProtocolHost {
   private child: UtilityProcess | null = null
   private restartTimer: NodeJS.Timeout | null = null
   private startedAt = 0
+  /** stop() 之后不再自动拉起：退出流程里被杀的进程不能在关机路上复活 */
+  private stopped = false
 
   constructor(
     private readonly credentialStore: CredentialStore,
@@ -18,6 +20,7 @@ export class ProtocolHost {
 
   start(): void {
     if (this.child) return
+    this.stopped = false
     const child = utilityProcess.fork(join(__dirname, 'protocol.js'), [], {
       serviceName: 'friday-protocol',
       stdio: 'inherit'
@@ -27,7 +30,10 @@ export class ProtocolHost {
 
     child.on('message', (message) => this.onChildMessage(message))
     child.on('exit', () => {
-      this.child = null
+      // 只清自己：kill 后、exit 回调到来前 providePort 可能已经 start 出了新 child，
+      // 不能把新 child 的引用清掉（否则下个请求端口又会 fork 出第二个协议进程）
+      if (this.child === child) this.child = null
+      if (this.stopped) return
       // 崩溃拉起（刚启动就退的慢一点重试）
       const uptime = Date.now() - this.startedAt
       const delay = uptime < 5_000 ? 3_000 : 500
@@ -87,6 +93,7 @@ export class ProtocolHost {
   }
 
   stop(): void {
+    this.stopped = true
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
       this.restartTimer = null

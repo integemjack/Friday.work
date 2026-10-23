@@ -127,7 +127,11 @@ export function registerDownloadIpc(getWindow: () => BrowserWindow | null): void
       root = result.filePaths[0]
     }
     const id = randomUUID()
-    sessions.set(id, { mode, root, handles: new Map(), topNames: new Map(), created: new Set(mode === 'file' ? [root] : []) })
+    // file 模式：只有这次新建的文件才进 created——用户在保存对话框里选了已有文件
+    // （覆盖保存）时，取消/失败绝不能把人家的原文件删掉
+    const created = new Set<string>()
+    if (mode === 'file' && !(await exists(root))) created.add(root)
+    sessions.set(id, { mode, root, handles: new Map(), topNames: new Map(), created })
     return { id, target: root }
   })
 

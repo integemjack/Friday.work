@@ -142,7 +142,7 @@ function resolveHandle(handle: string): string | null {
 let bridge: IpcBridge | null = null
 
 // 客户端自动更新：状态推给渲染层（设置窗口），退出时接手静默安装（仅 Windows）
-const updater = new ClientUpdate(() => mainWindow?.webContents ?? null)
+const updater = new ClientUpdate(() => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null))
 
 function createWindow(): void {
   // 贾维斯风：去掉系统边框和默认英文菜单，标题栏由应用自己画（TitleBar.vue，带拖拽区和窗控钮）
@@ -236,7 +236,7 @@ app.whenReady().then(() => {
 })
 
 app.on('second-instance', () => {
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
   }

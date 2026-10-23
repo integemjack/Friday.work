@@ -2,7 +2,7 @@
 // 文件：<userData>/Remotes/pairings.enc，格式 { <key>: { enc: <base64> } }
 
 import { app, safeStorage } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 interface Entry {
@@ -24,7 +24,10 @@ export class CredentialStore {
 
   private writeAll(all: Record<string, Entry>): void {
     mkdirSync(join(app.getPath('userData'), 'Remotes'), { recursive: true })
-    writeFileSync(this.file, JSON.stringify(all, null, 2), 'utf8')
+    // 先写临时文件再原子替换：写一半崩溃/断电不会留半截 JSON——那会把全部配对凭据静默清空
+    const tmp = `${this.file}.tmp`
+    writeFileSync(tmp, JSON.stringify(all, null, 2), 'utf8')
+    renameSync(tmp, this.file)
   }
 
   private encrypt(text: string): string {

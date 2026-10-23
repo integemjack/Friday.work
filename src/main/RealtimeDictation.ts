@@ -61,6 +61,9 @@ interface Session {
 }
 
 let session: Session | null = null
+/** voice:rt-begin 串行队列：begin 是长流程（起引擎 + 建 WS），并发重入会让两条握手
+ *  并行、后完成的覆盖 session，先到的那条 WS 无人引用也无人关（连接泄漏 + 重复推字幕） */
+let beginChain: Promise<void> = Promise.resolve()
 
 function closeSession(): void {
   const current = session
@@ -77,7 +80,9 @@ function closeSession(): void {
 export function registerRealtimeDictationIpc(): void {
   ipcMain.handle('voice:rt-status', async () => dictationEngineState())
 
-  ipcMain.handle('voice:rt-begin', async (event: IpcMainInvokeEvent, payload: { lang?: string }): Promise<void> => {
+  // 并发 begin 排队串行：等上一次 begin 完全落定（引擎起好、WS 建好），
+  // 这边的 closeSession() 才真能关掉它，一路只留一条 WS
+  const doBegin = async (event: IpcMainInvokeEvent, payload: { lang?: string }): Promise<void> => {
     // 上一路没关干净（渲染层崩溃等）：先关，一路只留一条 WS
     closeSession()
     const server = await ensureVoiceServe(event.sender, { forDictation: true, progress: 'voice:model-progress' })
@@ -167,6 +172,12 @@ export function registerRealtimeDictationIpc(): void {
         resolve()
       })
     })
+  }
+
+  ipcMain.handle('voice:rt-begin', (event: IpcMainInvokeEvent, payload: { lang?: string }): Promise<void> => {
+    const job = beginChain.catch(() => {}).then(() => doBegin(event, payload))
+    beginChain = job
+    return job
   })
 
   ipcMain.on('voice:rt-feed', (event, chunk: ArrayBuffer) => {

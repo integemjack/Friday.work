@@ -246,6 +246,15 @@ export class ClientUpdate {
         windowsHide: true
       })
       child.unref()
+      // Windows 上 spawn 的 ENOENT 不走同步异常，走异步 'error' 事件，上面的 try/catch
+      // 接不到——接不到就会清掉安装包路径直接退出，will-quit 的兜底安装也没得拉。
+      // 等有了结论再往下走
+      const spawned = await new Promise<boolean>((resolve) => {
+        child.once('spawn', () => resolve(true))
+        child.once('error', () => resolve(false))
+        setTimeout(() => resolve(true), 500)
+      })
+      if (!spawned) throw new Error('安装器没能启动（文件可能已被删或被拦截）')
       this.installerPath = '' // 清掉：will-quit 里的兑底安装不再重复拉起
     } catch (error) {
       // 拉不起来：不退出，留着安装包走「退出时静默安装」的兑底

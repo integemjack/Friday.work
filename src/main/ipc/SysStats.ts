@@ -52,7 +52,9 @@ async function sampleGpu(): Promise<Pick<SysStats, 'gpuPct' | 'vramUsedMiB' | 'v
     '--query-gpu=utilization.gpu,memory.used,memory.total',
     '--format=csv,noheader,nounits'
   ])
-  const nums = out?.trim().split(/\s*,\s*/).map(Number)
+  // 多卡时 nvidia-smi 一行一块：只取第一块卡——跨行切逗号会把「本卡总量\n下一卡的值」
+  // 切进同一列，Number 出 NaN 被当成「没有 GPU」
+  const nums = out?.trim().split(/\r?\n/)[0]?.split(/\s*,\s*/).map(Number)
   // " 34, 3416, 6144"（第一块卡）；列缺失或非数字视为没有
   if (!nums || nums.length < 3 || nums.slice(0, 3).some((n) => !Number.isFinite(n))) {
     return { gpuPct: null, vramUsedMiB: null, vramTotalMiB: null }

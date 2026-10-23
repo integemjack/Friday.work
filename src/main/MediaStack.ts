@@ -107,6 +107,12 @@ async function downloadTo(url: string, tmp: string): Promise<boolean> {
   const reader = response.body.getReader()
   const out = createWriteStream(tmp)
   let total = 0
+  // 写流出错（磁盘满/文件被删）时 'drain' 永远不来，await once(out,'drain') 会把
+  // 调用方永久挂起：挂一个 error 监听记下来，等的时候跟 drain 一起竞速
+  let writeError: Error | null = null
+  out.once('error', (error: Error) => {
+    writeError = error
+  })
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -117,11 +123,16 @@ async function downloadTo(url: string, tmp: string): Promise<boolean> {
         await unlink(tmp).catch(() => {})
         return false
       }
-      if (!out.write(value)) await once(out, 'drain')
+      if (!out.write(value)) {
+        await Promise.race([once(out, 'drain'), once(out, 'error')])
+        if (writeError) throw writeError
+      }
     }
     await new Promise<void>((resolve, reject) => out.end((error?: Error | null) => (error ? reject(error) : resolve())))
     return total > 0
   } catch {
+    // 掉不取消远端读取，连接挂着不放
+    await reader.cancel().catch(() => {})
     out.destroy()
     await unlink(tmp).catch(() => {})
     return false
