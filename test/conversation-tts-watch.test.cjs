@@ -83,6 +83,7 @@ function setupWatch(store) {
             key: `a:${conv}:${message.id}`,
             conv,
             msgID: message.id,
+            history: !!store.historyMessages[message.id],
             finishedAt: message.finishedAt,
             stoppedByUser: message.stoppedByUser,
             error: message.error,
@@ -111,7 +112,7 @@ function setupWatch(store) {
         if (!entry) continue
         const before = seenMessageFinish.get(item.key)
         const done = !!item.finishedAt
-        const historical = initial || freshConvs.has(item.conv)
+        const historical = initial || freshConvs.has(item.conv) || !!item.history
         const justFinished = !initial && done && !before && !historical
         const speakable = !item.stoppedByUser && !item.error && !item.notice
         for (const block of entry.message.blocks ?? []) {
@@ -155,7 +156,7 @@ function setupWatch(store) {
 
 // ---- store / 消息模拟 ----
 function freshStore() {
-  return reactive({ details: {}, activeConversationID: 'A' })
+  return reactive({ details: {}, historyMessages: {}, activeConversationID: 'A' })
 }
 
 let seq = 0
@@ -343,6 +344,36 @@ test('扰动：重推历史块 id 换新，旧句不重播、新回复照播', a
     await drain()
     assert.ok(calls.includes('块 id 换新后的新句子。'), `新回复照播（calls=${JSON.stringify(calls)}）`)
     assert.equal(calls.filter((c) => c === '旧 id 的句子。').length, 1, '旧句不因块 id 换新重播')
+  } finally {
+    w.stop()
+    restore()
+  }
+})
+
+// ---- 扰动 5：打开历史会话（消息没带 finishedAt），发消息后服务端换块 id 重推——旧回复不念、新回复照播 ----
+test('扰动：历史会话不带 finishedAt、重推换块 id，旧回复不重念、新回复照播', async () => {
+  const { calls, drain, flushMicro, restore } = mockBridge()
+  const w = setupWatch(store)
+  try {
+    await nextTick()
+    // subscribeConversation：订阅那一刻已有的助手消息登记进 historyMessages，整段落进 details
+    store.historyMessages.h1 = true
+    store.details.B = newDetail()
+    for (const message of [
+      { id: 'hu1', role: 'user', blocks: [] },
+      { id: 'h1', role: 'assistant', blocks: [{ id: 'hb1', kind: { text: '没带完结字段的旧回复。' } }] }
+    ]) {
+      store.details.B.messages.push({ message, version: 0 })
+    }
+    await nextTick()
+    // 发消息后服务端重推：同一条消息、块 id 换新、仍不带 finishedAt
+    liveMessage('B', 'h1').blocks = [{ id: 'hb1-r', kind: { text: '没带完结字段的旧回复。' } }]
+    await nextTick()
+    await oneReply('B', ['发消息之后的新回复。'])
+    await flushMicro()
+    await drain()
+    assert.ok(!calls.includes('没带完结字段的旧回复。'), `旧回复不重念（calls=${JSON.stringify(calls)}）`)
+    assert.ok(calls.includes('发消息之后的新回复。'), '新回复照常播')
   } finally {
     w.stop()
     restore()

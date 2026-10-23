@@ -433,6 +433,10 @@ export const useAppStore = defineStore('app', {
     opCards: [] as DesktopOp[],
     /** 流式标记：messageID → 块ID → 该块已投过气泡的文本长度（增量从这里算；按块记，多段思考/回复各自成泡） */
     streamMarks: {} as Record<string, Record<string, number>>,
+    /** 历史消息：打开会话（订阅回执 / 整段快照）那一刻就已在的助手消息 id。服务端随新一轮活动重推历史时
+     *  块 id 会换新，旧会话的消息又未必带 finishedAt，所以「是不是历史」由客户端自己记、不靠完结字段：
+     *  登记在这里的消息只记下标不投气泡，历史里的工具调用也不再弹成操作卡（等审批的除外），播报同样不念 */
+    historyMessages: {} as Record<string, true>,
     /** 气泡全文记忆：id（会话:类型:块）→ 最后全文。气泡 5 秒渐隐后会从数组删除，
      *  流式一断再续时只能重建气泡——没有这份记忆新气泡就只剩尾巴那截（显示不全） */
     castTexts: {} as Record<string, string>,
@@ -1025,6 +1029,9 @@ export const useAppStore = defineStore('app', {
           versions: { ...(payload.versions ?? {}) }
         }
         this.rebuildPath(this.details[conversationID]!)
+        // 订阅那一刻已有的消息全是历史；正在跑（生成中 / 等审批）时最后一条助手消息还在流，不算
+        const runtime = payload.runtime
+        this.noteHistory(this.details[conversationID]!, runtime ? runtime.generating || runtime.pendingApproval : false)
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
       }
@@ -1041,6 +1048,9 @@ export const useAppStore = defineStore('app', {
       const removed = new Set((this.details[conversationID]?.nodes ?? []).map((node) => node.id))
       for (const messageID of Object.keys(this.streamMarks)) {
         if (removed.has(messageID)) delete this.streamMarks[messageID]
+      }
+      for (const messageID of Object.keys(this.historyMessages)) {
+        if (removed.has(messageID)) delete this.historyMessages[messageID]
       }
       delete this.details[conversationID]
       this.bubbles = this.bubbles.filter((item) => item.conversationID !== conversationID)
@@ -1370,6 +1380,34 @@ export const useAppStore = defineStore('app', {
         for (const node of incoming) {
           if (node.role === 'assistant') this.noteAssistantStream(snapshot.conversation.id, node)
         }
+      } else {
+        // 整段替换：没跟踪过的消息按历史登记。跑没跑这时说不准（runtime 事件可能还没到），
+        // 末尾那条没完结的助手消息先不定性，留给后续增量照旧首见只记
+        this.noteHistory(detail)
+      }
+    },
+
+    /**
+     * 把会话里还没跟踪过的助手消息登记为历史（见 historyMessages）。
+     * live：会话是不是正在跑。true 时路径末尾那条没完结的助手消息还在流——不算历史，按当前长度
+     * 记下标，后续增量照常投；false 时它也是历史；不传 = 说不准，末尾没完结的那条先不动。
+     */
+    noteHistory(detail: ConversationDetail, live?: boolean) {
+      const tail = [...detail.messages].reverse().find((entry) => entry.message.role === 'assistant')?.message
+      for (const node of detail.nodes) {
+        if (node.role !== 'assistant' || this.historyMessages[node.id] || this.streamMarks[node.id]) continue
+        const done = !!(node.finishedAt || node.error || node.stoppedByUser)
+        if (node.id === tail?.id && !done && live !== false) {
+          if (!live) continue
+          const marks: Record<string, number> = {}
+          for (const block of node.blocks ?? []) {
+            const kind = blockCase(block)
+            if (kind === 'thinking' || kind === 'text') marks[block.id] = String(blockPayload<string>(block, kind) ?? '').length
+          }
+          this.streamMarks[node.id] = marks
+          continue
+        }
+        this.historyMessages[node.id] = true
       }
     },
 
@@ -2229,21 +2267,28 @@ export const useAppStore = defineStore('app', {
      * 已完结（收尾/出错/被打断）的消息不会再有真正的流式增量：服务端随新一轮活动重推历史时块 id
      * 会换新（结束的会话里一执行新内容，已见过的消息会按新块 id 全部重弹成气泡），所以完结消息
      * 一律只记下标不投。
+     * 打开会话时就已在的历史消息（historyMessages）同样只记不投——旧会话的消息未必带 finishedAt，
+     * 光靠完结字段拦不住重推。历史消息、首见即完结的消息里的工具块也不再投操作卡（不然重推一到，
+     * 历史里每个工具调用都弹成一张卡），只有还在等审批/等回答的照投：要处理的事不能藏。
      */
     noteAssistantStream(conversationID: string, message: ChatMessage) {
       const seen = this.streamMarks[message.id]
       const marks = seen ?? {}
       const done = !!(message.finishedAt || message.error || message.stoppedByUser)
+      const history = !!this.historyMessages[message.id]
+      const quietTools = history || (!seen && done)
       for (const block of message.blocks ?? []) {
         const kind = blockCase(block)
         if (kind === 'tool') {
-          this.noteToolBlock(conversationID, blockPayload<ToolEvent>(block, 'tool'))
+          const event = blockPayload<ToolEvent>(block, 'tool')
+          if (quietTools && event?.status !== 'awaitingApproval') continue
+          this.noteToolBlock(conversationID, event)
           continue
         }
         if (kind !== 'thinking' && kind !== 'text') continue
         const full = String(blockPayload<string>(block, kind) ?? '')
         const mark = marks[block.id] ?? 0
-        if (seen && !done && full.length > mark) {
+        if (seen && !done && !history && full.length > mark) {
           this.pushBubble(conversationID, kind, full.slice(mark), block.id)
         }
         marks[block.id] = full.length

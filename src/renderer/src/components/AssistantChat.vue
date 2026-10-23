@@ -235,6 +235,7 @@ watch(
       key: string
       conv?: string
       msgID?: string
+      history?: boolean
       user?: boolean
       finishedAt?: string
       stoppedByUser?: boolean
@@ -262,6 +263,7 @@ watch(
           key: `a:${conv}:${message.id}`,
           conv,
           msgID: message.id,
+          history: !!store.historyMessages[message.id],
           finishedAt: message.finishedAt,
           stoppedByUser: message.stoppedByUser,
           error: message.error,
@@ -296,7 +298,9 @@ watch(
       const before = seenMessageFinish.get(item.key)
       const done = !!item.finishedAt
       // 新进会话里已完成的消息是历史：不播增量也不收尾（否则切会话/重连会念旧账）
-      const historical = initial || freshConvs.has(item.conv)
+      // 打开会话时就在的消息（store.historyMessages）同样是历史：旧会话的消息未必带 finishedAt，
+      // 服务端换块 id 重推时光看 done 拦不住，会从头把旧回复念一遍
+      const historical = initial || freshConvs.has(item.conv) || !!item.history
       const justFinished = !initial && done && !before && !historical
       const speakable = !item.stoppedByUser && !item.error && !item.notice
       for (const block of entry.message.blocks ?? []) {

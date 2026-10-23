@@ -41,10 +41,10 @@ writeFileSync(
 }
 `
 )
-// host / vue stub：渲染进程桥和响应式在 node 里不可用，气泡链路不碰它们
+// host / vue stub：渲染进程桥和响应式在 node 里不可用；host.request 可由用例经 globalThis.__hostReply 给回执（订阅）
 writeFileSync(
   join(tmp, 'host-stub.mjs'),
-  `export const host = { request: async () => ({}), on: () => () => {} }
+  `export const host = { request: async (req) => (globalThis.__hostReply ? globalThis.__hostReply(req) : {}), on: () => () => {} }
 export async function rpc() { return {} }
 export function ref(value) { return { value } }
 `
@@ -181,4 +181,101 @@ test('边界：fresh 完结消息整条到达不投（后台会话 / 打开旧�
   const m5 = message('m5', [block('blk-5a', 'text', '出错的消息')], { error: 'quota' })
   store.noteAssistantStream('conv-a', m5)
   assert.equal(store.bubbles.length, 0)
+})
+
+// ---- 打开历史会话后发消息：订阅那一刻已有的消息是历史（不靠 finishedAt） ----
+const tool = (id, toolID, status = 'succeeded') => ({
+  id,
+  kind: { tool: { _0: { id: toolID, name: 'run_shell', title: '执行命令', arguments: 'ls', result: 'ok', status } } }
+})
+const user = (id) => ({ id, role: 'user', blocks: [block(`${id}-b`, 'text', '问题')], createdAt: '2026-01-01T00:00:00Z' })
+
+/** 消息树按顺序串成一条路径（rebuildPath 按 parentID 展开，末尾那条才找得对） */
+const chain = (nodes) => nodes.map((node, i) => (i ? { ...node, parentID: nodes[i - 1].id } : node))
+
+/** 一段历史会话：两轮问答，回复里各带一个已结束的工具调用；suffix 换块 id（模拟服务端重推） */
+function history(suffix, extra = {}) {
+  return chain([
+    user('u0'),
+    message('a0', [block(`t0${suffix}`, 'thinking', '旧思考'), block(`x0${suffix}`, 'text', '旧回复'), tool(`k0${suffix}`, 'tool-0')], extra),
+    user('u1'),
+    message('a1', [block(`x1${suffix}`, 'text', '旧回复二'), tool(`k1${suffix}`, 'tool-1')], extra)
+  ])
+}
+const tail = (...nodes) => chain([history('').at(-1), ...nodes]).slice(1)
+
+/** 走真实 subscribeConversation 打开会话（订阅回执 = 整段会话 + runtime） */
+async function openConversation(nodes, runtime = { generating: false, pendingApproval: false }) {
+  const store = await getStore()
+  store.$reset()
+  store.currentMachine = 'm'
+  globalThis.__hostReply = () => ({ conversation: { id: 'h', nodes, selectedChildren: {} }, runtime, versions: {} })
+  try {
+    await store.subscribeConversation('h')
+  } finally {
+    delete globalThis.__hostReply
+  }
+  assert.ok(store.details['h'], '订阅落地')
+  return store
+}
+
+for (const finished of [true, false]) {
+  test(`修复目标：打开历史会话发消息，重推历史（${finished ? '带' : '不带'} finishedAt）不弹气泡、不弹操作卡`, async () => {
+    const extra = finished ? { finishedAt: '2026-01-01T00:01:00Z' } : {}
+    const store = await openConversation(history('', extra))
+    // 发消息：服务端重推历史（新块 id）+ 新的 user，再重推一次
+    store.applyConversationSnapshot({ conversation: { id: 'h', nodes: [...history('-r1', extra), ...tail(user('u2'))] }, partial: true })
+    store.applyConversationSnapshot({ conversation: { id: 'h', nodes: history('-r2', extra) }, partial: true })
+    assert.deepEqual(store.bubbles.map((b) => b.text), [], '历史不弹气泡')
+    assert.equal(store.opCards.length, 0, '历史里的工具调用不弹操作卡')
+
+    // 新一轮回复照常流式投泡
+    const reply = { ...message('a2', []), parentID: 'u2' }
+    store.applyWholeMessage({ conversationID: 'h', message: reply, version: 1 })
+    reply.blocks.push(block('x2', 'text', '新回复'), tool('k2', 'tool-2', 'running'))
+    store.applyWholeMessage({ conversationID: 'h', message: reply, version: 2 })
+    assert.deepEqual(store.bubbles.map((b) => b.text), ['新回复'])
+    assert.deepEqual(store.opCards.map((c) => c.id), ['tool-2'])
+  })
+}
+
+test('边界：历史里还在等审批的工具照常弹卡（要处理的事不藏）', async () => {
+  const store = await openConversation(history(''))
+  assert.ok(store.historyMessages['a0'], 'a0 登记为历史')
+  // 重推时 a0 里多了一个等审批的工具：历史也照弹（结束态的那个仍不弹）
+  const a0 = history('-r1').find((node) => node.id === 'a0')
+  a0.blocks.push(tool('k0-ask', 'tool-ask', 'awaitingApproval'))
+  store.applyConversationSnapshot({ conversation: { id: 'h', nodes: [a0] }, partial: true })
+  assert.deepEqual(store.opCards.map((c) => c.id), ['tool-ask'])
+})
+
+test('边界：打开正在生成的会话，末尾那条从订阅时的长度起续投增量', async () => {
+  const store = await openConversation(chain([user('u0'), message('a0', [block('x0', 'text', '已经流出来的')])]), {
+    generating: true,
+    pendingApproval: false
+  })
+  const live = { ...message('a0', [block('x0', 'text', '已经流出来的后续')]), parentID: 'u0' }
+  store.applyWholeMessage({ conversationID: 'h', message: live, version: 1 })
+  assert.deepEqual(store.bubbles.map((b) => b.text), ['后续'], '只投订阅之后长出来的')
+})
+
+test('边界：整段快照里没跟踪过的旧消息按历史登记，末尾没完结的新消息照常流', async () => {
+  const store = await rig()
+  store.applyConversationSnapshot({ conversation: { id: 'conv-a', nodes: [...history(''), ...tail(user('u2'), message('a2', []))] } })
+  store.applyConversationSnapshot({ conversation: { id: 'conv-a', nodes: history('-r1') }, partial: true })
+  store.applyConversationSnapshot({ conversation: { id: 'conv-a', nodes: history('-r2') }, partial: true })
+  assert.equal(store.bubbles.length, 0)
+  assert.equal(store.opCards.length, 0)
+  const reply = { ...message('a2', []), parentID: 'u2' }
+  store.applyWholeMessage({ conversationID: 'conv-a', message: reply, version: 1 })
+  reply.blocks.push(block('x2', 'text', '新回复'))
+  store.applyWholeMessage({ conversationID: 'conv-a', message: reply, version: 2 })
+  assert.deepEqual(store.bubbles.map((b) => b.text), ['新回复'])
+})
+
+test('边界：关掉会话清掉历史登记', async () => {
+  const store = await openConversation(history(''))
+  assert.ok(store.historyMessages['a0'])
+  await store.closeConversation('h')
+  assert.equal(store.historyMessages['a0'], undefined)
 })
