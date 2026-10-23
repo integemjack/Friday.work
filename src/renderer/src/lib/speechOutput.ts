@@ -646,7 +646,10 @@ async function pumpSpeech(): Promise<void> {
 
 /** 流式增量攒到句边界再入队：增量片常在句中截断，直接播会一字一顿；攒到句末
  *  标点 / 换行才成句送播（append 接队），长时间没有句末标点（无标点长文）就
- *  兜底直送（splitForSpeech 会按逗号 / 60 字硬切，不会憋着不出声）。 */
+ *  兜底直送（splitForSpeech 会按逗号 / 60 字硬切，不会憋着不出声）。
+ *  ``` 代码块、$$ 公式块是跨行结构：按句切开后每片都凑不齐成对围栏，cleanForSpeech
+ *  认不出来，代码会被逐行念出（2026-10 修）。所以游标自己记着「在不在围栏里」：
+ *  围栏里的内容直接丢、不参与切句，闭合后接着按句攒；收尾时还没闭合就整段丢掉。 */
 export interface SpeechIncrement {
   /** 流式又来了一片：接进缓冲，攒出完整句就送播 */
   push(chunk: string): void
@@ -655,26 +658,80 @@ export interface SpeechIncrement {
 }
 
 const SENTENCE_END = '。！？!?；;：\n'
+/** 跨行结构的围栏（开闭同一个记号）：里面的内容不念 */
+const SPEECH_FENCES = ['```', '$$']
 
 export function createSpeechIncrement(): SpeechIncrement {
-  let buffer = ''
+  let buffer = '' // 围栏外、还没成句的文本
+  let pending = '' // 还没判定的原始增量（可能卡着半个围栏记号，如片尾的「``」）
+  let fence: string | null = null // 当前所在围栏的记号；null = 在围栏外
+
+  /** 围栏外的文本接进句缓冲：攒到句末就送播，太长兜底直送 */
+  const feed = (text: string) => {
+    buffer += text
+    for (let i = buffer.length - 1; i >= 0; i--) {
+      if (SENTENCE_END.includes(buffer[i])) {
+        speakText(buffer.slice(0, i + 1), { append: true })
+        buffer = buffer.slice(i + 1)
+        break
+      }
+    }
+    if (buffer.length >= 120) {
+      speakText(buffer, { append: true })
+      buffer = ''
+    }
+  }
+
+  /** 消化 pending：围栏外的交给 feed，围栏里的丢掉；片尾可能是半个记号的留到下一片再判 */
+  const drain = () => {
+    while (pending) {
+      if (fence) {
+        const close = pending.indexOf(fence)
+        if (close < 0) {
+          // 没闭合：内容丢掉，只留可能是半个闭合记号的尾巴
+          pending = pending.slice(-(fence.length - 1))
+          return
+        }
+        pending = pending.slice(close + fence.length)
+        fence = null
+        // 围栏占位当空白（和 cleanForSpeech 整段清理一致），句子在围栏两侧接着攒
+        if (buffer) buffer += ' '
+        continue
+      }
+      let open = -1
+      let marker = ''
+      for (const candidate of SPEECH_FENCES) {
+        const at = pending.indexOf(candidate)
+        if (at >= 0 && (open < 0 || at < open)) {
+          open = at
+          marker = candidate
+        }
+      }
+      if (open >= 0) {
+        feed(pending.slice(0, open))
+        pending = pending.slice(open + marker.length)
+        fence = marker
+        continue
+      }
+      // 片尾的 ` / `` / $ 可能是下一片记号的前半，先扣住
+      const hold = /(?:`{1,2}|\$)$/.exec(pending)?.[0].length ?? 0
+      feed(pending.slice(0, pending.length - hold))
+      pending = pending.slice(pending.length - hold)
+      return
+    }
+  }
+
   return {
     push(chunk: string) {
       if (!chunk) return
-      buffer += chunk
-      for (let i = buffer.length - 1; i >= 0; i--) {
-        if (SENTENCE_END.includes(buffer[i])) {
-          speakText(buffer.slice(0, i + 1), { append: true })
-          buffer = buffer.slice(i + 1)
-          break
-        }
-      }
-      if (buffer.length >= 120) {
-        speakText(buffer, { append: true })
-        buffer = ''
-      }
+      pending += chunk
+      drain()
     },
     flush() {
+      // 扣住的半个记号到收尾也没凑成围栏：当普通字符；还在围栏里：未闭合部分整段丢
+      if (!fence) buffer += pending
+      pending = ''
+      fence = null
       if (buffer.trim()) speakText(buffer, { append: true })
       buffer = ''
     }

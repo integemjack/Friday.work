@@ -273,3 +273,59 @@ test('句缓冲：冒号引导句（如「如下：」）立刻成句送播，�
     restore()
   }
 })
+
+// ---- 流式播报遇到跨行结构（``` 代码块 / $$ 公式块）：按句切开后各片凑不齐围栏，曾逐行念代码 ----
+// 按固定字数切片模拟流式，逐片 push 后 flush；每次放行一句合成，收齐送进合成的全部句子
+async function streamSpeak(text, size) {
+  const { calls, release, flushMicro, restore } = mockBridge()
+  try {
+    const inc = speech.createSpeechIncrement()
+    for (let i = 0; i < text.length; i += size) {
+      inc.push(text.slice(i, i + size))
+      await flushMicro()
+    }
+    inc.flush()
+    for (let i = 0; i < 32; i++) {
+      await flushMicro()
+      release()
+    }
+    await flushMicro()
+    return calls.slice()
+  } finally {
+    restore()
+  }
+}
+
+test('流式代码块：围栏里的代码不念，围栏前后照常成句（与整段清理一致）', async () => {
+  const text = '示例如下：\n```ts\nconst a = foo(1);\nconsole.log(a);\n```\n运行即可。'
+  assert.deepEqual(cleanForSpeech(text), '示例如下： 运行即可。', '整段清理的基准')
+  for (const size of [1, 2, 3, 6, 11, text.length]) {
+    assert.deepEqual(await streamSpeak(text, size), ['示例如下：', '运行即可。'], `每 ${size} 字一片：代码不进合成`)
+  }
+})
+
+test('流式公式块：$$…$$ 跨行公式不念', async () => {
+  const text = '能量公式是：\n$$\nE = mc^2;\n$$\n其中 c 是光速。'
+  for (const size of [1, 4, 7]) {
+    assert.deepEqual(await streamSpeak(text, size), ['能量公式是：', '其中 c 是光速。'], `每 ${size} 字一片：公式不进合成`)
+  }
+})
+
+test('流式围栏：句中出现的代码块当空白，句子在两侧接着攒；记号被切成两半也认得', async () => {
+  const text = '先跑一下 ```sh\nnpm test;\n``` 再看结果。'
+  for (const size of [1, 2, 5]) {
+    assert.deepEqual(await streamSpeak(text, size), ['先跑一下 再看结果。'], `每 ${size} 字一片`)
+  }
+})
+
+test('流式围栏：收尾时代码块还没闭合，未闭合部分整段丢掉', async () => {
+  const calls = await streamSpeak('看这段：\n```py\nprint(1)\nprint(2)\n', 3)
+  assert.deepEqual(calls, ['看这段：'])
+})
+
+test('流式围栏：行内代码 / 单个 $ 被片尾扣住后照常放出，不误判成围栏', async () => {
+  assert.deepEqual(await streamSpeak('调用 `foo` 即可。', 4), ['调用 foo 即可。'], '行内代码的反引号跨片也照常清理')
+  const tail = await streamSpeak('单价 5$', 2)
+  assert.equal(tail.length, 1, '片尾扣住的 $ 收尾时放出')
+  assert.ok(tail[0].includes('5$'), `$ 当普通字符念（实际 ${tail[0]}）`)
+})
