@@ -104,13 +104,15 @@ h3 { margin: 0; font-size: 15px; }
   align-items: baseline;
   gap: 12px;
   padding: 9px 12px;
-  background: var(--card, #26272e);
+  /* 原来是 var(--card, #26272e)：--card 哪套主题都没定义，三套主题下都是写死的深灰 */
+  background: var(--panel-2);
   color: inherit;
   border: 1px solid var(--line, #33343c);
   border-radius: 8px;
   cursor: pointer;
   text-align: left;
 }
+.bot:not(:disabled):hover { background: var(--hover); border-color: var(--accent-a45); }
 .bot:disabled { opacity: 0.5; cursor: default; }
 .name { font-size: 13px; }
 .sub { font-size: 11px; opacity: 0.6; }
@@ -132,6 +134,17 @@ h3 { margin: 0; font-size: 15px; }
   box-shadow:
     0 0 30px var(--accent-a12),
     0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme='jarvis'] .bot {
+  background: var(--accent-a4);
+  border-color: var(--accent-a22);
+}
+
+[data-theme='jarvis'] .bot:not(:disabled):hover {
+  background: var(--accent-a10);
+  border-color: var(--accent-a55);
+  box-shadow: 0 0 12px var(--accent-a15);
 }
 
 [data-theme='jarvis'] h3 {

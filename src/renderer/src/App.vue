@@ -159,6 +159,21 @@ async function onComposerSubmit(text: string, attachments: Array<{ path: string;
   await store.submitText(text, attachments)
 }
 
+// 全局错误横幅：8 秒后自己收起（换了新错误重新计时；鼠标停在上面时不收，读完再走）。
+// 原来只能点掉——偶发的瞬时错误会一直挂在桌面底部
+let errorTimer = 0
+const errorHover = ref(false)
+function scheduleErrorDismiss(): void {
+  window.clearTimeout(errorTimer)
+  if (!store.error) return
+  errorTimer = window.setTimeout(() => {
+    if (errorHover.value) scheduleErrorDismiss()
+    else store.error = ''
+  }, 8000)
+}
+watch(() => store.error, scheduleErrorDismiss)
+onBeforeUnmount(() => window.clearTimeout(errorTimer))
+
 // 通话中（来电/呼出/接通中/通话中）：右栏顶部给通话面板让出 1/3、聊天缩到 2/3；空闲时聊天占满整栏
 const calling = computed(() => store.calling)
 </script>
@@ -257,7 +272,13 @@ const calling = computed(() => store.calling)
     <UpdateOverlay />
 
     <!-- 全局错误横幅 -->
-    <div v-if="store.error" class="error-toast" @click="store.error = ''">
+    <div
+      v-if="store.error"
+      class="error-toast"
+      @click="store.error = ''"
+      @mouseenter="errorHover = true"
+      @mouseleave="errorHover = false"
+    >
       {{ store.error }}
       <span class="close-hint">（点一下关掉）</span>
     </div>
@@ -520,5 +541,19 @@ const calling = computed(() => store.calling)
 .close-hint {
   opacity: 0.75;
   font-size: 11.5px;
+}
+
+/* 贾维斯：错误横幅改成深色全息条 + 红色描边辉光（实底大红块和整套 HUD 不搭） */
+[data-theme='jarvis'] .error-toast {
+  background: var(--panel-card-deep-a92);
+  color: #ffd2db;
+  border: 1px solid var(--fail-a60);
+  box-shadow:
+    0 0 18px var(--fail-a35),
+    0 10px 28px rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  font-family: var(--font-hud);
+  letter-spacing: 0.5px;
 }
 </style>

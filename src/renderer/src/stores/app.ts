@@ -1010,7 +1010,11 @@ export const useAppStore = defineStore('app', {
       // 订阅上限：超过就先丢掉最早一段非活动的（退订、清状态）
       const ids = Object.keys(this.details)
       if (ids.length >= 10) {
-        const oldest = ids.find((id) => id !== this.activeConversationID)
+        // 先淘汰空闲的：正在跑 / 等确认的会话被退订，它的气泡、操作卡、播报会在半路断掉
+        const idle = (id: string) => (this.activities[id]?.status ?? 'idle') === 'idle'
+        const oldest =
+          ids.find((id) => id !== this.activeConversationID && idle(id)) ??
+          ids.find((id) => id !== this.activeConversationID)
         if (oldest) await this.closeConversation(oldest)
       }
       try {

@@ -63,7 +63,10 @@ onBeforeUnmount(() => window.fridayBridge?.setAskPinned(false))
   flex-direction: column;
   border: 1px solid var(--accent, #4c8dff);
   border-radius: 14px;
-  background: var(--panel);
+  /* 近乎不透明 + 磨砂：--panel 是半透明的（贾维斯下 45%），没有模糊时问题文字直接压在转动的 HUD 上，读不清 */
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  backdrop-filter: blur(20px) saturate(1.3);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
   animation: ask-pop 0.22s ease;
   overflow: hidden;
@@ -166,5 +169,26 @@ onBeforeUnmount(() => window.fridayBridge?.setAskPinned(false))
 .ask-later:hover {
   opacity: 1;
   color: var(--text, var(--fg));
+}
+
+/* 贾维斯：深色全息卡 + 青色辉光，标题走 HUD 字体（与浮动窗口同一套语言） */
+[data-theme='jarvis'] .ask-card {
+  background: var(--panel-card-deep-a92);
+  border-color: var(--accent-a55);
+  box-shadow:
+    0 0 28px var(--accent-a15),
+    inset 0 0 18px var(--accent-a5),
+    0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme='jarvis'] .ask-card-title {
+  font-family: var(--font-hud);
+  letter-spacing: 3px;
+  color: var(--accent);
+  text-shadow: 0 0 10px var(--accent-a40);
+}
+
+[data-theme='jarvis'] .ask-card-badge {
+  box-shadow: 0 0 10px var(--accent-a45);
 }
 </style>

@@ -66,6 +66,21 @@ function newestFirst(kind: 'image' | 'video'): StackMediaItem[] {
   return itemsOf(kind).slice().reverse()
 }
 
+// 清空要点两下：第一下按钮变成「再点确认」，3 秒内再点才真清（会连本地缓存文件一起删，误点找不回来）
+const confirmClear = ref<'' | 'image' | 'video'>('')
+let confirmTimer = 0
+function onClear(kind: 'image' | 'video'): void {
+  window.clearTimeout(confirmTimer)
+  if (confirmClear.value === kind) {
+    confirmClear.value = ''
+    store.clearStack(kind)
+    return
+  }
+  confirmClear.value = kind
+  confirmTimer = window.setTimeout(() => (confirmClear.value = ''), 3000)
+}
+onBeforeUnmount(() => window.clearTimeout(confirmTimer))
+
 function zoom(item: StackMediaItem): void {
   store.openMediaZoom(item)
 }
@@ -97,7 +112,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
         <div v-if="expanded === kind" class="stack-panel cast-scroll" @mousedown.stop>
           <div class="panel-head">
             <span class="panel-title">{{ LABEL[kind] }}叠 · {{ itemsOf(kind).length }}</span>
-            <button class="clear" title="清空这一叠" @click.stop="store.clearStack(kind)">清空</button>
+            <button
+              class="clear"
+              :class="{ armed: confirmClear === kind }"
+              :title="confirmClear === kind ? '再点一次清空（本地缓存一起删）' : '清空这一叠'"
+              @click.stop="onClear(kind)"
+            >
+              {{ confirmClear === kind ? '再点确认' : '清空' }}
+            </button>
           </div>
           <div v-if="newestFirst(kind).length" class="thumbs">
             <button
@@ -247,9 +269,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown))
   cursor: pointer;
 }
 
-.clear:hover {
+.clear:hover,
+.clear.armed {
   border-color: var(--fail);
   color: var(--fail);
+}
+
+.clear.armed {
+  background: color-mix(in srgb, var(--fail) 14%, transparent);
 }
 
 .thumbs {

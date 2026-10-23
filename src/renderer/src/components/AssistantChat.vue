@@ -679,30 +679,39 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
   stroke-linejoin: round;
 }
 
+/* 审批横幅：警示色淡底 + 警示色描边，正文用正文色。
+   原来是警示色实底 + 白字——贾维斯的警示色是浅琥珀（#fbbf24），白字压在上面几乎看不见，深色主题也只有 2:1 */
 .approval-bar {
   flex: none;
-  border-top: 1px solid var(--warn);
-  background: var(--warn);
+  margin: 0 8px 4px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg));
+  overflow: hidden;
 }
 
 .approval-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  color: #fff;
+  padding: 7px 10px;
+  color: var(--text);
   font-size: 12px;
   flex-wrap: wrap;
 }
 
-/* ask_user：问题面板整行展开（橙底白字，AskPanel 的变量在这给一套） */
+.approval-item + .approval-item {
+  border-top: 1px dashed color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+/* ask_user：问题面板整行展开（AskPanel 的变量在这给一套警示色） */
 .approval-item.ask {
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-  --ask-line: rgba(255, 255, 255, 0.55);
-  --ask-accent: #fff;
-  --ask-picked: rgba(255, 255, 255, 0.16);
+  --ask-line: color-mix(in srgb, var(--warn) 45%, transparent);
+  --ask-accent: var(--warn);
+  --ask-picked: color-mix(in srgb, var(--warn) 18%, transparent);
 }
 
 .approval-ask {
@@ -711,6 +720,7 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 
 .approval-tool {
   font-weight: 600;
+  color: var(--warn);
 }
 
 .approval-summary {
@@ -728,9 +738,9 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 }
 
 .abtn {
-  border: 1px solid #fff;
+  border: 1px solid color-mix(in srgb, var(--warn) 60%, transparent);
   background: transparent;
-  color: #fff;
+  color: var(--text-2);
   font-size: 11.5px;
   padding: 2px 10px;
   border-radius: 6px;
@@ -738,13 +748,20 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 }
 
 .abtn:hover {
-  background: rgba(255, 255, 255, 0.18);
+  color: var(--text);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
 }
 
 .abtn.primary {
-  background: #fff;
-  color: var(--warn);
+  background: var(--warn);
+  border-color: var(--warn);
+  /* 警示色上的字：浅色主题的警示色深（白字），深色/贾维斯的浅（黑字）——跟 --accent-foreground 同一取向 */
+  color: var(--accent-foreground);
   font-weight: 600;
+}
+
+.abtn.primary:hover {
+  filter: brightness(1.08);
 }
 
 .message-scroll {

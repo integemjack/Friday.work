@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 标题栏：应用名 │ 当前机器（点开机器列表）│ 连接状态点
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { WindowKind } from '../stores/app.js'
 import { useAppStore } from '../stores/app.js'
 
@@ -30,6 +30,16 @@ const machineMenuOpen = ref(false)
 function toggleMachineMenu() {
   machineMenuOpen.value = !machineMenuOpen.value
 }
+
+// 机器菜单开着时 Esc 收起（遮罩点一下也收）
+function onMenuKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') machineMenuOpen.value = false
+}
+watch(machineMenuOpen, (open) => {
+  if (open) window.addEventListener('keydown', onMenuKey)
+  else window.removeEventListener('keydown', onMenuKey)
+})
+onBeforeUnmount(() => window.removeEventListener('keydown', onMenuKey))
 
 async function pickMachine(id: string) {
   machineMenuOpen.value = false
