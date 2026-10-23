@@ -416,6 +416,28 @@ const calling = computed(() => store.calling)
   flex-grow: 2;
 }
 
+/* 小屏（窗口宽 < 1100px）：收起左右两栏，中间桌面占满。只用 display 藏、组件不卸载
+   （会话订阅、聊天草稿、播报都还在）。通话中例外：右栏的通话面板是唯一的挂断/静音入口，照常让出右栏 */
+@media (max-width: 1099px) {
+  .desktop {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'main';
+  }
+
+  .side {
+    display: none;
+  }
+
+  .desktop:has(.side-right.calling) {
+    grid-template-columns: minmax(0, 1fr) 352px;
+    grid-template-areas: 'main right';
+  }
+
+  .side-right.calling {
+    display: flex;
+  }
+}
+
 /* 没连机器时提示铺满（盖在面板上层） */
 .desktop-empty {
   position: absolute;

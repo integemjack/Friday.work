@@ -481,7 +481,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   padding: 70px 0 118px;
-  --s: clamp(150px, min(100cqw - 56px, 100cqh - 236px, 400px), 400px);
+  --s: clamp(150px, min(100cqw - 56px, (100cqh - 236px) / 1.14, 400px), 400px);
   --R: calc(var(--s) * 0.25);
   display: flex;
   flex-direction: column;
@@ -973,6 +973,8 @@ onBeforeUnmount(() => {
 
 /* ============ 状态行（窄主区） ============ */
 .hud-status {
+  /* 基座投影后的近端会伸出舞台框下沿：状态行往下让开，不压在字带环上（--s 的高度项已按 1.14 留出这段） */
+  margin-top: calc(var(--s) * 0.14);
   display: flex;
   gap: 14px;
   font-family: var(--font-hud);
@@ -1025,7 +1027,7 @@ onBeforeUnmount(() => {
 @container main (max-width: 600px) {
   .jarvis-hud {
     padding-bottom: 196px;
-    --s: clamp(130px, min(100cqw - 96px, 100cqh - 314px, 400px), 400px); /* 基座 1.3s 宽，别压到两侧栏 */
+    --s: clamp(130px, min(100cqw - 96px, (100cqh - 314px) / 1.14, 400px), 400px); /* 基座 1.3s 宽，别压到两侧栏 */
   }
 
   .hud-status {
@@ -1036,7 +1038,7 @@ onBeforeUnmount(() => {
 
 @container main (min-width: 760px) {
   .jarvis-hud {
-    --s: clamp(200px, min(100cqw - 580px, 100cqh - 236px, 420px), 420px);
+    --s: clamp(200px, min(100cqw - 580px, (100cqh - 236px) / 1.14, 420px), 420px);
   }
 
   .panel {
