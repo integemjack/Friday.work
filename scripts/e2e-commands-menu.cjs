@@ -117,7 +117,8 @@ async function main() {
       )
     }
     const commands = listed
-    check('commands.list 拉到列表', typeof listed.count === 'number' && listed.count > 0, {
+    // 一个命令文件都没有的机器回空列表也对（菜单靠内置的三项照样弹）
+    check('commands.list 拉到列表', typeof listed.count === 'number', {
       count: listed.count,
       machine: listed.machine,
       same: listed.same,
@@ -193,7 +194,25 @@ async function main() {
   check('输入框存在且能注入文本', typing.ok, typing.reason)
   if (typing.ok && conn.connected) {
     check('打「/」后命令菜单弹出', typing.menuOpen, typing.items)
-    check('菜单列出全部命令', typing.items.length > 0 && typing.items.length === (await evaluate(`window.__cmdStore.commands.items.length`)), typing.items)
+    // v2.71 内置的 /model、/mode、/thinking 排最前（这台一个命令文件都没有时也有它们）；同名的命令文件不列
+    const fileCount = await evaluate(
+      `(window.__cmdStore.commands?.items ?? []).filter((c) => !['model', 'mode', 'thinking'].includes(c.name)).length`
+    )
+    check(
+      '菜单列出内置三项 + 全部命令',
+      typing.items.slice(0, 3).join(',') === '/model,/mode,/thinking' && typing.items.length === 3 + fileCount,
+      typing.items
+    )
+    // 「/mode 」后菜单换成能选的三项，现在用的打勾（不点，免得改了真会话的设置）
+    const choices = await setText('/mode ')
+    const checked = await evaluate(`document.querySelectorAll('.command-menu .command-check').length`)
+    check('打「/mode 」列出能选的任务模式', choices.menuOpen && choices.items.length === 3, choices.items)
+    check('现在用的任务模式打勾（最多一个）', checked <= 1, checked)
+    const levels = await setText('/thinking ')
+    check('打「/thinking 」列出思考档位（极限性能 / 模型不能调时为空）', levels.items.every((item) => !item.startsWith('/')), levels.items)
+    const models = await setText('/model ')
+    check('打「/model 」列出能选的模型', models.menuOpen && models.items.length > 0, models.items)
+    await setText('/')
   } else if (typing.ok && !conn.connected) {
     check('未连机器时打「/」不弹菜单（预期：没有数据）', !typing.menuOpen, typing.items)
   }
@@ -203,11 +222,13 @@ async function main() {
     const probe = typing.items[0].replace(/^\//, '')
     const probeChar = probe.slice(0, 1)
     const filtered = await setText(`/${probeChar}`)
+    // 开头对上的排在前面，名字里有的排在后面（内置的也一样）
+    const startsWith = filtered.items.map((raw) => raw.replace(/^\//, '').toLowerCase().startsWith(probeChar.toLowerCase()))
     check(
-      '打前缀后过滤（含打的名字开头的命令）',
-      filtered.menuOpen &&
-        filtered.items.length > 0 &&
-        filtered.items.every((raw) => raw.replace(/^\//, '').toLowerCase().startsWith(probeChar.toLowerCase())),
+      '打前缀后过滤（开头对上的在前）',
+      filtered.menuOpen && startsWith[0] === true && startsWith.indexOf(false) < 0
+        ? true
+        : filtered.menuOpen && startsWith.slice(startsWith.indexOf(false)).every((value) => !value),
       { probe, items: filtered.items }
     )
     // 恢复：打「/」重置
@@ -231,14 +252,20 @@ async function main() {
         const enterEvent = fire('Enter')
         const prevented = enterEvent.defaultPrevented
         await new Promise((resolve) => setTimeout(resolve, 120))
-        const menuGone = !document.querySelector('.command-menu')
-        return { value: el.value, current, prevented, menuGone }
+        const menu = document.querySelector('.command-menu')
+        const rows = menu ? [...menu.querySelectorAll('.command-item .command-name')].map((n) => n.textContent.trim()) : []
+        return { value: el.value, current, prevented, menuGone: !menu, rows }
       })()`
     )
     const expectSecond = typing.items[1]
     check('ArrowDown 移到第二条', keyDrive.current === expectSecond, { current: keyDrive.current, expect: expectSecond })
     check('Return 被拦截（不发送）且填入「/名字 」', keyDrive.prevented && keyDrive.value === `${expectSecond} `, keyDrive)
-    check('填入后菜单关闭', keyDrive.menuGone)
+    if (['/model', '/mode', '/thinking'].includes(expectSecond)) {
+      // 内置的：填进去后菜单换成能选的（Qt「选了「/model」刚关上的菜单……照样重新打开」）
+      check('填入内置命令后菜单换成能选的', keyDrive.rows.length > 0 && keyDrive.rows.every((row) => !row.startsWith('/')), keyDrive.rows)
+    } else {
+      check('填入后菜单关闭', keyDrive.menuGone)
+    }
   }
 
   // 5) Esc 关闭
@@ -250,7 +277,9 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 120))
       const opened = Boolean(document.querySelector('.command-menu'))
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-      await new Promise((resolve) => setTimeout(resolve, 60))
+      // 等 70ms 的淡出走完：窗口不在前台时 rAF 被节流，淡出收尾会晚，最多等 1 秒
+      for (let waited = 0; waited < 1000 && document.querySelector('.command-menu'); waited += 50)
+        await new Promise((resolve) => setTimeout(resolve, 50))
       return { opened, closedAfterEsc: !document.querySelector('.command-menu') }
     })()`
   )

@@ -1,10 +1,11 @@
 // JSON-RPC 客户端：请求/回执配对、超时、事件分发（REMOTE.md §3/§4）。
 // 传输层负责分帧（SSH 按行、WS 按帧），本层只处理文本消息。
 
-import type {
-  JsonRpcRequest,
-  JsonRpcResponse,
-  RemoteEventName
+import {
+  RpcErrors,
+  type JsonRpcRequest,
+  type JsonRpcResponse,
+  type RemoteEventName
 } from './protocol.js'
 
 export interface TransportLike {
@@ -36,12 +37,15 @@ export class RpcError extends Error {
 }
 
 type EventHandler = (params: unknown) => void
+/** 处理服务端发来的请求：返回值即 result，抛 RpcError 即 error（带 code） */
+export type RequestHandler = (method: string, params: unknown, id: number | string) => Promise<unknown>
 
 export class RpcClient implements TransportLike {
   private nextID = 1
   private readonly pending = new Map<number, Pending>()
   private readonly handlers = new Map<string, Set<EventHandler>>()
   private readonly anyHandlers = new Set<(method: string, params: unknown) => void>()
+  private requestHandler: RequestHandler | null = null
 
   constructor(
     private readonly sendFn: (text: string) => void,
@@ -76,6 +80,10 @@ export class RpcClient implements TransportLike {
         const handlers = this.handlers.get(msg.method)
         if (handlers) for (const h of handlers) h(msg.params)
         for (const h of this.anyHandlers) h(msg.method, msg.params)
+      } else {
+        // 反向请求（服务端 → 客户端，方案-客户端设备 §3）：id 是服务端的，原样回
+        const id = (msg as { id: unknown }).id
+        if (typeof id === 'number' || typeof id === 'string') void this.answer(id, msg.method, msg.params)
       }
       return
     }
@@ -121,6 +129,29 @@ export class RpcClient implements TransportLike {
     }
     set.add(handler)
     return () => set!.delete(handler)
+  }
+
+  /** 服务端发来的请求交给谁处理（只有一个；没设 = 一律「不认识的方法」） */
+  onRequest(handler: RequestHandler | null): void {
+    this.requestHandler = handler
+  }
+
+  /** 发一条通知（没有 id，不等回执） */
+  notify(method: string, params?: unknown): void {
+    this.send(JSON.stringify({ jsonrpc: '2.0', method, params }))
+  }
+
+  private async answer(id: number | string, method: string, params: unknown): Promise<void> {
+    let reply: Record<string, unknown>
+    try {
+      if (!this.requestHandler) throw new RpcError(RpcErrors.MethodNotFound, `不认识的方法 ${method}`)
+      const result = await this.requestHandler(method, params, id)
+      reply = { jsonrpc: '2.0', id, result: result ?? {} }
+    } catch (error) {
+      const code = error instanceof RpcError ? error.code : RpcErrors.Internal
+      reply = { jsonrpc: '2.0', id, error: { code, message: error instanceof Error ? error.message : String(error) } }
+    }
+    this.send(JSON.stringify(reply))
   }
 
   onAny(handler: (method: string, params: unknown) => void): () => void {

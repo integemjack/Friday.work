@@ -8,6 +8,8 @@ declare global {
     /** preload：页面监听就绪后请求主进程建数据面端口 */
     fridayRequestPort(): void
     fridayBridge: {
+      /** 客户端设备：最近一轮 navigator.serial.getPorts() 里各串口的 COM 名（按枚举顺序） */
+      serialPortNames(): Promise<Array<{ portName: string; displayName?: string; vendorId?: number; productId?: number }>>
       pickAttachments(): Promise<PickedFile[]>
       registerDrop(file: File): Promise<PickedFile | null>
       /** 一段录音交给主进程落盘（M3-A） */

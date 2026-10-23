@@ -6,7 +6,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MessagePortMain } from 'electron'
 import { RpcError } from './rpc/RpcClient.js'
-import type { MachineEntry, HostEnvelope, HostRequest, HostResponse, ParsedTarget } from '../shared/api.js'
+import { RpcErrors } from './rpc/protocol.js'
+import type { DevicePortMessage, MachineEntry, HostEnvelope, HostRequest, HostResponse, ParsedTarget } from '../shared/api.js'
 import { MachineConnection, newMachineID, type MachineConnectionHost } from './session/MachineManager.js'
 import type { CredentialBackend } from './session/PairingStore.js'
 import { parseTarget, targetToText, targetDisplayName } from './session/TargetParse.js'
@@ -17,6 +18,21 @@ import { Uploads } from './media/Uploads.js'
 /** 剥掉 UTF-8 BOM（Windows 记事本/PowerShell 写的文件常带） */
 function stripBOM(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+}
+
+/** device.* 请求等渲染进程回多久（含等人点授权、烧录全程）：服务端那头也有自己的超时 */
+function deviceTimeoutMs(method: string): number {
+  if (method === 'device.esp.flash') return 15 * 60_000
+  if (method === 'device.esp.info') return 3 * 60_000
+  if (method === 'device.serial.open' || method === 'device.camera.snapshot') return 2 * 60_000
+  return 60_000
+}
+
+interface PendingDevice {
+  machineID: string
+  resolve: (result: unknown) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
 }
 
 export interface HostInit {
@@ -38,6 +54,9 @@ export class ProtocolHost {
   private readonly remotesFile: string
 
   private readonly schat: SchatService
+  /** 转给渲染进程、还没回的 device.* 请求 */
+  private readonly pendingDevice = new Map<number, PendingDevice>()
+  private nextDeviceRid = 1
 
   constructor(
     backends: MainBackends,
@@ -70,7 +89,11 @@ export class ProtocolHost {
 
   /** 窗口 reload 时换端口，机器连接保持 */
   setPort(newPort: MessagePortMain): void {
-    if (this.port !== newPort) this.listeningPort = null
+    if (this.port !== newPort) {
+      this.listeningPort = null
+      // 换了端口 = 窗口重载：旧页面里在处理的设备请求没人回了
+      this.failPendingDevice(() => true, '客户端界面重载了')
+    }
     this.port = newPort
     this.listen()
     this.broadcastMachines()
@@ -87,6 +110,10 @@ export class ProtocolHost {
       // work 通道（0.3）：渲染进程 WorkChannel 的数据/信令/状态（不带 reqID，不是请求）
       if (data && typeof data === 'object' && typeof data.type === 'string' && data.type.startsWith('work.')) {
         this.handleWorkPortMessage(data as WorkPortMessage)
+        return
+      }
+      if (data && typeof data === 'object' && typeof data.type === 'string' && data.type.startsWith('device.')) {
+        this.handleDevicePortMessage(data as DevicePortMessage)
         return
       }
       void this.handleMessage(event.data as HostEnvelope)
@@ -111,6 +138,48 @@ export class ProtocolHost {
       case 'work.signalOut':
         machine.handleWorkSignalOut(message.signalType, message.payload)
         break
+    }
+  }
+
+  // MARK: 客户端设备（方案-客户端设备）：服务端的 device.* 请求转给渲染进程
+
+  private forwardDeviceRequest(machine: MachineConnection, method: string, params: unknown, serverID: number | string): Promise<unknown> {
+    const port = this.port
+    if (!port) return Promise.reject(new RpcError(RpcErrors.DeviceFailed, '客户端界面还没就绪'))
+    const rid = this.nextDeviceRid++
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingDevice.delete(rid)) return
+        this.port?.postMessage({ type: 'device.cancel', rid } satisfies DevicePortMessage)
+        reject(new RpcError(RpcErrors.DeviceFailed, '客户端处理超时'))
+      }, deviceTimeoutMs(method))
+      this.pendingDevice.set(rid, { machineID: machine.id, resolve, reject, timer })
+      port.postMessage({ type: 'device.request', machineID: machine.id, rid, serverID, method, params } satisfies DevicePortMessage)
+    })
+  }
+
+  private handleDevicePortMessage(message: DevicePortMessage): void {
+    if (message.type === 'device.reply') {
+      const pending = this.pendingDevice.get(message.rid)
+      if (!pending) return
+      this.pendingDevice.delete(message.rid)
+      clearTimeout(pending.timer)
+      if (message.ok) pending.resolve(message.result)
+      else pending.reject(new RpcError(message.code, message.message))
+      return
+    }
+    if (message.type === 'device.notify') {
+      this.machines.get(message.machineID)?.notify(message.method, message.params)
+    }
+  }
+
+  private failPendingDevice(match: (pending: PendingDevice) => boolean, reason: string): void {
+    for (const [rid, pending] of this.pendingDevice) {
+      if (!match(pending)) continue
+      this.pendingDevice.delete(rid)
+      clearTimeout(pending.timer)
+      this.port?.postMessage({ type: 'device.cancel', rid } satisfies DevicePortMessage)
+      pending.reject(new RpcError(RpcErrors.DeviceFailed, reason))
     }
   }
 
@@ -378,7 +447,8 @@ export class ProtocolHost {
         this.port?.postMessage({ type: 'event', machineID: machine.id, method, params })
       },
       workSignalingHost: () => this.schat.workHost(),
-      workPortSend: (message) => this.port?.postMessage(message)
+      workPortSend: (message) => this.port?.postMessage(message),
+      deviceRequest: (machine, method, params, id) => this.forwardDeviceRequest(machine, method, params, id)
     }
   }
 

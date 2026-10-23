@@ -14,7 +14,7 @@
     "resolveJsonModule": true,
     "useDefineForClassFields": true,
     "noEmit": true,
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node", "w3c-web-serial"]
   },
   "include": [
     "src/renderer/src/**/*.ts",

@@ -140,3 +140,17 @@ export interface HostEnvelope {
   reqID: number
   request: HostRequest
 }
+
+// MARK: 客户端设备（方案-客户端设备）：服务端的 device.* 请求在渲染进程处理
+
+/** 协议进程 ⇆ 渲染进程的 device 消息（不带 reqID，和 work.* 一样走数据面端口） */
+export type DevicePortMessage =
+  /** 协议 → 渲染：服务端发来一条 device.* 请求（serverID = 服务端的 JSON-RPC id，进度通知要带） */
+  | { type: 'device.request'; machineID: string; rid: number; serverID: number | string; method: string; params: unknown }
+  /** 协议 → 渲染：这条请求不用再回了（超时 / 机器断了） */
+  | { type: 'device.cancel'; rid: number }
+  /** 渲染 → 协议：请求的结果 */
+  | { type: 'device.reply'; rid: number; ok: true; result: unknown }
+  | { type: 'device.reply'; rid: number; ok: false; code: number; message: string }
+  /** 渲染 → 协议：给这台机器的服务端发一条通知（进度 / 会话关了 / 设备变了） */
+  | { type: 'device.notify'; machineID: string; method: string; params: unknown }

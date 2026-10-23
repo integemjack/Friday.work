@@ -40,6 +40,7 @@ import {
 } from '../lib/speechOutput.js'
 import { resample } from '../lib/voiceMedia.js'
 import { autoCallEnabled, setAutoCall } from '../lib/autoCall.js'
+import { CAPABILITY_LABEL, deviceGrants, revokeGrant } from '../lib/devices/grants.js'
 
 const store = useAppStore()
 const loading = ref(false)
@@ -493,6 +494,19 @@ async function pickVoiceFiles(): Promise<void> {
         </span>
       </div>
       <div class="note">默认关：连上机器不自动拨打，想通话用聊天头部的视频/语音按钮。打开后进入工作台会自动与助手 bot 建立视频通话，挂断不重拨，断线弄断的会自动接回。</div>
+    </section>
+
+    <section>
+      <h3>本机设备授权</h3>
+      <div v-if="!deviceGrants.list.length" class="empty-line">没有「始终允许」的设备</div>
+      <div v-for="grant in deviceGrants.list" :key="`${grant.machineID}|${grant.capability}|${grant.deviceId}`" class="row">
+        <span class="key">{{ grant.machineName }} · {{ CAPABILITY_LABEL[grant.capability] }}</span>
+        <span class="value">
+          {{ grant.deviceLabel }}
+          <button class="small-btn" @click="revokeGrant(grant)">撤销</button>
+        </span>
+      </div>
+      <div class="note">远端机器要用本机的串口 / 摄像头 / 烧录时会先问你；选了「始终允许」的记在这里，撤销后下次再问。</div>
     </section>
 
     <div v-if="error" class="error">{{ error }}</div>

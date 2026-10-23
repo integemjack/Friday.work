@@ -4,7 +4,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { EngineView } from '../stores/app.js'
-import type { CommandInfo } from '../../../protocol/rpc/protocol.js'
+import type { CommandInfo, ThinkingLevel } from '../../../protocol/rpc/protocol.js'
+import {
+  builtinChoices,
+  mergeBuiltinCommands,
+  parseBuiltin,
+  resolveBuiltin,
+  type BuiltinAction,
+  type BuiltinChoice,
+  type BuiltinContext
+} from '../lib/builtinCommands.js'
 import type { FsMkdirResult } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
@@ -415,6 +424,7 @@ function onDrop(event: DragEvent) {
 async function send() {
   const value = text.value.trim()
   if ((!value && attachments.value.length === 0) || busy.value) return
+  if (sendBuiltinCommand()) return
   // 生成中也能发（插入内容）：runner.submit 不带 whenBusy，服务端 == 输入框——
   // 这段在工作就排进它的队列，做完当前这一步就交给它（REMOTE.md；qt ComposerView「补充给智能体」）
   busy.value = true
@@ -485,28 +495,61 @@ function removeAttachment(index: number) {
 // ↑↓ 选、Return / Tab 填成「/名字 」（接着写参数）、Esc 关。不抢输入框焦点（照常打字过滤）。
 // 和助手说不弹（桌面端助手时间线没有菜单）。展开在服务端做：发出去的「/名字 参数」会换成命令正文
 // 再交给模型，对话里照旧显示打的原文（docs/COMMANDS.md §1）。
+// v2.71 内置 /model、/mode、/thinking（COMMANDS.md §8，lib/builtinCommands）：菜单里总有这三项，这台没有命令文件也照样弹；
+// 打「/model 」等后菜单换成能选的（现在用的打勾、先选中它），选中或发出「/model 名字」就换上，不发给模型。
 const commandMenuOpen = ref(false)
 const commandIndex = ref(0)
 const commandMenuEl = ref<HTMLElement | null>(null)
 /** 用户按 Esc 关过菜单：在途的 commands.list 回执到了也不自动重开；再打字（prefix 变）才复位 */
 const commandDismissed = ref(false)
+/** 命令行，或 v2.71 内置命令后面能选的一项（带 action；照 Qt CommandMenu 的 isModel 行：✓、标题、trailing、detail） */
+type CommandMenuItem = CommandInfo & { choice?: BuiltinChoice }
 /** 「/」后面的名字前缀；null = 正文不是「/名字」形态（不是 / 开头、中间有空白 / 已带参数），菜单收起 */
 const commandPrefix = computed<string | null>(() => {
-  if (store.assistantChat) return null
+  if (store.assistantChat || !store.connected) return null
   const match = /^\/(\S*)$/.exec(text.value)
   return match ? match[1] : null
 })
-watch(commandPrefix, () => {
+/** 「/model 」「/mode 」「/thinking 」后面打的（名字后面有空白才算，只打「/model」还是列命令） */
+const builtinQuery = computed(() => {
+  if (store.assistantChat || !store.connected || !/^\/[a-z]+[ \t]/.test(text.value)) return null
+  return parseBuiltin(text.value)
+})
+watch([commandPrefix, () => builtinQuery.value?.argument], () => {
   commandDismissed.value = false
 })
-const commandItems = computed<CommandInfo[]>(() => {
+/** 这段对话现在的模型、任务模式、思考档位（没开会话时看新对话的默认） */
+function builtinContext(): BuiltinContext {
+  const runtime = props.conversationId ? store.details[props.conversationId]?.runtime : store.runtime
+  return {
+    engines: availableEngines.value,
+    engineID: effectiveEngine.value?.id,
+    teamMode: currentSummary.value?.teamMode,
+    thinkingLevel: currentSummary.value?.thinking ?? runtime?.thinkingLevel,
+    thinkingLevels: runtime?.thinkingLevels ?? []
+  }
+}
+const commandItems = computed<CommandMenuItem[]>(() => {
+  const builtin = builtinQuery.value
+  if (builtin) {
+    return builtinChoices(builtin.command, builtin.argument, builtinContext()).map((choice) => ({
+      name: `${choice.action.kind}:${choice.action.value}`,
+      choice
+    }))
+  }
   const prefix = commandPrefix.value
   if (prefix === null) return []
-  return store.matchCommands(prefix)
+  return mergeBuiltinCommands(prefix, store.matchCommands(prefix))
 })
 watchEffect(() => {
   const prefix = commandPrefix.value
   const items = commandItems.value
+  if (builtinQuery.value) {
+    if (commandDismissed.value) return
+    commandMenuOpen.value = items.length > 0
+    commandIndex.value = Math.max(0, items.findIndex((item) => item.choice?.checked))
+    return
+  }
   if (prefix === null) {
     commandMenuOpen.value = false
     return
@@ -542,9 +585,18 @@ watch(commandItems, () => {
   if (commandMenuOpen.value) scrollCommandIntoView()
 })
 
-/** 选中一条：填成「/名字 」（接着写参数），光标到末尾；正文带空格后不再匹配命令形态，watchEffect 会收起菜单 */
-function chooseCommand(name: string) {
-  text.value = `/${name} `
+/** 选中一条：填成「/名字 」（接着写参数），光标到末尾；正文带空格后不再匹配命令形态，watchEffect 会收起菜单
+ *  （内置的 /model 等填进去后菜单换成能选的）；选的是能选的一项就直接换上 */
+function chooseCommand(item: CommandMenuItem) {
+  if (item.choice) {
+    void useBuiltinChoice(item.choice.action)
+    return
+  }
+  setText(`/${item.name} `)
+}
+
+function setText(value: string) {
+  text.value = value
   void nextTick(() => {
     textarea.value?.focus()
     const end = text.value.length
@@ -555,7 +607,48 @@ function chooseCommand(name: string) {
 
 function acceptCommand() {
   const chosen = commandItems.value[commandIndex.value]
-  if (chosen) chooseCommand(chosen.name)
+  if (chosen) chooseCommand(chosen)
+}
+
+/** v2.71 换上选的模型 / 任务模式 / 思考档位：这段对话用它，同时记成新对话的默认（同 Qt ModelMenu.trigger；工作中换的下一轮生效）。
+ *  没开会话时同模型选择器：直接建一段带着它的新对话 */
+async function useBuiltinChoice(action: BuiltinAction) {
+  commandMenuOpen.value = false
+  setText('')
+  switchError.value = ''
+  const id = props.conversationId
+  try {
+    if (action.kind === 'setEngine') {
+      if (id) await store.setEngine(id, action.value)
+      else await store.createConversation({ engineID: action.value })
+      await store.setDefaultEngine(action.value)
+    } else if (action.kind === 'setTeamMode') {
+      if (id) await store.setTeamMode(id, action.value)
+      else await store.createConversation({ teamMode: action.value })
+    } else {
+      const level = action.value as ThinkingLevel
+      if (id) await store.setThinking(id, level)
+      else await store.createConversation({ thinking: level })
+    }
+  } catch (error) {
+    switchError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** v2.71 发出去的是「/model …」「/mode …」「/thinking …」：不发给模型。只打「/命令」= 列出能选的；认得出是哪个就换上，
+ *  认不出留着文字、菜单列对得上的（同 Qt ComposerView.sendBuiltinCommand；带附件的照常发） */
+function sendBuiltinCommand(): boolean {
+  if (store.assistantChat || attachments.value.length > 0) return false
+  const parsed = parseBuiltin(text.value)
+  if (!parsed) return false
+  if (!parsed.argument) {
+    setText(`/${parsed.command} `)
+    return true
+  }
+  const action = resolveBuiltin(parsed.command, parsed.argument, builtinContext())
+  if (action) void useBuiltinChoice(action)
+  else commandDismissed.value = false
+  return true
 }
 
 function stop() {
@@ -914,17 +1007,25 @@ onBeforeUnmount(() => {
             :key="command.name"
             class="command-item"
             :class="{ current: index === commandIndex }"
-            :title="command.description || `/${command.name}`"
+            :title="command.choice ? command.choice.detail || command.choice.title : command.description || `/${command.name}`"
             @mouseenter="commandIndex = index"
-            @click="chooseCommand(command.name)"
+            @click="chooseCommand(command)"
           >
-            <span class="command-line">
+            <span v-if="command.choice" class="command-line">
+              <span v-if="command.choice.checked" class="command-check">✓</span>
+              <span class="command-name">{{ command.choice.title }}</span>
+              <span class="command-spacer" />
+              <span v-if="command.choice.trailing" class="command-source">{{ command.choice.trailing }}</span>
+            </span>
+            <span v-else class="command-line">
               <span class="command-name">/{{ command.name }}</span>
               <span v-if="command.argumentHint" class="command-hint">{{ command.argumentHint }}</span>
               <span class="command-spacer" />
               <span v-if="command.sourceTitle" class="command-source">{{ command.sourceTitle }}</span>
             </span>
-            <span v-if="command.description" class="command-desc">{{ command.description }}</span>
+            <span v-if="command.choice ? command.choice.detail : command.description" class="command-desc">
+              {{ command.choice ? command.choice.detail : command.description }}
+            </span>
           </button>
         </div>
       </Transition>
@@ -2122,6 +2223,18 @@ textarea::placeholder {
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
+}
+
+.command-check {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.command-item:hover .command-check,
+.command-item.current .command-check {
+  color: var(--accent-foreground);
 }
 
 .command-hint {

@@ -1,5 +1,5 @@
 // 渲染进程 ⇆ 协议进程的 API 消息等共有类型。
-import type { HostEvent, HostRequest, HostResponse, PickedFile } from '../../../shared/api.js'
+import type { DevicePortMessage, HostEvent, HostRequest, HostResponse, PickedFile } from '../../../shared/api.js'
 
 export type { PickedFile, HostEvent, HostRequest, HostResponse }
 
@@ -21,6 +21,7 @@ class HostLink {
   private readonly schatListeners = new Set<(state: unknown) => void>()
   private readonly callSignalListeners = new Set<(signal: unknown) => void>()
   private readonly workListeners = new Set<(message: { type: string; machineID: string } & Record<string, unknown>) => void>()
+  private readonly deviceListeners = new Set<(message: DevicePortMessage) => void>()
   /** port 还没到时排队等它的请求（渲染层挂载比 preload 建 port 早，登录页的自动登录首拍就会撞上） */
   private portWaiters: Array<() => void> = []
 
@@ -74,6 +75,9 @@ class HostLink {
           for (const listener of this.workListeners) {
             listener(incoming as { type: string; machineID: string } & Record<string, unknown>)
           }
+        } else if (incoming.type === 'device.request' || incoming.type === 'device.cancel') {
+          // 客户端设备：服务端的 device.* 请求（DeviceBroker 接）
+          for (const listener of this.deviceListeners) listener(incoming as unknown as DevicePortMessage)
         }
       }
     }
@@ -141,6 +145,17 @@ class HostLink {
   onWork(listener: (message: { type: string; machineID: string } & Record<string, unknown>) => void): () => void {
     this.workListeners.add(listener)
     return () => this.workListeners.delete(listener)
+  }
+
+  /** 客户端设备：协议进程转来的 device.* 请求 / 取消 */
+  onDevice(listener: (message: DevicePortMessage) => void): () => void {
+    this.deviceListeners.add(listener)
+    return () => this.deviceListeners.delete(listener)
+  }
+
+  /** 客户端设备：回结果 / 发通知（不带 reqID，不是请求） */
+  postDevice(message: DevicePortMessage): void {
+    this.port?.postMessage(message)
   }
 
   /** work 通道（0.3）：往协议进程发（不带 reqID，不是请求） */

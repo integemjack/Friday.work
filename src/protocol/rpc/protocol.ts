@@ -45,7 +45,15 @@ export const RpcErrors = {
   /** 现在不能（浏览器不可用、WebSocket 连接不能做终端/文件/服务类操作…） */
   NotAllowed: 4,
   /** WebSocket 令牌不对 / 已吊销：回完就断开，客户端不再自动重连 */
-  Unpaired: 5
+  Unpaired: 5,
+  /** 客户端设备（方案-客户端设备 §3.1，提案）：用户拒绝 / 授权超时 */
+  DeviceDenied: 20,
+  /** 设备不存在 / 已拔掉 */
+  DeviceNotFound: 21,
+  /** 设备被别的会话或烧录占着 */
+  DeviceBusy: 22,
+  /** 设备操作失败（message 里有原因） */
+  DeviceFailed: 23
 } as const
 
 /** 客户端与服务端约定的协议版本 */
@@ -68,6 +76,8 @@ export interface HelloParams {
   features?: string[]
   /** 仅 WebSocket 连接需要（配对令牌） */
   token?: string
+  /** features 里有 clientDevices 时带：这次接得住哪些 device.* 请求（方案-客户端设备 §2） */
+  clientDevices?: { version: number; kinds: string[] }
 }
 
 export interface ServerInfo {

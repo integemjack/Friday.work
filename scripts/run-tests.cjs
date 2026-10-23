@@ -33,6 +33,13 @@ run('npx', ['esbuild', 'src/shared/update.ts', '--bundle', '--platform=node', '-
 run('npx', ['esbuild', 'src/renderer/src/lib/remoteDownload.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/remotedownload.cjs'])
 run('npx', ['esbuild', 'src/main/ipc/Downloads.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--outfile=.tmp/downloads-main.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/remoteUpload.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/remoteupload.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/builtinCommands.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/builtincommands.cjs'])
+run('npx', ['esbuild', 'src/protocol/rpc/RpcClient.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/rpcclient.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/devices/rfc2217.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/rfc2217.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/devices/serialSession.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/serialsession.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/devices/serialPorts.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/serialports.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/devices/deviceParams.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/deviceparams.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/devices/md5.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/md5.cjs'])
 run('node', ['--test', 'test/'])
 
 rmSync(tmp, { recursive: true, force: true })

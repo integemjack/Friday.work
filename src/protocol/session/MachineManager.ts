@@ -23,6 +23,9 @@ import { targetToText } from '../session/TargetParse.js'
 import { WorkSignaling, type WorkSignalingHost, type WorkSignalEvent } from '../work/WorkSignaling.js'
 import { WorkTransport, type WorkPortMessage } from '../work/WorkTransport.js'
 
+/** hello 里声明接得住的 device.* 能力（方案-客户端设备 §2） */
+const CLIENT_DEVICE_KINDS = ['serial', 'esp.flash', 'camera']
+
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000]
 
 export interface MachineConnectionHost {
@@ -35,6 +38,8 @@ export interface MachineConnectionHost {
   workSignalingHost(): WorkSignalingHost | null
   /** work 通道：给渲染进程发消息（MessagePort 数据面） */
   workPortSend(message: WorkPortMessage): void
+  /** 服务端发来的 device.* 请求（方案-客户端设备）：交给渲染进程处理，回 result 或抛 RpcError */
+  deviceRequest(connection: MachineConnection, method: string, params: unknown, id: number | string): Promise<unknown>
   /** 从拨号到 DataChannel 打开最多等多久（默认 45 秒；单测调短） */
   workConnectTimeoutMs?: number
 }
@@ -160,6 +165,13 @@ export class MachineConnection {
       (text) => transport.send(text),
       () => transport.close()
     )
+    // 反向请求：只接 device.*（客户端设备），其余照 JSON-RPC 回「不认识的方法」
+    this.rpc.onRequest((method, params, id) => {
+      if (!method.startsWith('device.')) {
+        return Promise.reject(new RpcError(RpcErrors.MethodNotFound, `不认识的方法 ${method}`))
+      }
+      return this.host.deviceRequest(this, method, params, id)
+    })
     this.rpc.onAny((method, params) => {
       if (method === 'bridgeError') {
         // 桥连不上服务（服务没在跑 / 正在被拉起）：REMOTE.md §2
@@ -336,7 +348,8 @@ export class MachineConnection {
             platform: 'windows',
             kind: 'desktop'
           },
-          features: ['messagePatch']
+          features: ['messagePatch', 'clientDevices'],
+          clientDevices: { version: 1, kinds: CLIENT_DEVICE_KINDS }
         },
         30_000
       )) as HelloResult
@@ -453,6 +466,12 @@ export class MachineConnection {
       return Promise.reject(new RpcError(-32000, this.detail ?? '还没连上这台机器'))
     }
     return this.rpc.request(method, params)
+  }
+
+  /** 给服务端发一条通知（device.* 的进度 / 状态）；没连上就丢 */
+  notify(method: string, params?: unknown): void {
+    if (!this.rpc || this.state !== 'ready') return
+    this.rpc.notify(method, params)
   }
 
   /** 登记会话订阅：ready 时马上发（返回订阅回执：整段会话 + runtime + versions），重连后自动恢复 */
