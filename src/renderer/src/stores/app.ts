@@ -814,9 +814,13 @@ export const useAppStore = defineStore('app', {
             this.rpc(machine.id, 'activity.subscribe', {})
               .then((result) => {
                 const sessions = (result as { sessions: SessionActivity[] }).sessions ?? []
-                for (const session of sessions) {
-                  this.activities[session.id] = session
-                  this.approvals[session.id] = session.approvals ?? []
+                // 只接当前机器的：事件只处理 currentMachine 的，别家机器的写进来
+                // 永远更新/清除不了（审批永久挂在屏上，作答还会发去错的机器）
+                if (machine.id === this.currentMachine) {
+                  for (const session of sessions) {
+                    this.activities[session.id] = session
+                    this.approvals[session.id] = session.approvals ?? []
+                  }
                 }
                 // 跑着/等审批的会话自动订阅（气泡/操作卡的数据源）：不订阅就只有手动选中会话才有流——
                 // 客户端晚于会话启动（或重连）时错过 started 事件，桌面上气泡就全不显示
@@ -984,8 +988,9 @@ export const useAppStore = defineStore('app', {
     /** 取当前机器的终端/浏览器/子 Agent 状态（hello 快照 + 事件维护，切换/重连后调） */
     async refreshLiveState() {
       if (!this.currentMachine) return
+      const machine = this.currentMachine
       try {
-        const state = (await host.request({ type: 'state.get', machineID: this.currentMachine })) as {
+        const state = (await host.request({ type: 'state.get', machineID: machine })) as {
           terminals: { terminals: TerminalInfo[]; available: boolean; reason?: string }
           browser: { tabs: BrowserTab[]; available: boolean; reason?: string }
           team: { runs: TeamRun[] }
@@ -994,6 +999,8 @@ export const useAppStore = defineStore('app', {
           defaultEngineID?: string
           directories?: DirectoriesState
         }
+        // 等回执时换了机器：旧机器的整批状态不能写进来（会盖掉新机器刚拉到的）
+        if (this.currentMachine !== machine) return
         this.engines = state.engines ?? []
         this.defaultEngineID = state.defaultEngineID ?? ''
         this.recentDirectories = state.directories?.recent ?? null
@@ -1036,10 +1043,13 @@ export const useAppStore = defineStore('app', {
 
     async refreshSummaries() {
       if (!this.currentMachine) return
+      const machine = this.currentMachine
       try {
-        const result = (await host.request({ type: 'summaries.get', machineID: this.currentMachine })) as {
+        const result = (await host.request({ type: 'summaries.get', machineID: machine })) as {
           summaries: ConversationSummary[]
         }
+        // 同上：快速切机器时旧回执不能覆盖新机器的列表
+        if (this.currentMachine !== machine) return
         this.summaries = result.summaries ?? []
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
@@ -1110,6 +1120,14 @@ export const useAppStore = defineStore('app', {
       }
       for (const messageID of Object.keys(this.historyMessages)) {
         if (removed.has(messageID)) delete this.historyMessages[messageID]
+      }
+      // 气泡全文记忆按会话清：气泡删了以后这些就再也没人读（每条几百字，桌面长期挂着只增不减）
+      for (const key of Object.keys(this.castTexts)) {
+        if (key.startsWith(`${conversationID}:`)) delete this.castTexts[key]
+      }
+      // 这段会话的操作卡的渐隐登记也放掉（卡都收了，不会再重弹：重开订阅时历史登记挡着）
+      for (const opID of this.opCards.filter((item) => item.conversationID === conversationID).map((item) => item.id)) {
+        this.fadedOps.delete(opID)
       }
       delete this.details[conversationID]
       this.bubbles = this.bubbles.filter((item) => item.conversationID !== conversationID)
@@ -1704,6 +1722,8 @@ export const useAppStore = defineStore('app', {
     /** 取走还没消费的信令 */
     drainCallSignals(): unknown[] {
       const pending = this.callSignals.filter((item) => item.seq > this.callSignalSeq)
+      // 消费掉的裁掉：长通话 ICE 候选一多，数组只增不减还每次全量滤一遍
+      this.callSignals = pending
       if (pending.length) this.callSignalSeq = pending[pending.length - 1]!.seq
       return pending.map((item) => item.signal)
     },
@@ -2059,13 +2079,24 @@ export const useAppStore = defineStore('app', {
     async answerQuestion(eventID: string, answer: { answers: string[]; reply?: string }) {
       this.answeredAsks.add(eventID)
       if (!this.currentMachine) return
-      await rpc(this.currentMachine, 'runner.resolveApproval', { eventID, approved: true, answer })
+      try {
+        await rpc(this.currentMachine, 'runner.resolveApproval', { eventID, approved: true, answer })
+      } catch (error) {
+        // 没交上去的不要拉黑：面板冻在「已交」就永远没有重答入口了
+        this.answeredAsks.delete(eventID)
+        this.error = error instanceof Error ? error.message : String(error)
+      }
     },
 
     /** 跳过提问：不带 answer 的批准 = 服务端按推荐的做（ASK.md） */
     async skipQuestion(eventID: string) {
       this.answeredAsks.add(eventID)
-      await this.resolveApproval(eventID, true)
+      try {
+        await this.resolveApproval(eventID, true)
+      } catch (error) {
+        this.answeredAsks.delete(eventID)
+        this.error = error instanceof Error ? error.message : String(error)
+      }
     },
 
     /** 置顶提问浮层里点「稍后再说」：这个不再弹，新问题来了照常弹 */
@@ -2176,7 +2207,11 @@ export const useAppStore = defineStore('app', {
       // 基底：气泡还在用气泡全文；已渐隐删除用 castTexts 里的全文（断流重建时续上，不丢前文）
       const base = existing ? existing.text : (this.castTexts[id] ?? '')
       const gap = base && !/\s$/.test(base) && !/^\s/.test(add) ? ' ' : ''
-      const full = (base + gap + add).trim()
+      // 拼完再归一一次换行：上面的归一只作用于单片，跨片的「\n+\n」接缝会漏成双换行，
+      // 和同一段文本一次到达的显示不一致（castTexts 存归一后的全文，天然收敛）
+      const full = (base + gap + add)
+        .replace(/\n{2,}/g, '\n')
+        .trim()
       this.castTexts[id] = full
       if (existing) {
         // 全量内容不截断（气泡不限高）。内容更新只记活跃时刻（activeAt），不当场抬 z——
