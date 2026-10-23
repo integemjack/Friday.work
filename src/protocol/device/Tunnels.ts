@@ -83,9 +83,13 @@ export class Tunnels {
     })
     socket.setNoDelay(true)
     const tunnel: Tunnel = { socket, gate: target.kind === 'adb' ? new AdbGate(target.serial) : null }
-    // 服务端超时重试再发同一个 id 时旧通道还在：先关掉旧的再登记——不关的话旧 socket
-    // 泄漏，它的 data 监听还在往同一个 id 推数据，两条流交叉
-    if (this.tunnels.has(id)) this.close(id, '同一个通道重新打开了')
+    // 同 id 重复 open（防御：正常路径每次都是新随机 id）：旧 socket 拆掉但不广播 closed——
+    // 渲染层同 id 的新会话收到 tunnel.closed 会被误杀。只销毁、不通知
+    const stale = this.tunnels.get(id)
+    if (stale) {
+      this.tunnels.delete(id)
+      stale.socket.destroy()
+    }
     this.tunnels.set(id, tunnel)
     socket.on('data', (chunk: Buffer) => {
       const outputs = tunnel.gate ? tunnel.gate.fromServer(chunk).toClient : [chunk]

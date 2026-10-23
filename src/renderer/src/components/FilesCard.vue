@@ -143,9 +143,10 @@ async function list(path?: string, options: { history?: boolean } = {}): Promise
       selected.value = new Set([...selected.value].filter((path) => alive.has(path)))
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (seq === listSeq && machine === store.currentMachine) error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    // 过期回执不动 loading：新一轮请求自己在管转圈，旧请求提前熄掉它会闪
+    if (seq === listSeq) loading.value = false
   }
 }
 
@@ -1073,10 +1074,10 @@ function showChanges(): void {
 function revealChange(change: FsChange): void {
   // 在文件区里定位改动的文件：进它所在的目录并选中
   const full = /^([A-Za-z]:|\/)/.test(change.path) ? change.path : joinPath(workdir.value, change.path)
-  let dir = full.replace(/[\\/][^\\/]+$/, '')
-  // 文件直接在文件系统根下（如 /a.txt）剥不出目录：从根定位，别拿空 path 去 fs.list
-  if (!dir) dir = /^[A-Za-z]:/.test(full) ? full.slice(0, 2) : full.startsWith('/') ? '/' : ''
-  void list(dir || undefined).then(() => {
+  // 根目录下的文件（如 /a.txt、C:\a.txt）剥文件名后是空串：用 parentOf 补成 '/' 或 'C:\'，
+  // 别拿空 path 或 'C:'（那是「盘的当前目录」）去 fs.list
+  const dir = full.replace(/[\\/][^\\/]+$/, '') || parentOf(full) || undefined
+  void list(dir).then(() => {
     const hit = entries.value.find((entry) => samePath(entry.path, full))
     if (hit) selectOnly(hit)
   })

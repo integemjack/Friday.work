@@ -110,7 +110,7 @@ export function postJson(url: string, payload: unknown, options: PostOptions = {
     req.on('timeout', () => req.destroy(new Error('请求超时')))
     req.on('error', (error) => reject(error))
     // 指纹不符时请求体不能发出去：挂在响应回调里比对此前为时已晚——TLS 握手已完成、
-    // 请求体（refreshToken / X-Server-Passssword / Bearer）已经交到对端手上。
+    // 请求体（refreshToken / X-Server-Password / Bearer）已经交到对端手上。
     // 改在 secureConnect 里先比对证书，通过后才允许发送
     req.on('socket', (socket) => {
       socket.once('secureConnect', () => {
