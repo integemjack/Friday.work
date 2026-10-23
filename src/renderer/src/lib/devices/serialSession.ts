@@ -95,6 +95,9 @@ export class SerialSession {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null
   private pump: Promise<void> = Promise.resolve()
   private releasing = false
+  /** 还没开口（start 的 openPort 在跑）：通道进来的字节先攒在这 */
+  private starting = true
+  private readonly pendingIn: Uint8Array[] = []
   /** 通道进来的字节按顺序处理（命令要等串口操作做完才处理下一段） */
   private queue: Promise<void> = Promise.resolve()
   /** 挂起期间挡住 queue；resume 时放行 */
@@ -118,7 +121,8 @@ export class SerialSession {
 
   /** 打开串口、开始双向转发 */
   async start(): Promise<void> {
-    await this.openPort()
+    // 先挂好通道处理器再开口：openPort 要几十毫秒，这窗口里对端关通道的事件
+    // 不能丢（丢了会话永远挂着、口一直占在 busy 里），首包字节也不能丢
     this.channel.bufferedAmountLowThreshold = LOW_WATER
     this.channel.onbufferedamountlow = () => {
       const drained = this.drained
@@ -128,12 +132,30 @@ export class SerialSession {
     this.channel.onmessage = (event) => {
       if (!(event.data instanceof ArrayBuffer)) return
       const bytes = new Uint8Array(event.data)
-      this.queue = this.queue.then(() => this.fromChannel(bytes)).catch((error) => {
-        void this.close(`串口操作失败：${error instanceof Error ? error.message : String(error)}`)
-      })
+      // 还没开口（openPort 在跑）：先攒着，开口后按序补处理——
+      // esptool 连上就发 IAC 协商，丢了整条流就坏了
+      if (this.starting) {
+        this.pendingIn.push(bytes)
+        return
+      }
+      this.enqueueFromChannel(bytes)
     }
     this.channel.onclose = () => void this.close('服务端关了通道', true)
+    try {
+      await this.openPort()
+    } finally {
+      this.starting = false
+    }
+    if (this.closed) return
     if (this.codec) this.sendChannel(this.codec.start())
+    // 开口前攒的字节按原顺序补处理（在协商帧之后，保证 RFC 2217 的先后序）
+    for (const bytes of this.pendingIn.splice(0)) this.enqueueFromChannel(bytes)
+  }
+
+  private enqueueFromChannel(bytes: Uint8Array): void {
+    this.queue = this.queue.then(() => this.fromChannel(bytes)).catch((error) => {
+      void this.close(`串口操作失败：${error instanceof Error ? error.message : String(error)}`)
+    })
   }
 
   /** 本机烧录要独占串口：让出来（通道不关，进来的数据攒着） */
@@ -203,6 +225,11 @@ export class SerialSession {
   /** 停读、放锁、关口（重开 / 挂起 / 结束都走这里） */
   private async releasePort(): Promise<void> {
     this.releasing = true
+    // readLoop 可能停在 toChannel 的两个 await 上（对端 FLOWCONTROL-SUSPEND /
+    // 通道积压等 drained）：不放行的话 pump 永远不结束，suspend / 改参数 / 关闭
+    // 全跟着永久卡死（烧录会把串口占死在 'esp' 上）
+    this.flowGate?.open()
+    this.drained?.()
     try {
       await this.reader?.cancel()
     } catch {
@@ -288,6 +315,9 @@ export class SerialSession {
       return
     }
     await this.releasePort()
+    // releasePort 期间通道被对端关了（close 会把口也放掉）：到此为止，
+    // 不能再把物理口重新打开——那样 broker 以为空闲，口实际被锁死到重载页面
+    if (this.closed) return
     Object.assign(this.config, next)
     await this.openPort()
     this.events.onChange()

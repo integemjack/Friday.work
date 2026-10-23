@@ -39,9 +39,13 @@ export function parseIntelHex(text: string): HexImage {
         ended = true
         break
       case 0x02:
+        // 扩展地址记录的长度是定死的：坏/截断的 .hex 里 length 不对时 payload 不够长，
+        // 读出 undefined 变 NaN，后面 data.set(NaN) 要么抛 RangeError 要么产出坏镜像
+        if (payload.length !== 2) throw new Error(`HEX 第 ${index + 1} 行扩展段地址记录长度不对`)
         upper = ((payload[0] << 8) | payload[1]) * 16
         break
       case 0x04:
+        if (payload.length !== 2) throw new Error(`HEX 第 ${index + 1} 行扩展线性地址记录长度不对`)
         upper = ((payload[0] << 8) | payload[1]) * 0x10000
         break
       default:
