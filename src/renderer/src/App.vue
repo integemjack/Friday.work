@@ -472,15 +472,12 @@ const calling = computed(() => store.calling)
   pointer-events: auto;
 }
 
-/* 贾维斯界面：桌面底纹从点阵换成青色全息网格 + 中央辉光，欢迎语带发光 */
+/* 贾维斯界面：桌面底纹去掉点阵/平面网格（网格只留在 HUD 的 3D 地面上，平铺满屏的网格是噪音），
+   只剩中央一团辉光把视线收到全息舞台；欢迎语带发光 */
 [data-theme='jarvis'] .desktop {
   background-color: var(--bg);
-  background-image:
-    radial-gradient(ellipse 60% 50% at 50% 42%, var(--accent-a10), transparent 70%),
-    linear-gradient(var(--accent-a5) 1px, transparent 1px),
-    linear-gradient(90deg, var(--accent-a5) 1px, transparent 1px);
-  background-size: auto, 44px 44px, 44px 44px;
-  background-position: center;
+  background-image: radial-gradient(ellipse 55% 50% at 50% 46%, var(--accent-a10), transparent 70%);
+  background-size: auto;
 }
 
 [data-theme='jarvis'] .desktop-title {
@@ -490,7 +487,7 @@ const calling = computed(() => store.calling)
   text-transform: uppercase;
 }
 
-/* 贾维斯：两侧栏内缘的 HUD 导轨（栏间 8px 缝正中一道竖向发丝线 + 稀疏刻度，上下渐隐），
+/* 贾维斯：两侧栏内缘的 HUD 导轨（栏间 8px 缝正中一道竖向发丝线，上下渐隐），
    把中间舞台框出来；两栏本身仍然无卡片壳、融在桌面上 */
 [data-theme='jarvis'] .side-left::after,
 [data-theme='jarvis'] .side-right::before {
@@ -500,9 +497,7 @@ const calling = computed(() => store.calling)
   bottom: 0;
   width: 7px;
   pointer-events: none;
-  background:
-    linear-gradient(var(--accent-a30), var(--accent-a30)) center / 1px 100% no-repeat,
-    repeating-linear-gradient(180deg, var(--accent-a40) 0 1px, transparent 1px 32px);
+  background: linear-gradient(var(--accent-a30), var(--accent-a30)) center / 1px 100% no-repeat;
   -webkit-mask-image: linear-gradient(180deg, transparent 2%, #000 24%, #000 76%, transparent 98%);
   mask-image: linear-gradient(180deg, transparent 2%, #000 24%, #000 76%, transparent 98%);
   opacity: 0.6;

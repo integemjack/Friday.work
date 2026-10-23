@@ -1,9 +1,13 @@
 <script setup lang="ts">
-// 贾维斯 HUD：桌面中央的全息雷达。多层旋转环 + 雷达扫描 + 反应堆核心 + 两侧真实遥测。
-// 不是纯装饰：遥测栏和状态行显示真实数据——FPS（实测）、JS 堆内存、运行时长、CPU 核数、
-// 时区、日期、机器连接状态、窗口数、待确认数、实时时钟；右侧 REMOTE 组是当前服务器的
-// CPU/RAM/GPU/显存/进程数实测（Linux 走 fs.read 读 /proc+/sys，Windows 本机走主进程 IPC）。
-// 随鼠标做 3D 视差倾斜（--par-x/--par-y 由 App.vue 直接写到带 data-parallax 的根上，rAF 已插值）。
+// 贾维斯 HUD（2026-10 重做：3D 全息舞台）：桌面中央一座纯 CSS 3D 的全息投影台——
+// 透视地面上的投影基座（刻度环 + 环形字带 + 扩散波纹）往上打一道光锥，托起一颗斜轴自转的
+// 线框地球（经线 + 纬线），两条轨道环带卫星点穿过它前后（preserve-3d 真实深度排序），中心是反应堆核。
+// 内容只留真实且有用的两块，做成两侧向内斜的全息玻璃板（像座舱 HUD）：
+//   左板：时钟 / 日期 / 机器连接状态；右板：当前服务器 CPU/RAM/GPU 条形仪表 + 显存/进程数
+//   （Linux 走 fs.read 读 /proc+/sys，Windows 本机走主进程 IPC，异机走 sysstats.json 桥）。
+// 原来的标题行、hex 流、FPS/内存/运行时长/核数/时区/窗口数全部拿掉（信息噪音）。
+// 随鼠标整台 3D 转动（--par-x/--par-y 由 App.vue 直接写到带 data-parallax 的 .stage 上，rAF 已插值），
+// 各层在不同深度，转起来有真实视差。动画全是 transform/opacity（合成器线程），不逐帧重绘。
 // 只在「贾维斯界面」下挂载（App.vue 里 v-if="jarvis"），别的主题不渲染、零开销。
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -15,74 +19,19 @@ const store = useAppStore()
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 
-// ---- 心跳：每秒刷新时钟 / 运行时长 / 内存 / 日期 ----
-const now = ref('')
-const uptime = ref('00:00')
-const memText = ref('--')
+// ---- 心跳：每秒刷新时钟 / 日期 ----
+const clock = ref('')
+const seconds = ref('')
 const dateText = ref('')
 let timer = 0
-const bootedAt = Date.now()
-
-function readMem(): string {
-  const memory = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
-  if (!memory) return 'N/A'
-  return `${Math.round(memory.usedJSHeapSize / 1048576)}M`
-}
 
 function tick(): void {
   const d = new Date()
-  now.value = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  const up = Math.floor((Date.now() - bootedAt) / 1000)
-  uptime.value = up >= 3600 ? `${Math.floor(up / 3600)}:${pad(Math.floor((up % 3600) / 60))}:${pad(up % 60)}` : `${pad(Math.floor(up / 60))}:${pad(up % 60)}`
-  memText.value = readMem()
-  if (!dateText.value) {
-    const week = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][d.getDay()]
-    dateText.value = `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${week}`
-  }
+  clock.value = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  seconds.value = pad(d.getSeconds())
+  const week = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][d.getDay()]
+  dateText.value = `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${week}`
 }
-
-// ---- FPS：rAF 计帧（真实测量）。每 4 秒采样 1 秒：常驻的逐帧 rAF 会让主线程每个 vsync
-//      都跑一整个主帧（样式重算 + 提交），只为了数帧数不值得 ----
-const fps = ref(0)
-let fpsRaf = 0
-let fpsTimer = 0
-let fpsFrames = 0
-let fpsStart = 0
-const FPS_SAMPLE_MS = 1000
-const FPS_GAP_MS = 3000
-function fpsLoop(now: number): void {
-  if (!fpsStart) fpsStart = now
-  fpsFrames += 1
-  if (now - fpsStart >= FPS_SAMPLE_MS) {
-    fps.value = Math.round(((fpsFrames - 1) * 1000) / (now - fpsStart))
-    fpsFrames = 0
-    fpsStart = 0
-    fpsRaf = 0
-    fpsTimer = window.setTimeout(() => {
-      fpsRaf = requestAnimationFrame(fpsLoop)
-    }, FPS_GAP_MS)
-    return
-  }
-  fpsRaf = requestAnimationFrame(fpsLoop)
-}
-
-// ---- 装饰性 hex 数据流（HUD 味，低频刷新） ----
-const hexLine = ref('')
-let hexTimer = 0
-function rollHex(): void {
-  const bytes: string[] = []
-  for (let i = 0; i < 22; i += 1) bytes.push(Math.floor(Math.random() * 256).toString(16).padStart(2, '0').toUpperCase())
-  hexLine.value = bytes.join(' ')
-}
-
-// 静态遥测：CPU 核数 / 时区
-const coreText = `${navigator.hardwareConcurrency || '?'}x`
-const tzText = computed(() => {
-  const offset = -new Date().getTimezoneOffset() / 60
-  const sign = offset >= 0 ? '+' : '-'
-  const abs = Math.abs(offset)
-  return `UTC${sign}${Number.isInteger(abs) ? abs : abs.toFixed(1)}`
-})
 
 // ---- 远程服务器资源（真实数据，不是装饰）：按服务器平台分派数据源 ----
 //   Linux   —— 协议 fs.read 读那台的 /proc（CPU 差值 / RAM / loadavg 进程数），
@@ -382,449 +331,680 @@ const linkText = computed(() => {
   return info ? (stateText[info.state] ?? info.state) : 'STANDBY'
 })
 const linkReady = computed(() => store.currentMachineInfo?.state === 'ready')
-const winText = computed(() => `WIN ${String(store.windows.length).padStart(2, '0')}`)
+// 连接状态的色调：就绪青、失败红、其它（连接中 / 版本不符 / 未连）琥珀
+const linkTone = computed(() => {
+  const state = store.currentMachineInfo?.state
+  if (state === 'ready') return 'on'
+  if (state === 'failed' || state === 'disconnected') return 'bad'
+  return 'mid'
+})
 
-// 外圈 60 根刻度线（每 5 根一根长的），几何在这里算好，模板只管画
-const ticks = Array.from({ length: 60 }, (_, i) => {
-  const a = (i * 6 * Math.PI) / 180
-  const long = i % 5 === 0
-  const r1 = long ? 171 : 177
+// 右板仪表：只有「NN%」能画条，其它（… / N/A / NO LINK / NO GPU）条归零、只显示文字
+function ratioOf(text: string): number {
+  const m = /^(\d+)%$/.exec(text)
+  return m ? Math.min(1, Number(m[1]) / 100) : 0
+}
+const gauges = computed(() => [
+  { key: 'CPU', text: cpuText.value, ratio: ratioOf(cpuText.value) },
+  { key: 'RAM', text: ramText.value, ratio: ratioOf(ramText.value) },
+  { key: 'GPU', text: gpuText.value, ratio: ratioOf(gpuText.value) }
+])
+
+// 地球纬线：纬度 φ 处的圈半径 = cosφ、离赤道高度 = sinφ（都按球半径归一）
+const latitudes = [0, 35, -35, 65, -65].map((deg) => {
+  const a = (deg * Math.PI) / 180
+  return { k: Math.cos(a).toFixed(3), y: (-Math.sin(a)).toFixed(3) }
+})
+
+// 基座刻度环：72 根（每 6 根一根长的），几何在这里算好，模板只管画
+const ticks = Array.from({ length: 72 }, (_, i) => {
+  const a = (i * 5 * Math.PI) / 180
+  const long = i % 6 === 0
+  const r1 = long ? 176 : 182
   return {
     x1: 200 + r1 * Math.cos(a),
     y1: 200 + r1 * Math.sin(a),
-    x2: 200 + 186 * Math.cos(a),
-    y2: 200 + 186 * Math.sin(a),
+    x2: 200 + 190 * Math.cos(a),
+    y2: 200 + 190 * Math.sin(a),
     long
   }
-})
-
-// 雷达环上的三个「目标点」（相位错开的闪烁）
-const blips = [20, 130, 250].map((deg) => {
-  const a = (deg * Math.PI) / 180
-  return { x: 200 + 150 * Math.cos(a), y: 200 + 150 * Math.sin(a) }
 })
 
 onMounted(() => {
   tick()
   timer = window.setInterval(tick, 1000)
-  rollHex()
-  hexTimer = window.setInterval(rollHex, 420)
-  fpsRaf = requestAnimationFrame(fpsLoop)
   void pollRemote()
 })
 onBeforeUnmount(() => {
   window.clearInterval(timer)
-  window.clearInterval(hexTimer)
   window.clearTimeout(remoteTimer)
-  cancelAnimationFrame(fpsRaf)
-  window.clearTimeout(fpsTimer)
 })
 </script>
 
 <template>
-  <div class="jarvis-hud" data-parallax aria-hidden="true">
-    <div class="hud-top">J.A.R.V.I.S. // FRIDAY DESKTOP</div>
-
-    <div class="hud-stage">
-      <!-- 左遥测：上组 = 本机实时（实测）；下组 = 本机日期/核数/时区 -->
-      <div class="telemetry">
-        <div class="t-head">LOCAL</div>
-        <div class="t-row"><span class="t-key">FPS</span><span class="t-val">{{ fps || '…' }}</span></div>
-        <div class="t-row"><span class="t-key">MEM</span><span class="t-val">{{ memText }}</span></div>
-        <div class="t-row"><span class="t-key">UPTIME</span><span class="t-val">{{ uptime }}</span></div>
-        <div class="t-div">
-          <div class="t-row"><span class="t-key">DATE</span><span class="t-val">{{ dateText }}</span></div>
-          <div class="t-row"><span class="t-key">CORE</span><span class="t-val">{{ coreText }}</span></div>
-          <div class="t-row"><span class="t-key">TZ</span><span class="t-val">{{ tzText }}</span></div>
-        </div>
-      </div>
-
-      <!-- 雷达：每个转动的环是一张独立的 <svg> 叠放在同一个方框里——动画转的是整张 svg 元素
-           （合成器线程跑 transform/opacity，零重绘），不再转 svg 里面的 <g>（那要主线程每帧重绘整张图、
-           再过一遍 drop-shadow 滤镜，是桌面空闲时最大的一块开销）。辉光改成 svg 内部滤镜 #hud-glow，
-           跟着图层栅格化一次就缓存，转动时不重算。 -->
-      <div class="radar">
-        <!-- 静态底层：雷达外圈 + 核心辉光；渐变/滤镜定义也放这里（同文档的其它 svg 按 id 引用） -->
-        <svg class="layer" viewBox="0 0 400 400">
+  <div class="jarvis-hud" aria-hidden="true">
+    <!-- 3D 舞台：所有层都在同一个 preserve-3d 空间里，鼠标视差转的是整台 -->
+    <div class="stage" data-parallax>
+      <!-- 透视地面：投影基座（网格 + 刻度/字带环 + 扩散波纹），压平成地板 -->
+      <div class="floor">
+        <div class="floor-grid" />
+        <svg class="pad spin-slow" viewBox="0 0 400 400">
           <defs>
-            <!-- 雷达扫过的扇形：从扫描边往回渐隐（颜色走令牌，见下方 CSS） -->
-            <linearGradient id="hud-sweep" x1="0" y1="1" x2="1" y2="0">
-              <stop offset="0" stop-opacity="0.3" />
-              <stop offset="1" stop-opacity="0" />
-            </linearGradient>
-            <!-- 核心辉光 -->
-            <radialGradient id="hud-core" cx="0.5" cy="0.5" r="0.5">
-              <stop class="hi" offset="0" stop-opacity="0.9" />
-              <stop offset="0.55" stop-opacity="0.35" />
-              <stop offset="1" stop-opacity="0" />
-            </radialGradient>
-            <!-- 线条辉光（等价于原来整张图上的 drop-shadow(0 0 6px accent-a25)） -->
-            <filter id="hud-glow" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
-              <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
-              <feFlood class="glow-flood" result="tint" />
-              <feComposite in="tint" in2="blur" operator="in" result="glow" />
-              <feMerge>
-                <feMergeNode in="glow" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
+            <!-- 逆时针走：转到近处（下半圈）的字是正的，远处被压扁的上半圈才倒着 -->
+            <path id="hud-ring-path" d="M40,200 a160,160 0 1,0 320,0 a160,160 0 1,0 -320,0" />
           </defs>
-          <g filter="url(#hud-glow)">
-            <circle cx="200" cy="200" r="150" fill="none" stroke-width="1" opacity="0.35" />
-            <circle class="core-glow" cx="200" cy="200" r="58" fill="url(#hud-core)" />
-          </g>
+          <circle cx="200" cy="200" r="192" fill="none" stroke-width="1" opacity="0.5" />
+          <line
+            v-for="(t, i) in ticks"
+            :key="i"
+            :x1="t.x1" :y1="t.y1" :x2="t.x2" :y2="t.y2"
+            :stroke-width="t.long ? 2 : 1"
+            :opacity="t.long ? 0.85 : 0.4"
+          />
+          <text class="ring-text">
+            <textPath href="#hud-ring-path" textLength="1000" lengthAdjust="spacing">
+              FRIDAY · HOLOGRAPHIC INTERFACE · SYSTEM ONLINE · FRIDAY · HOLOGRAPHIC INTERFACE · SYSTEM ONLINE ·
+            </textPath>
+          </text>
         </svg>
-
-        <!-- 最外圈双弧（50s 反向慢转） -->
-        <svg class="layer spin-outer" viewBox="0 0 400 400">
-          <circle filter="url(#hud-glow)" cx="200" cy="200" r="193" fill="none" stroke-width="1" stroke-dasharray="420 186.3" opacity="0.26" />
+        <svg class="pad spin-rev" viewBox="0 0 400 400">
+          <circle cx="200" cy="200" r="140" fill="none" stroke-width="3" stroke-dasharray="160 59.9" opacity="0.6" />
+          <circle cx="200" cy="200" r="118" fill="none" stroke-width="1" stroke-dasharray="2 8" opacity="0.55" />
+          <circle class="mid" cx="200" cy="200" r="44" fill="none" stroke-width="2" opacity="0.8" />
         </svg>
-
-        <!-- 外圈刻度：90s 顺时针慢转 -->
-        <svg class="layer spin-slow" viewBox="0 0 400 400">
-          <g filter="url(#hud-glow)">
-            <line
-              v-for="(t, i) in ticks"
-              :key="i"
-              :x1="t.x1" :y1="t.y1" :x2="t.x2" :y2="t.y2"
-              :stroke-width="t.long ? 2 : 1"
-              :opacity="t.long ? 0.75 : 0.35"
-            />
-          </g>
-        </svg>
-
-        <!-- 四段弧环：反向转 -->
-        <svg class="layer spin-rev" viewBox="0 0 400 400">
-          <circle filter="url(#hud-glow)" cx="200" cy="200" r="160" fill="none" stroke-width="2.5" stroke-dasharray="205 46.33" opacity="0.5" />
-        </svg>
-
-        <!-- 主扫描扇形（5s 一圈）+ 回波（相位差半圈、更淡） -->
-        <svg class="layer sweep" viewBox="0 0 400 400">
-          <g filter="url(#hud-glow)">
-            <path d="M200 200 L200 50 A150 150 0 0 1 329.9 125 Z" fill="url(#hud-sweep)" />
-            <line class="mid" x1="200" y1="200" x2="200" y2="50" stroke-width="1.5" opacity="0.8" />
-          </g>
-        </svg>
-        <svg class="layer sweep echo" viewBox="0 0 400 400">
-          <path d="M200 200 L200 50 A150 150 0 0 1 329.9 125 Z" fill="url(#hud-sweep)" opacity="0.45" />
-        </svg>
-
-        <!-- 目标点 + 目标锁定括号（方框四角虚线段），与回波同步闪烁（每个点一层，闪的是图层透明度） -->
-        <svg v-for="(b, i) in blips" :key="i" class="layer blip-g" :class="`blip-${i + 1}`" viewBox="0 0 400 400">
-          <g filter="url(#hud-glow)">
-            <rect class="lock" :x="b.x - 9" :y="b.y - 9" width="18" height="18" fill="none" stroke-width="1.4" stroke-dasharray="4 12" stroke-dashoffset="2" />
-            <circle class="hi blip" :cx="b.x" :cy="b.y" r="3" />
-          </g>
-        </svg>
-
-        <!-- 中圈虚线：反向转 -->
-        <svg class="layer spin-rev-fast" viewBox="0 0 400 400">
-          <circle filter="url(#hud-glow)" cx="200" cy="200" r="120" fill="none" stroke-width="1" stroke-dasharray="3 9" opacity="0.4" />
-        </svg>
-
-        <!-- 内圈三段弧：顺时针 -->
-        <svg class="layer spin-mid" viewBox="0 0 400 400">
-          <circle filter="url(#hud-glow)" cx="200" cy="200" r="94" fill="none" stroke-width="2" stroke-dasharray="140 56.87" opacity="0.55" />
-        </svg>
-
-        <!-- 反应堆核心：六边形环（反转）+ 双环 + 三角，呼吸脉冲 -->
-        <svg class="layer spin-hex" viewBox="0 0 400 400">
-          <path filter="url(#hud-glow)" d="M200 152 L241.6 176 L241.6 224 L200 248 L158.4 224 L158.4 176 Z" fill="none" stroke-width="1.2" opacity="0.5" />
-        </svg>
-        <svg class="layer core" viewBox="0 0 400 400">
-          <g filter="url(#hud-glow)">
-            <circle class="mid" cx="200" cy="200" r="36" fill="none" stroke-width="1.5" opacity="0.85" />
-            <circle cx="200" cy="200" r="24" fill="none" stroke-width="1" opacity="0.6" />
-            <path class="hi" d="M200 182 L216 212 L184 212 Z" opacity="0.9" />
-          </g>
-        </svg>
+        <div class="ripple" />
+        <div class="ripple r2" />
       </div>
 
-      <!-- 右遥测：远程服务器资源（Linux 走 fs.read 读那台的 /proc+/sys，Windows 本机走主进程 IPC；实测）。
-           HOST 身份行 + 细线下资源组，与左栏（3 行 + t-div 3 行）结构对称、精确等高 -->
-      <div class="telemetry align-r">
-        <div class="t-head">REMOTE</div>
-        <div class="t-row">
-          <span class="t-key">HOST</span>
-          <!-- 主机名不长就完整显示；超过 10ch 才用 .host（16ch 上限 + 左缘渐隐），短名字不会被 mask 压住首字符 -->
-          <span class="t-val" :class="{ host: hostName.length > 10 }">{{ hostName }}</span>
+      <!-- 光锥：从基座往上打到地球，竖向光纹 + 轻微闪烁 -->
+      <div class="beam" />
+
+      <!-- 线框地球（斜轴自转）+ 两条轨道环：同一 3D 空间里互相穿插，前后遮挡由浏览器深度排序 -->
+      <div class="globe-wrap">
+        <div class="globe">
+          <i v-for="n in 6" :key="`lon${n}`" class="lon" :class="{ dash: n % 2 === 0 }" :style="{ '--i': n }" />
+          <i v-for="(l, n) in latitudes" :key="`lat${n}`" class="lat" :style="{ '--k': l.k, '--y': l.y }" />
         </div>
-        <div class="t-div">
-          <div class="t-row"><span class="t-key">CPU</span><span class="t-val">{{ cpuText }}</span></div>
-          <div class="t-row"><span class="t-key">RAM</span><span class="t-val">{{ ramText }}</span></div>
-          <div class="t-row"><span class="t-key">GPU</span><span class="t-val">{{ gpuText }}</span></div>
-          <div class="t-row"><span class="t-key">VRAM</span><span class="t-val">{{ vramText }}</span></div>
-          <div class="t-row"><span class="t-key">PROC</span><span class="t-val">{{ procText }}</span></div>
+        <div class="orbit o1"><div class="orbit-spin"><span class="sat" /></div></div>
+        <div class="orbit o2"><div class="orbit-spin"><span class="sat" /></div></div>
+      </div>
+
+      <!-- 反应堆核：球心的光核 + 三角徽记（始终正对观察者） -->
+      <div class="nucleus" />
+      <svg class="reactor" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="30" fill="none" stroke-width="1.5" stroke-dasharray="14 5.7" />
+        <path d="M50 34 L64 58 L36 58 Z" />
+      </svg>
+
+      <!-- 全息扫描纹：盖在地球前面（离观察者更近的一层），细横纹 + 一道上下扫的亮带 -->
+      <div class="holo-scan" />
+
+      <!-- 左板：时间 / 连接（向内斜的全息玻璃） -->
+      <div class="panel left">
+        <div class="p-head">SYS · TIME</div>
+        <div class="clock">{{ clock }}<span class="sec">{{ seconds }}</span></div>
+        <div class="p-sub">{{ dateText }}</div>
+        <div class="link" :class="linkTone"><i class="led" />{{ linkText }}</div>
+      </div>
+
+      <!-- 右板：远程服务器资源（实测） -->
+      <div class="panel right">
+        <div class="p-head">
+          <span>REMOTE</span>
+          <span class="host" :class="{ long: hostName.length > 12 }">{{ hostName }}</span>
         </div>
+        <div v-for="g in gauges" :key="g.key" class="gauge">
+          <span class="g-key">{{ g.key }}</span>
+          <span class="g-bar"><i :style="{ transform: `scaleX(${g.ratio})` }" /></span>
+          <span class="g-val">{{ g.text }}</span>
+        </div>
+        <div class="p-foot">VRAM {{ vramText }} · PROC {{ procText }}</div>
       </div>
     </div>
 
-    <div class="hud-data">
-      <span class="d time">{{ now }}</span>
-      <span class="d" :class="{ on: linkReady }">◈ {{ linkText }}</span>
-      <span class="d">{{ winText }}</span>
-      <span v-if="store.pendingApprovalCount" class="d warn">
+    <!-- 窄主区（两侧板收起）时的状态行；待确认数两种宽度都显示 -->
+    <div class="hud-status">
+      <span class="s-time">{{ clock }}:{{ seconds }}</span>
+      <span class="s-link" :class="{ on: linkReady }">◈ {{ linkText }}</span>
+      <span v-if="store.pendingApprovalCount" class="s-warn">
         ⚠ {{ String(store.pendingApprovalCount).padStart(2, '0') }} PENDING
       </span>
     </div>
-
-    <div class="hex-stream">RX {{ hexLine }}</div>
   </div>
 </template>
 
 <style scoped>
+/* ============ 舞台尺寸 ============
+   --s：舞台边长（地球直径 = 0.5s、基座直径 = 1.3s），跟主区容器走（App.vue .main-area 是 size 容器）：
+   上让出语音波形屏、下让出输入台；宽主区再让出两侧玻璃板。--R = 地球半径。 */
 .jarvis-hud {
   position: absolute;
   inset: 0;
-  /* 上让出语音波形屏、下让出输入台：雷达在两者之间的空白里居中，不再被输入台/媒体叠压住 */
-  padding: 76px 0 118px;
-  /* 雷达边长跟主区容器走（App.vue .main-area 是 size 容器）：
-     宽 = 主区减两侧遥测栏与间距（遥测栏不会再压到左右栏），高 = 主区减上下让位与 HUD 文案行 */
-  --radar-size: clamp(160px, min(470px, 100cqw - 268px, 100cqh - 282px), 470px);
+  padding: 70px 0 118px;
+  --s: clamp(150px, min(100cqw - 56px, 100cqh - 236px, 400px), 400px);
+  --R: calc(var(--s) * 0.25);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 4px;
   pointer-events: none;
   z-index: 0;
-  /* 鼠标视差：整个 HUD 随鼠标轻微倾斜 + 平移（变量由 App.vue rAF 插值下发） */
-  transform: perspective(1200px) rotateY(calc(var(--par-x, 0) * 2.6deg)) rotateX(calc(var(--par-y, 0) * -2deg));
-  translate: calc(var(--par-x, 0) * 9px) calc(var(--par-y, 0) * 7px);
-  /* 开机物质化：从模糊过曝里凝聚出来 */
-  animation: hud-boot 1.1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  perspective: 1100px;
+  perspective-origin: 50% 40%;
+  /* 开机物质化：从模糊过曝里凝聚出来（滤镜只在这 1.2 秒里有，之后不留） */
+  animation: hud-boot 1.2s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes hud-boot {
   from {
     opacity: 0;
-    filter: blur(16px) brightness(2.2);
-    transform: perspective(1200px) scale(1.06);
+    filter: blur(14px) brightness(2.4);
   }
 }
 
-/* 子层交错浮现：各自的最终透明度用 --o 分层（keyframes 里的 var 按元素解析） */
-.hud-top,
-.hud-data,
-.hex-stream,
-.telemetry {
-  opacity: 0;
-  animation: hud-fade 0.8s ease-out 0.35s forwards;
-  --o: 1;
-}
-
-.hud-top {
-  --o: 0.6;
-}
-
-.hex-stream {
-  --o: 0.4;
-  animation-delay: 0.6s;
-}
-
-@keyframes hud-fade {
-  to {
-    opacity: var(--o, 1);
-  }
-}
-
-.hud-top {
-  font-size: 11px;
-  letter-spacing: 5px;
-  color: var(--accent);
-  text-transform: uppercase;
-  text-shadow: 0 0 12px var(--accent-a45);
-}
-
-.hud-stage {
-  display: flex;
-  align-items: center;
-  gap: clamp(10px, 3cqw, 32px);
-}
-
-
-/* 雷达方框：各图层绝对定位叠满；整体透明度放在容器上（组透明度，重叠处不会叠亮） */
-.radar {
+/* 舞台：整台 3D。基础仰视角 + 鼠标视差（Y 轴 ±9°、X 轴 ±6°，各层深度不同所以转起来有真实错位） */
+.stage {
   position: relative;
   flex: none;
-  width: var(--radar-size);
-  aspect-ratio: 1;
-  opacity: 0.55;
+  width: var(--s);
+  height: var(--s);
+  transform-style: preserve-3d;
+  transform: rotateX(calc(4deg + var(--par-y, 0) * -6deg)) rotateY(calc(var(--par-x, 0) * 9deg));
+  translate: calc(var(--par-x, 0) * 8px) calc(var(--par-y, 0) * 6px);
 }
 
-.radar .layer {
+.stage > * {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
 }
 
-/* 动起来的图层各自提成合成层（transform/opacity 动画全在合成器线程跑） */
-.radar .layer:is(.spin-outer, .spin-slow, .spin-rev, .sweep, .blip-g, .spin-rev-fast, .spin-mid, .spin-hex, .core) {
-  will-change: transform, opacity;
-}
-
-.jarvis-hud .glow-flood {
-  flood-color: var(--accent);
-  flood-opacity: 0.25;
-}
-
-/* 雷达配色全走令牌（CSS 覆盖 SVG 表现属性，改 --accent 全套跟随）：
-   默认描边/渐变 = --accent；.mid = 亮一档；.hi = 最亮档填充/渐变。
-   注意规则顺序：通用描边 → .mid 加亮 → .blip/.core-glow/锁定框描边恢复。 */
+/* ============ SVG 配色：全走令牌（CSS 覆盖表现属性，改 --accent 全套跟随） ============ */
 .jarvis-hud svg :is(line, circle) {
   stroke: var(--accent);
 }
 
-.jarvis-hud svg :is(line, circle).mid {
+.jarvis-hud svg circle.mid {
   stroke: var(--accent-bright);
 }
 
-.jarvis-hud svg :is(.blip, .core-glow) {
-  stroke: none;
+/* ============ 地面：投影基座 ============ */
+.floor {
+  left: 50%;
+  top: 80%;
+  width: calc(var(--s) * 1.3);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  transform: rotateX(78deg);
 }
 
-.jarvis-hud svg .lock {
-  stroke: var(--accent-a80);
+.floor > * {
+  position: absolute;
+  inset: 0;
 }
 
-.jarvis-hud svg .spin-hex path {
-  stroke: var(--accent-a60);
+/* 地面网格：圆形渐隐，只在基座周围一圈 */
+.floor-grid {
+  inset: -30%;
+  background-image:
+    linear-gradient(var(--accent-a22) 1px, transparent 1px),
+    linear-gradient(90deg, var(--accent-a22) 1px, transparent 1px);
+  background-size: calc(var(--s) / 9) calc(var(--s) / 9);
+  background-position: center;
+  -webkit-mask-image: radial-gradient(circle closest-side, #000 18%, transparent 100%);
+  mask-image: radial-gradient(circle closest-side, #000 18%, transparent 100%);
 }
 
-.jarvis-hud stop {
-  stop-color: var(--accent);
+.pad {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 4px var(--accent-a45));
+  will-change: transform;
 }
 
-.jarvis-hud stop.hi {
-  stop-color: var(--accent-brighter);
-}
-
-.jarvis-hud svg .hi:not(stop) {
-  fill: var(--accent-brighter);
-}
-
-/* ---- 两侧遥测：真实数据，HUD 等宽小字 ---- */
-.telemetry {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.ring-text {
+  fill: var(--accent);
   font-family: var(--font-hud);
-  font-size: 10.5px;
-  letter-spacing: 1.5px;
-  min-width: 9ch;
-  border-left: 1px solid var(--accent-a22);
-  padding-left: 10px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  opacity: 0.75;
 }
 
-.telemetry.align-r {
-  border-left: none;
-  border-right: 1px solid var(--accent-a22);
-  padding-left: 0;
-  padding-right: 10px;
-  text-align: right;
+/* 扩散波纹：从基座中心往外扩、渐隐（scale + opacity，合成器线程） */
+.ripple {
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-a70);
+  box-shadow:
+    0 0 14px var(--accent-a40),
+    inset 0 0 14px var(--accent-a25);
+  opacity: 0;
+  animation: hud-ripple 5s ease-out infinite;
+  will-change: transform, opacity;
 }
 
-.t-row {
-  display: flex;
+.ripple.r2 {
+  animation-delay: -2.5s;
+}
+
+@keyframes hud-ripple {
+  0% {
+    transform: scale(0.12);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+/* ============ 光锥 ============
+   基座中心（80%）→ 球心（40%）。下窄上宽的梯形，竖向光纹叠在渐变上 */
+.beam {
+  left: 50%;
+  top: 40%;
+  width: calc(var(--s) * 0.62);
+  height: 40%;
+  translate: -50% 0;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 7px, var(--accent-a10) 7px 8px),
+    linear-gradient(0deg, var(--accent-a35), var(--accent-a10) 55%, transparent);
+  clip-path: polygon(45% 100%, 55% 100%, 100% 0, 0 0);
+  -webkit-mask-image: linear-gradient(0deg, #000 30%, transparent);
+  mask-image: linear-gradient(0deg, #000 30%, transparent);
+  animation: hud-flicker 6s steps(1, end) infinite;
+}
+
+@keyframes hud-flicker {
+  0%, 100% { opacity: 0.85; }
+  41% { opacity: 0.55; }
+  43% { opacity: 0.9; }
+  71% { opacity: 0.7; }
+  73% { opacity: 0.85; }
+}
+
+/* ============ 线框地球 ============ */
+.globe-wrap {
+  left: 50%;
+  top: 40%;
+  width: calc(var(--R) * 2);
+  height: calc(var(--R) * 2);
+  translate: -50% -50%;
+  transform-style: preserve-3d;
+  /* 斜轴 + 略俯视：北极朝观察者倾一点，纬线圈看得出椭圆 */
+  transform: rotateX(-16deg) rotateZ(-14deg);
+}
+
+.globe {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  animation: hud-spin-y 32s linear infinite;
+}
+
+.globe > i {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid var(--accent-a50);
+  box-shadow: 0 0 6px var(--accent-a25);
+}
+
+/* 经线：6 个大圆绕竖轴每 30° 一个（12 条经线） */
+.lon {
+  inset: 0;
+  transform: rotateY(calc(var(--i) * 30deg));
+}
+
+.lon.dash {
+  border-style: dashed;
+  border-color: var(--accent-a35);
+}
+
+/* 纬线：半径 cosφ、高度 sinφ，放平（rotateX 90°）再抬到对应高度 */
+.lat {
+  left: 50%;
+  top: 50%;
+  width: calc(var(--k) * 100%);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  transform: translateY(calc(var(--y) * var(--R))) rotateX(90deg);
+  border-color: var(--accent-a35);
+}
+
+/* 轨道环：两条不同倾角的环带一颗卫星点，环在自己平面里转 */
+.orbit {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid var(--accent-a30);
+}
+
+.orbit.o1 {
+  inset: -24%;
+  transform: rotateX(76deg) rotateY(-12deg);
+}
+
+.orbit.o2 {
+  inset: -42%;
+  border-style: dashed;
+  border-color: var(--accent-a22);
+  transform: rotateX(68deg) rotateY(24deg);
+}
+
+.orbit-spin {
+  position: absolute;
+  inset: 0;
+  animation: hud-spin 10s linear infinite;
+  will-change: transform;
+}
+
+.o2 .orbit-spin {
+  animation: hud-spin-rev 17s linear infinite;
+}
+
+.sat {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: var(--accent-brighter);
+  box-shadow: 0 0 10px var(--accent), 0 0 3px #fff;
+}
+
+/* ============ 反应堆核 ============ */
+.nucleus {
+  left: 50%;
+  top: 40%;
+  width: calc(var(--s) * 0.22);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    #fff 0,
+    var(--accent-brighter) 12%,
+    var(--accent-a55) 30%,
+    var(--accent-a12) 52%,
+    transparent 70%
+  );
+  animation: hud-pulse 3.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.reactor {
+  left: 50%;
+  top: 40%;
+  width: calc(var(--s) * 0.13);
+  height: calc(var(--s) * 0.13);
+  translate: -50% -50%;
+  overflow: visible;
+  filter: drop-shadow(0 0 3px var(--accent));
+  animation: hud-spin-rev 14s linear infinite;
+  will-change: transform;
+}
+
+.reactor circle {
+  stroke: var(--accent-brighter);
+  opacity: 0.9;
+}
+
+.reactor path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  opacity: 0.85;
+}
+
+@keyframes hud-pulse {
+  50% {
+    opacity: 0.7;
+    transform: scale(0.88);
+  }
+}
+
+/* ============ 全息扫描纹 ============
+   放在地球前方（translateZ 一个半径多），细横纹压暗出全息质感，亮带每 4.5 秒从上扫到下 */
+.holo-scan {
+  left: 50%;
+  top: 40%;
+  width: calc(var(--R) * 2.9);
+  height: calc(var(--R) * 2.9);
+  translate: -50% -50%;
+  transform: translateZ(calc(var(--R) * 1.3));
+  border-radius: 50%;
+  overflow: hidden;
+  background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(3, 8, 16, 0.32) 2px 3px);
+  -webkit-mask-image: radial-gradient(circle closest-side, #000 55%, transparent);
+  mask-image: radial-gradient(circle closest-side, #000 55%, transparent);
+}
+
+.holo-scan::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -30%;
+  height: 30%;
+  background: linear-gradient(180deg, transparent, var(--accent-a14) 85%, var(--accent-a30));
+  animation: hud-scan 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform;
+}
+
+@keyframes hud-scan {
+  to {
+    transform: translateY(433%);
+  }
+}
+
+/* ============ 两侧全息玻璃板（座舱式向内斜：外缘朝观察者） ============ */
+.panel {
+  top: 40%;
+  width: 200px;
+  translate: 0 -50%;
+  display: none; /* 宽主区才出（见文末 @container） */
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
+  padding: 14px 16px;
+  font-family: var(--font-hud);
+  color: var(--text-2);
+  background:
+    /* 四角括号 */
+    linear-gradient(var(--accent) 0 0) left top / 10px 1px,
+    linear-gradient(var(--accent) 0 0) left top / 1px 10px,
+    linear-gradient(var(--accent) 0 0) right top / 10px 1px,
+    linear-gradient(var(--accent) 0 0) right top / 1px 10px,
+    linear-gradient(var(--accent) 0 0) left bottom / 10px 1px,
+    linear-gradient(var(--accent) 0 0) left bottom / 1px 10px,
+    linear-gradient(var(--accent) 0 0) right bottom / 10px 1px,
+    linear-gradient(var(--accent) 0 0) right bottom / 1px 10px,
+    /* 细横纹 + 玻璃底 */
+    repeating-linear-gradient(0deg, transparent 0 3px, var(--accent-a4) 3px 4px),
+    linear-gradient(135deg, var(--accent-a10), var(--accent-a4) 60%, transparent);
+  background-repeat: no-repeat;
+  border: 1px solid var(--accent-a18);
+  box-shadow: 0 0 24px var(--accent-a8), inset 0 0 18px var(--accent-a8);
+  opacity: 0;
+  animation: hud-fade 0.8s ease-out 0.45s forwards;
 }
 
-/* 遥测分组标题（LOCAL / REMOTE） */
-.t-head {
-  color: var(--accent);
-  opacity: 0.55;
+.panel.left {
+  right: calc(100% + 40px);
+  transform-origin: right center;
+  transform: rotateY(26deg);
+}
+
+.panel.right {
+  left: calc(100% + 40px);
+  transform-origin: left center;
+  transform: rotateY(-26deg);
+}
+
+@keyframes hud-fade {
+  to {
+    opacity: 1;
+  }
+}
+
+.p-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--accent-a22);
   font-size: 9px;
   letter-spacing: 2.5px;
-  margin-bottom: -4px;
-}
-
-/* 遥测第二组（左遥测下方的日期/核数/时区）：细线隔开 */
-.t-div {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--accent-a22);
-}
-
-.t-key {
   color: var(--accent);
-  opacity: 0.55;
-  font-size: 9px;
+  opacity: 0.75;
 }
 
-.telemetry.align-r .t-key {
-  text-align: right;
-}
-
-.t-val {
-  color: var(--text-2);
-  text-shadow: 0 0 8px var(--accent-a25);
-}
-
-/* 主机名超宽时左缘渐隐（右对齐保尾端，照会话名行的渐隐偏好，不用 … 截断） */
-.t-val.host {
-  max-width: 16ch;
-  align-self: flex-end;
+.p-head .host {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  mask-image: linear-gradient(270deg, #000 calc(100% - 14px), transparent);
-  -webkit-mask-image: linear-gradient(270deg, #000 calc(100% - 14px), transparent);
+  letter-spacing: 1px;
+  color: var(--text-2);
 }
 
-.hud-data {
+/* 主机名超长才左缘渐隐（短名字不被 mask 压住首字符；不用 … 截断） */
+.p-head .host.long {
   display: flex;
-  gap: 18px;
-  font-family: var(--font-hud);
-  font-size: 12px;
+  justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(270deg, #000 calc(100% - 12px), transparent);
+  mask-image: linear-gradient(270deg, #000 calc(100% - 12px), transparent);
+}
+
+.clock {
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: 1px;
+  color: var(--heading-bright);
+  text-shadow: 0 0 14px var(--accent-a60);
+}
+
+.clock .sec {
+  margin-left: 4px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.p-sub {
+  font-size: 10.5px;
   letter-spacing: 2px;
   color: var(--text-2);
 }
 
-.d.on {
-  color: var(--accent);
-  text-shadow: 0 0 10px var(--accent-a50);
-}
-
-.d.warn {
+.link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  font-size: 10.5px;
+  letter-spacing: 2px;
   color: var(--warn);
 }
 
-.d.time {
+.link .led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.link.on {
+  color: var(--accent);
+}
+
+.link.bad {
+  color: var(--fail);
+}
+
+.gauge {
+  display: grid;
+  grid-template-columns: 28px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  letter-spacing: 1px;
+}
+
+.g-key {
+  font-size: 9px;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+/* 分段能量条：底槽 + 按比例 scaleX 的填充（transform 过渡，不重排） */
+.g-bar {
+  position: relative;
+  height: 6px;
+  background: var(--accent-a10);
+  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+  mask-image: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+}
+
+.g-bar > i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--accent-a60), var(--accent-brighter));
+  transform-origin: left center;
+  transition: transform 0.6s ease;
+}
+
+.g-val {
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text);
+  text-shadow: 0 0 8px var(--accent-a30);
+}
+
+.p-foot {
+  padding-top: 6px;
+  border-top: 1px solid var(--accent-a22);
+  font-size: 9px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+/* ============ 状态行（窄主区） ============ */
+.hud-status {
+  display: flex;
+  gap: 14px;
+  font-family: var(--font-hud);
+  font-size: 11.5px;
+  letter-spacing: 2px;
+  color: var(--text-2);
+  opacity: 0;
+  animation: hud-fade 0.8s ease-out 0.45s forwards;
+}
+
+.s-time {
   color: var(--accent);
   opacity: 0.8;
 }
 
-/* ---- hex 数据流：装饰性 RX 流，两端渐隐 ---- */
-.hex-stream {
-  font-family: var(--font-hud);
-  font-size: 10px;
-  letter-spacing: 1px;
+.s-link.on {
   color: var(--accent);
-  opacity: 0;
-  max-width: min(64vmin, 560px, 100cqw - 32px);
-  overflow: hidden;
-  white-space: nowrap;
-  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  text-shadow: 0 0 10px var(--accent-a50);
 }
 
-/* ---- 旋转动画：transform-origin 固定在 viewBox 中心 ---- */
-.spin-slow, .spin-rev, .spin-rev-fast, .spin-mid, .sweep, .spin-outer, .spin-hex, .core {
-  transform-origin: 50% 50%;
+.s-warn {
+  color: var(--warn);
 }
-.spin-slow      { animation: hud-spin 90s linear infinite; }
-.spin-rev       { animation: hud-spin-rev 40s linear infinite; }
-.spin-rev-fast  { animation: hud-spin-rev 30s linear infinite; }
-.spin-mid       { animation: hud-spin 24s linear infinite; }
-.sweep          { animation: hud-spin 5s linear infinite; }
-.sweep.echo     { animation-delay: -2.5s; }
-.spin-outer     { animation: hud-spin-rev 50s linear infinite; }
-.spin-hex       { animation: hud-spin-rev 21s linear infinite; }
+
+/* ============ 动画 ============ */
+.spin-slow {
+  animation: hud-spin 80s linear infinite;
+}
+
+.spin-rev {
+  animation: hud-spin-rev 36s linear infinite;
+}
 
 @keyframes hud-spin {
   to { transform: rotate(360deg); }
@@ -832,57 +1012,40 @@ onBeforeUnmount(() => {
 @keyframes hud-spin-rev {
   to { transform: rotate(-360deg); }
 }
-
-/* 核心呼吸 */
-.core {
-  animation: hud-pulse 3s ease-in-out infinite;
-}
-@keyframes hud-pulse {
-  50% { opacity: 0.65; transform: scale(0.96); }
-}
-
-/* 目标点：相位错开，像被雷达扫到的回波；锁定括号同步 */
-.blip-g { animation: hud-blip 5s linear infinite; }
-.blip-2 { animation-delay: -1.7s; }
-.blip-3 { animation-delay: -3.4s; }
-@keyframes hud-blip {
-  0%, 70% { opacity: 0.15; }
-  80% { opacity: 1; }
-  95%, 100% { opacity: 0.15; }
+@keyframes hud-spin-y {
+  to { transform: rotateY(360deg); }
 }
 
 /* 注：装饰动画不随系统 prefers-reduced-motion 关闭——动效是主题核心体验，
    本机 Windows 关了「动画效果」，跟随 hint 会静默变纯静态（实测 matchMedia 报 reduce）。 */
 
-/* ---- 响应式（放在最后：要压过上面同优先级的 .telemetry 等基础规则）---- */
-/* 主区太窄（窗口拉窄 / 小屏）：两侧遥测栏收起，雷达独占宽度；hex 流跟着收窄 */
+/* ============ 响应式（放在最后：压过上面同优先级的基础规则） ============ */
+/* 宽主区：两侧玻璃板出来，舞台让出两板的宽度；时间/连接挪进左板，状态行只留待确认数 */
+/* 窄主区：左下角的媒体叠会和状态行重叠，下边让得更多（让过媒体叠） */
 @container main (max-width: 600px) {
-  /* 窄时左下角的媒体叠会和状态行重叠：下边让得更多（让过媒体叠），hex 流收起 */
   .jarvis-hud {
     padding-bottom: 196px;
-    --radar-size: clamp(140px, min(470px, 100cqw - 40px, 100cqh - 330px), 470px);
+    --s: clamp(130px, min(100cqw - 96px, 100cqh - 314px, 400px), 400px); /* 基座 1.3s 宽，别压到两侧栏 */
   }
 
-  .telemetry,
-  .hex-stream {
-    display: none;
-  }
-
-  .hud-data {
-    gap: 12px;
+  .hud-status {
+    gap: 10px;
     letter-spacing: 1px;
   }
 }
 
-/* 主区太矮：只留雷达和状态行，标题与 hex 流收起 */
-@container main (max-height: 520px) {
-  .hud-top,
-  .hex-stream {
-    display: none;
+@container main (min-width: 760px) {
+  .jarvis-hud {
+    --s: clamp(200px, min(100cqw - 580px, 100cqh - 236px, 420px), 420px);
   }
 
-  .jarvis-hud {
-    --radar-size: clamp(120px, min(470px, 100cqw - 268px, 100cqh - 230px), 470px);
+  .panel {
+    display: flex;
+  }
+
+  .s-time,
+  .s-link {
+    display: none;
   }
 }
 </style>

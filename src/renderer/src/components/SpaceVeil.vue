@@ -12,6 +12,7 @@ import { subscribeFrames, wakeFrames } from '../lib/frameTicker.js'
 
 const STAR_COUNT = 120
 
+const rootEl = ref<HTMLElement | null>(null)
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 
 interface Star {
@@ -106,11 +107,13 @@ function resize(): void {
   ctx?.setTransform(dpr, 0, 0, dpr, 0, 0)
 }
 
-function drawStar(ctx: CanvasRenderingContext2D, star: Star, alpha: number): void {
+function drawStar(ctx: CanvasRenderingContext2D, star: Star, alpha: number, dx: number, dy: number): void {
   const rgb = star.accent ? accentRgb : starRgb
+  const x = star.x + dx
+  const y = star.y + dy
   ctx.fillStyle = `rgba(${rgb}, ${alpha})`
   ctx.beginPath()
-  ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2)
+  ctx.arc(x, y, star.r, 0, Math.PI * 2)
   ctx.fill()
   if (star.flare) {
     // 十字星芒：只给最亮的几颗，长度与亮度挂钩
@@ -118,10 +121,10 @@ function drawStar(ctx: CanvasRenderingContext2D, star: Star, alpha: number): voi
     ctx.strokeStyle = `rgba(${rgb}, ${alpha * 0.4})`
     ctx.lineWidth = 0.7
     ctx.beginPath()
-    ctx.moveTo(star.x - len, star.y)
-    ctx.lineTo(star.x + len, star.y)
-    ctx.moveTo(star.x, star.y - len)
-    ctx.lineTo(star.x, star.y + len)
+    ctx.moveTo(x - len, y)
+    ctx.lineTo(x + len, y)
+    ctx.moveTo(x, y - len)
+    ctx.lineTo(x, y + len)
     ctx.stroke()
   }
 }
@@ -141,13 +144,19 @@ function step(now: number): void {
   const t = now / 1000
   ctx.clearRect(0, 0, width, height)
 
+  // 景深视差：鼠标位置（App.vue 写在根上的 --par-x/--par-y）按星的大小错开——大星算近、挪得多，
+  // 小星算远、几乎不动，星野不再是一整张平面跟着平移
+  const style = rootEl.value?.style
+  const parX = Number(style?.getPropertyValue('--par-x')) || 0
+  const parY = Number(style?.getPropertyValue('--par-y')) || 0
   for (const star of stars) {
     star.x += star.vx * dt
     star.y += star.vy * dt
     if (star.y > height + 10) resetStar(star, false)
     else if (star.x < -10) star.x = width + 8
     const alpha = star.base * (0.72 + 0.28 * Math.sin(t * star.twinkle + star.phase))
-    drawStar(ctx, star, alpha)
+    const depth = star.r * star.r * 6
+    drawStar(ctx, star, alpha, -parX * depth, -parY * depth * 0.75)
   }
 
   // 流星
@@ -217,7 +226,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="space-veil" data-parallax aria-hidden="true">
+  <div ref="rootEl" class="space-veil" data-parallax aria-hidden="true">
     <canvas ref="canvasEl" class="veil-canvas" />
   </div>
 </template>
@@ -229,8 +238,9 @@ onBeforeUnmount(() => {
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
-  /* 鼠标视差（App.vue 把 --par-x/--par-y 直接写到这个根上）：最远的一层，反向小幅移动 */
-  translate: calc(var(--par-x, 0) * -7px) calc(var(--par-y, 0) * -5px);
+  /* 鼠标视差（App.vue 把 --par-x/--par-y 直接写到这个根上）：最远的一层（星云），反向小幅移动；
+     星点在 canvas 里按大小再各自错开（见 step） */
+  translate: calc(var(--par-x, 0) * -5px) calc(var(--par-y, 0) * -4px);
 }
 
 .veil-canvas {
