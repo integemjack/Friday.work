@@ -3,6 +3,7 @@
 // canvas 漂移星野（缓慢漂移 + 闪烁，少数亮星带十字星芒）+ 偶发流星；
 // 星云辉光和暗角走 CSS 伪元素。纯 canvas + CSS，零依赖，主题色跟随 --accent。
 // pointer-events 全关；document.hidden 时暂停。
+// 帧率：星野漂移只有几 px/s，30fps 肉眼无差；有流星划过时才跑满 60fps（流星 500+ px/s 要顺）。
 // 注：不随系统 prefers-reduced-motion 降级——动效是本主题核心体验，
 // 本机 Windows 关了「动画效果」，跟随 hint 会静默变纯静态（实测 matchMedia 报 reduce）。
 import { onBeforeUnmount, onMounted, ref } from 'vue'
@@ -40,7 +41,7 @@ interface Meteor {
 const stars: Star[] = []
 const meteors: Meteor[] = []
 let raf = 0
-let meteorTimer = 0
+let ctx: CanvasRenderingContext2D | null = null
 let running = true
 let width = 0
 let height = 0
@@ -75,7 +76,8 @@ function spawnMeteor(now: number): void {
     age: 0,
     life: 0.9 + Math.random() * 0.6
   })
-  nextMeteorAt = now + (7000 + Math.random() * 9000) * 1000
+  // 下一颗 7–16 秒后（原来多乘了个 1000，算成了 2–4 小时：整个会话只看得到开场那一颗）
+  nextMeteorAt = now + 7000 + Math.random() * 9000
 }
 
 function resize(): void {
@@ -87,7 +89,8 @@ function resize(): void {
   height = parent.clientHeight
   canvas.width = Math.round(width * dpr)
   canvas.height = Math.round(height * dpr)
-  canvas.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx = canvas.getContext('2d')
+  ctx?.setTransform(dpr, 0, 0, dpr, 0, 0)
 }
 
 function drawStar(ctx: CanvasRenderingContext2D, star: Star, alpha: number): void {
@@ -110,10 +113,13 @@ function drawStar(ctx: CanvasRenderingContext2D, star: Star, alpha: number): voi
   }
 }
 
+/** 没有流星时的最小帧间隔（≈30fps；留 4ms 余量免得 60Hz 下抖成 20fps） */
+const IDLE_FRAME_MS = 1000 / 30 - 4
+
 function step(now: number): void {
   raf = requestAnimationFrame(step)
-  const ctx = canvasEl.value?.getContext('2d')
   if (!ctx || !running) return
+  if (!meteors.length && now < nextMeteorAt && now - last < IDLE_FRAME_MS) return
   const dt = Math.min((now - last) / 1000, 0.05)
   last = now
   const t = now / 1000
@@ -186,14 +192,14 @@ function onResize(): void {
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
-  window.clearInterval(meteorTimer)
+  ctx = null
   window.removeEventListener('resize', onResize)
   document.removeEventListener('visibilitychange', onVisibility)
 })
 </script>
 
 <template>
-  <div class="space-veil" aria-hidden="true">
+  <div class="space-veil" data-parallax aria-hidden="true">
     <canvas ref="canvasEl" class="veil-canvas" />
   </div>
 </template>
@@ -205,7 +211,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
-  /* 鼠标视差（App.vue 下发 --par-x/--par-y）：最远的一层，反向小幅移动 */
+  /* 鼠标视差（App.vue 把 --par-x/--par-y 直接写到这个根上）：最远的一层，反向小幅移动 */
   translate: calc(var(--par-x, 0) * -7px) calc(var(--par-y, 0) * -5px);
 }
 

@@ -2,6 +2,7 @@
    （浅色 :root / 深色 @media / 贾维斯 :root[data-theme]）。规则层一律引用这里的变量，不写字面色值。 */
 
 :root {
+  --bg: #f6f6f7; /* = shared/theme-tokens.ts 的 THEME_BG.system.light（原来浅色档漏了这个变量，桌面底是透明的） */
   /* 面板半透明：桌面内容与背景融合（磨砂玻璃），浅色 = 白玻璃 */
   --panel: rgba(255, 255, 255, 0.62);
   --panel-2: rgba(255, 255, 255, 0.45);
@@ -35,7 +36,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1e1f22;
+    --bg: #1e1f22; /* = THEME_BG.system.dark */
     /* 深色 = 烟熏玻璃 */
     --panel: rgba(38, 39, 43, 0.55);
     --panel-2: rgba(43, 44, 49, 0.5);

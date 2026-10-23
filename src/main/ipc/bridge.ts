@@ -20,7 +20,9 @@ export class IpcBridge {
 
   constructor(
     private readonly protocolHost: { providePort(webContents: WebContents): void },
-    private readonly getWindow: () => Electron.BrowserWindow | null = () => null
+    private readonly getWindow: () => Electron.BrowserWindow | null = () => null,
+    /** 底色变了的回调：主进程记下来，下次建窗直接用（启动第一帧就是上次主题的底色） */
+    private readonly onBackground: (color: string) => void = () => {}
   ) {}
 
   private async registerPath(path: string): Promise<PickedFile | null> {
@@ -125,6 +127,7 @@ export class IpcBridge {
     ipcMain.on('ui:background', (_event, color: unknown) => {
       if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) return
       this.getWindow()?.setBackgroundColor(color)
+      this.onBackground(color)
     })
 
     // 有待答的 ask_user：窗口切到系统级置顶（提问浮层显示中永远最前，压过其他应用），没了恢复

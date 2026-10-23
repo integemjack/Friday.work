@@ -2,7 +2,7 @@
 // 主进程 = 窗口、凭据、安全边界；网络 I/O 全在协议进程（utilityProcess）。
 // 数据面端口由渲染进程加载完成后主动请求（preload: friday-request-port）。
 
-import { app, BrowserWindow, Menu, nativeTheme, protocol, screen, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, protocol, screen, session, shell } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerDictationIpc } from './Dictation.js'
@@ -13,6 +13,7 @@ import { CredentialStore } from './CredentialStore.js'
 import { handleMediaStackRequest } from './MediaStack.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
 import { IpcBridge } from './ipc/bridge.js'
+import { THEME_BG } from '../shared/theme-tokens.js'
 
 // 媒体叠本地缓存的供文件协议（friday-media://stack/<name>，只出 MediaStack 目录里的文件）：
 // 必须在 app ready 前注册为特权 scheme，<img>/<video> 才能直接引
@@ -39,7 +40,25 @@ interface MainWindowState {
   width: number
   height: number
   maximized: boolean
+  /** 上次界面主题的窗口底色（渲染层 ui:background 报来的）：建窗时直接用，免得启动先闪一下系统灰再变深空蓝 */
+  background?: string
 }
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
+/** 上次记下的窗口底色（单独读：坐标失效时 loadWindowState 整个丢弃，底色仍然有效）。
+ *  没记过 = 首次启动，界面默认是贾维斯主题，就用它的底色 */
+function loadSavedBackground(): string {
+  try {
+    const raw = JSON.parse(readFileSync(windowStatePath(), 'utf8')) as Partial<MainWindowState>
+    if (typeof raw.background === 'string' && HEX_COLOR.test(raw.background)) return raw.background
+  } catch {
+    // 没存档：走默认
+  }
+  return THEME_BG.jarvis
+}
+
+let savedBackground: string | null = null
 
 function windowStatePath(): string {
   return join(app.getPath('userData'), 'window-state.json')
@@ -92,7 +111,8 @@ function persistWindowState(): void {
       y: Math.round(bounds.y),
       width: Math.round(bounds.width),
       height: Math.round(bounds.height),
-      maximized: win.isMaximized()
+      maximized: win.isMaximized(),
+      background: savedBackground ?? undefined
     }
     writeFileSync(windowStatePath(), JSON.stringify(lastWindowState))
   } catch {
@@ -137,7 +157,7 @@ function createWindow(): void {
     title: 'Friday',
     icon: join(__dirname, '../../resources/icon.png'),
     frame: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1f22' : '#f6f6f7',
+    backgroundColor: (savedBackground ??= loadSavedBackground()),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -185,7 +205,15 @@ app.whenReady().then(() => {
   protocol.handle('friday-media', (request) => handleMediaStackRequest(request))
 
   protocolProcessHost.start()
-  bridge = new IpcBridge(protocolProcessHost, () => mainWindow)
+  bridge = new IpcBridge(
+    protocolProcessHost,
+    () => mainWindow,
+    (color) => {
+      if (color === savedBackground) return
+      savedBackground = color
+      schedulePersistWindowState()
+    }
+  )
   bridge.register()
   // 语音全部走 friday-voice 引擎（GPU）：听写（实时 + 一次性）和播报（CosyVoice3，含克隆音色）
   registerDictationIpc()

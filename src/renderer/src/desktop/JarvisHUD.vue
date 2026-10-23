@@ -3,7 +3,7 @@
 // 不是纯装饰：遥测栏和状态行显示真实数据——FPS（实测）、JS 堆内存、运行时长、CPU 核数、
 // 时区、日期、机器连接状态、窗口数、待确认数、实时时钟；右侧 REMOTE 组是当前服务器的
 // CPU/RAM/GPU/显存/进程数实测（Linux 走 fs.read 读 /proc+/sys，Windows 本机走主进程 IPC）。
-// 随鼠标做 3D 视差倾斜（--par-x/--par-y 由 App.vue 下发，rAF 已插值）。
+// 随鼠标做 3D 视差倾斜（--par-x/--par-y 由 App.vue 直接写到带 data-parallax 的根上，rAF 已插值）。
 // 只在「贾维斯界面」下挂载（App.vue 里 v-if="jarvis"），别的主题不渲染、零开销。
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -412,7 +412,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="jarvis-hud" aria-hidden="true">
+  <div class="jarvis-hud" data-parallax aria-hidden="true">
     <div class="hud-top">J.A.R.V.I.S. // FRIDAY DESKTOP</div>
 
     <div class="hud-stage">
@@ -429,79 +429,106 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <svg viewBox="0 0 400 400">
-        <defs>
-          <!-- 雷达扫过的扇形：从扫描边往回渐隐（颜色走令牌，见下方 CSS） -->
-          <linearGradient id="hud-sweep" x1="0" y1="1" x2="1" y2="0">
-            <stop offset="0" stop-opacity="0.3" />
-            <stop offset="1" stop-opacity="0" />
-          </linearGradient>
-          <!-- 核心辉光 -->
-          <radialGradient id="hud-core" cx="0.5" cy="0.5" r="0.5">
-            <stop class="hi" offset="0" stop-opacity="0.9" />
-            <stop offset="0.55" stop-opacity="0.35" />
-            <stop offset="1" stop-opacity="0" />
-          </radialGradient>
-        </defs>
+      <!-- 雷达：每个转动的环是一张独立的 <svg> 叠放在同一个方框里——动画转的是整张 svg 元素
+           （合成器线程跑 transform/opacity，零重绘），不再转 svg 里面的 <g>（那要主线程每帧重绘整张图、
+           再过一遍 drop-shadow 滤镜，是桌面空闲时最大的一块开销）。辉光改成 svg 内部滤镜 #hud-glow，
+           跟着图层栅格化一次就缓存，转动时不重算。 -->
+      <div class="radar">
+        <!-- 静态底层：雷达外圈 + 核心辉光；渐变/滤镜定义也放这里（同文档的其它 svg 按 id 引用） -->
+        <svg class="layer" viewBox="0 0 400 400">
+          <defs>
+            <!-- 雷达扫过的扇形：从扫描边往回渐隐（颜色走令牌，见下方 CSS） -->
+            <linearGradient id="hud-sweep" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0" stop-opacity="0.3" />
+              <stop offset="1" stop-opacity="0" />
+            </linearGradient>
+            <!-- 核心辉光 -->
+            <radialGradient id="hud-core" cx="0.5" cy="0.5" r="0.5">
+              <stop class="hi" offset="0" stop-opacity="0.9" />
+              <stop offset="0.55" stop-opacity="0.35" />
+              <stop offset="1" stop-opacity="0" />
+            </radialGradient>
+            <!-- 线条辉光（等价于原来整张图上的 drop-shadow(0 0 6px accent-a25)） -->
+            <filter id="hud-glow" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
+              <feFlood class="glow-flood" result="tint" />
+              <feComposite in="tint" in2="blur" operator="in" result="glow" />
+              <feMerge>
+                <feMergeNode in="glow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <g filter="url(#hud-glow)">
+            <circle cx="200" cy="200" r="150" fill="none" stroke-width="1" opacity="0.35" />
+            <circle class="core-glow" cx="200" cy="200" r="58" fill="url(#hud-core)" />
+          </g>
+        </svg>
 
         <!-- 最外圈双弧（50s 反向慢转） -->
-        <g class="spin-outer">
-          <circle cx="200" cy="200" r="193" fill="none" stroke-width="1" stroke-dasharray="420 186.3" opacity="0.26" />
-        </g>
+        <svg class="layer spin-outer" viewBox="0 0 400 400">
+          <circle filter="url(#hud-glow)" cx="200" cy="200" r="193" fill="none" stroke-width="1" stroke-dasharray="420 186.3" opacity="0.26" />
+        </svg>
 
         <!-- 外圈刻度：90s 顺时针慢转 -->
-        <g class="spin-slow">
-          <line
-            v-for="(t, i) in ticks"
-            :key="i"
-            :x1="t.x1" :y1="t.y1" :x2="t.x2" :y2="t.y2"
-            :stroke-width="t.long ? 2 : 1"
-            :opacity="t.long ? 0.75 : 0.35"
-          />
-        </g>
+        <svg class="layer spin-slow" viewBox="0 0 400 400">
+          <g filter="url(#hud-glow)">
+            <line
+              v-for="(t, i) in ticks"
+              :key="i"
+              :x1="t.x1" :y1="t.y1" :x2="t.x2" :y2="t.y2"
+              :stroke-width="t.long ? 2 : 1"
+              :opacity="t.long ? 0.75 : 0.35"
+            />
+          </g>
+        </svg>
 
         <!-- 四段弧环：反向转 -->
-        <g class="spin-rev">
-          <circle cx="200" cy="200" r="160" fill="none" stroke-width="2.5" stroke-dasharray="205 46.33" opacity="0.5" />
-        </g>
+        <svg class="layer spin-rev" viewBox="0 0 400 400">
+          <circle filter="url(#hud-glow)" cx="200" cy="200" r="160" fill="none" stroke-width="2.5" stroke-dasharray="205 46.33" opacity="0.5" />
+        </svg>
 
-        <!-- 雷达外圈 + 主扫描扇形（5s 一圈）+ 回波（相位差半圈、更淡）+ 目标点 -->
-        <circle cx="200" cy="200" r="150" fill="none" stroke-width="1" opacity="0.35" />
-        <g class="sweep">
-          <path d="M200 200 L200 50 A150 150 0 0 1 329.9 125 Z" fill="url(#hud-sweep)" />
-          <line class="mid" x1="200" y1="200" x2="200" y2="50" stroke-width="1.5" opacity="0.8" />
-        </g>
-        <g class="sweep echo">
+        <!-- 主扫描扇形（5s 一圈）+ 回波（相位差半圈、更淡） -->
+        <svg class="layer sweep" viewBox="0 0 400 400">
+          <g filter="url(#hud-glow)">
+            <path d="M200 200 L200 50 A150 150 0 0 1 329.9 125 Z" fill="url(#hud-sweep)" />
+            <line class="mid" x1="200" y1="200" x2="200" y2="50" stroke-width="1.5" opacity="0.8" />
+          </g>
+        </svg>
+        <svg class="layer sweep echo" viewBox="0 0 400 400">
           <path d="M200 200 L200 50 A150 150 0 0 1 329.9 125 Z" fill="url(#hud-sweep)" opacity="0.45" />
-        </g>
+        </svg>
 
-        <!-- 目标点 + 目标锁定括号（方框四角虚线段），与回波同步闪烁 -->
-        <g v-for="(b, i) in blips" :key="i" class="blip-g" :class="`blip-${i + 1}`">
-          <rect class="lock" :x="b.x - 9" :y="b.y - 9" width="18" height="18" fill="none" stroke-width="1.4" stroke-dasharray="4 12" stroke-dashoffset="2" />
-          <circle class="hi blip" :cx="b.x" :cy="b.y" r="3" />
-        </g>
+        <!-- 目标点 + 目标锁定括号（方框四角虚线段），与回波同步闪烁（每个点一层，闪的是图层透明度） -->
+        <svg v-for="(b, i) in blips" :key="i" class="layer blip-g" :class="`blip-${i + 1}`" viewBox="0 0 400 400">
+          <g filter="url(#hud-glow)">
+            <rect class="lock" :x="b.x - 9" :y="b.y - 9" width="18" height="18" fill="none" stroke-width="1.4" stroke-dasharray="4 12" stroke-dashoffset="2" />
+            <circle class="hi blip" :cx="b.x" :cy="b.y" r="3" />
+          </g>
+        </svg>
 
         <!-- 中圈虚线：反向转 -->
-        <g class="spin-rev-fast">
-          <circle cx="200" cy="200" r="120" fill="none" stroke-width="1" stroke-dasharray="3 9" opacity="0.4" />
-        </g>
+        <svg class="layer spin-rev-fast" viewBox="0 0 400 400">
+          <circle filter="url(#hud-glow)" cx="200" cy="200" r="120" fill="none" stroke-width="1" stroke-dasharray="3 9" opacity="0.4" />
+        </svg>
 
         <!-- 内圈三段弧：顺时针 -->
-        <g class="spin-mid">
-          <circle cx="200" cy="200" r="94" fill="none" stroke-width="2" stroke-dasharray="140 56.87" opacity="0.55" />
-        </g>
+        <svg class="layer spin-mid" viewBox="0 0 400 400">
+          <circle filter="url(#hud-glow)" cx="200" cy="200" r="94" fill="none" stroke-width="2" stroke-dasharray="140 56.87" opacity="0.55" />
+        </svg>
 
-        <!-- 反应堆核心：辉光 + 六边形环（反转）+ 双环 + 三角，呼吸脉冲 -->
-        <circle class="core-glow" cx="200" cy="200" r="58" fill="url(#hud-core)" />
-        <g class="spin-hex">
-          <path d="M200 152 L241.6 176 L241.6 224 L200 248 L158.4 224 L158.4 176 Z" fill="none" stroke-width="1.2" opacity="0.5" />
-        </g>
-        <g class="core">
-          <circle class="mid" cx="200" cy="200" r="36" fill="none" stroke-width="1.5" opacity="0.85" />
-          <circle cx="200" cy="200" r="24" fill="none" stroke-width="1" opacity="0.6" />
-          <path class="hi" d="M200 182 L216 212 L184 212 Z" opacity="0.9" />
-        </g>
-      </svg>
+        <!-- 反应堆核心：六边形环（反转）+ 双环 + 三角，呼吸脉冲 -->
+        <svg class="layer spin-hex" viewBox="0 0 400 400">
+          <path filter="url(#hud-glow)" d="M200 152 L241.6 176 L241.6 224 L200 248 L158.4 224 L158.4 176 Z" fill="none" stroke-width="1.2" opacity="0.5" />
+        </svg>
+        <svg class="layer core" viewBox="0 0 400 400">
+          <g filter="url(#hud-glow)">
+            <circle class="mid" cx="200" cy="200" r="36" fill="none" stroke-width="1.5" opacity="0.85" />
+            <circle cx="200" cy="200" r="24" fill="none" stroke-width="1" opacity="0.6" />
+            <path class="hi" d="M200 182 L216 212 L184 212 Z" opacity="0.9" />
+          </g>
+        </svg>
+      </div>
 
       <!-- 右遥测：远程服务器资源（Linux 走 fs.read 读那台的 /proc+/sys，Windows 本机走主进程 IPC；实测）。
            HOST 身份行 + 细线下资源组，与左栏（3 行 + t-div 3 行）结构对称、精确等高 -->
@@ -539,6 +566,11 @@ onBeforeUnmount(() => {
 .jarvis-hud {
   position: absolute;
   inset: 0;
+  /* 上让出语音波形屏、下让出输入台：雷达在两者之间的空白里居中，不再被输入台/媒体叠压住 */
+  padding: 76px 0 118px;
+  /* 雷达边长跟主区容器走（App.vue .main-area 是 size 容器）：
+     宽 = 主区减两侧遥测栏与间距（遥测栏不会再压到左右栏），高 = 主区减上下让位与 HUD 文案行 */
+  --radar-size: clamp(160px, min(470px, 100cqw - 268px, 100cqh - 282px), 470px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -597,14 +629,57 @@ onBeforeUnmount(() => {
 .hud-stage {
   display: flex;
   align-items: center;
-  gap: 4.5vmin;
+  gap: clamp(10px, 3cqw, 32px);
 }
 
-svg {
-  width: min(54vmin, 470px);
-  height: auto;
+/* 主区太窄（窗口拉窄 / 小屏）：两侧遥测栏收起，雷达独占宽度；hex 流跟着收窄 */
+@container main (max-width: 600px) {
+  .jarvis-hud {
+    --radar-size: clamp(140px, min(470px, 100cqw - 40px, 100cqh - 282px), 470px);
+  }
+
+  .telemetry {
+    display: none;
+  }
+}
+
+/* 主区太矮：只留雷达和状态行，标题与 hex 流收起 */
+@container main (max-height: 520px) {
+  .hud-top,
+  .hex-stream {
+    display: none;
+  }
+
+  .jarvis-hud {
+    --radar-size: clamp(120px, min(470px, 100cqw - 268px, 100cqh - 230px), 470px);
+  }
+}
+
+/* 雷达方框：各图层绝对定位叠满；整体透明度放在容器上（组透明度，重叠处不会叠亮） */
+.radar {
+  position: relative;
+  flex: none;
+  width: var(--radar-size);
+  aspect-ratio: 1;
   opacity: 0.55;
-  filter: drop-shadow(0 0 6px var(--accent-a25));
+}
+
+.radar .layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* 动起来的图层各自提成合成层（transform/opacity 动画全在合成器线程跑） */
+.radar .layer:is(.spin-outer, .spin-slow, .spin-rev, .sweep, .blip-g, .spin-rev-fast, .spin-mid, .spin-hex, .core) {
+  will-change: transform, opacity;
+}
+
+.jarvis-hud .glow-flood {
+  flood-color: var(--accent);
+  flood-opacity: 0.25;
 }
 
 /* 雷达配色全走令牌（CSS 覆盖 SVG 表现属性，改 --accent 全套跟随）：
@@ -743,7 +818,7 @@ svg {
   letter-spacing: 1px;
   color: var(--accent);
   opacity: 0;
-  max-width: min(64vmin, 560px);
+  max-width: min(64vmin, 560px, 100cqw - 32px);
   overflow: hidden;
   white-space: nowrap;
   mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
@@ -751,8 +826,8 @@ svg {
 }
 
 /* ---- 旋转动画：transform-origin 固定在 viewBox 中心 ---- */
-.spin-slow, .spin-rev, .spin-rev-fast, .spin-mid, .sweep, .spin-outer, .spin-hex {
-  transform-origin: 200px 200px;
+.spin-slow, .spin-rev, .spin-rev-fast, .spin-mid, .sweep, .spin-outer, .spin-hex, .core {
+  transform-origin: 50% 50%;
 }
 .spin-slow      { animation: hud-spin 90s linear infinite; }
 .spin-rev       { animation: hud-spin-rev 40s linear infinite; }
@@ -772,7 +847,6 @@ svg {
 
 /* 核心呼吸 */
 .core {
-  transform-origin: 200px 200px;
   animation: hud-pulse 3s ease-in-out infinite;
 }
 @keyframes hud-pulse {

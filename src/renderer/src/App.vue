@@ -58,7 +58,9 @@ const offWork = host.onWork((message) => {
 const jarvis = computed(() => uiTheme.value === 'jarvis')
 
 // 贾维斯：鼠标视差——鼠标在桌面上的位置归一化成 --par-x/--par-y（-1..1），
-// rAF 里插值逼近后写回 CSS 变量；深空层 / 3D 场景 / HUD 各自按变量反向/正向小幅偏移。
+// rAF 里插值逼近后写回 CSS 变量；深空层 / HUD 各自按变量反向/正向小幅偏移。
+// 变量只写到用它的元素上（带 data-parallax 的根，base.css 里 @property 声明为不继承）：
+// 写在 .desktop 上时每帧都会让整棵桌面子树（会话列表、聊天、几千个节点）重算样式。
 // 不随系统 prefers-reduced-motion 关闭（本机系统动画效果是关的，跟随会静默失效）。
 const desktopEl = ref<HTMLElement | null>(null)
 let parRaf = 0
@@ -70,8 +72,12 @@ function parTick(): void {
   if (!el) return
   parNow.x += (parTarget.x - parNow.x) * 0.07
   parNow.y += (parTarget.y - parNow.y) * 0.07
-  el.style.setProperty('--par-x', parNow.x.toFixed(4))
-  el.style.setProperty('--par-y', parNow.y.toFixed(4))
+  const x = parNow.x.toFixed(4)
+  const y = parNow.y.toFixed(4)
+  for (const target of el.querySelectorAll<HTMLElement>('[data-parallax]')) {
+    target.style.setProperty('--par-x', x)
+    target.style.setProperty('--par-y', y)
+  }
   if (Math.abs(parTarget.x - parNow.x) > 0.002 || Math.abs(parTarget.y - parNow.y) > 0.002) {
     parRaf = requestAnimationFrame(parTick)
   }
@@ -303,6 +309,8 @@ const calling = computed(() => store.calling)
   position: relative;
   min-width: 0;
   min-height: 0;
+  /* size 容器：贾维斯 HUD 按主区的实际宽高（cqw/cqh + @container main）缩放、收起遥测栏 */
+  container: main / size;
 }
 
 /* 输入台：悬浮在主区底部居中，浮在 3D 场景和媒体叠之上。

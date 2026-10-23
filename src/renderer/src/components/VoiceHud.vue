@@ -131,17 +131,28 @@ function columnLevels(analyser: AnalyserNode | null): number[] {
   return out
 }
 
-function drawFrame(): void {
+// 画布 CSS 尺寸由 ResizeObserver 记下（每帧读 clientWidth 会在样式脏时逼出一次同步布局）
+let boxW = 0
+let boxH = 0
+let resizeObserver: ResizeObserver | null = null
+let lastDraw = 0
+/** 空闲（没在播报）时的最小帧间隔：待机呼吸波很慢，~24fps 足够顺，省下大半绘制 */
+const IDLE_FRAME_MS = 1000 / 24 - 4
+
+function drawFrame(now: number): void {
   raf = requestAnimationFrame(drawFrame)
   const el = canvas.value
   if (!el) return
+  const isLive = live.value
+  if (!isLive && now - lastDraw < IDLE_FRAME_MS) return
+  lastDraw = now
   const ctx = el.getContext('2d')
   if (!ctx) return
 
   // 画布尺寸跟随 CSS 盒（dpr 缩放，绘制坐标一律用 CSS 像素）
   const dpr = window.devicePixelRatio || 1
-  const w = el.clientWidth
-  const h = el.clientHeight
+  const w = boxW
+  const h = boxH
   if (!w || !h) return
   if (el.width !== Math.round(w * dpr) || el.height !== Math.round(h * dpr)) {
     el.width = Math.round(w * dpr)
@@ -180,7 +191,7 @@ function drawFrame(): void {
   fill.addColorStop(0, colors.accent)
   fill.addColorStop(0.5, colors.dim)
   fill.addColorStop(1, colors.accent)
-  ctx.globalAlpha = live.value ? 0.3 : 0.14
+  ctx.globalAlpha = isLive ? 0.3 : 0.14
   ctx.fillStyle = fill
   ctx.beginPath()
   for (let col = 0; col < COLS; col += 1) {
@@ -193,35 +204,47 @@ function drawFrame(): void {
   ctx.fill()
   ctx.globalAlpha = 1
 
-  // 上下包络线 + 辉光（播报中主题色高亮，空闲低饱和）
-  ctx.strokeStyle = live.value ? colors.accent : colors.dim
-  ctx.lineWidth = 1.4
-  ctx.shadowColor = colors.accent
-  ctx.shadowBlur = live.value ? 9 : 3
+  // 上下包络线 + 辉光（播报中主题色高亮，空闲低饱和）。
+  // 辉光用「宽而淡的底线 + 细亮线」两遍描边代替 shadowBlur（canvas 阴影每帧要做一次高斯模糊，是这块最贵的操作）
+  const envelope = new Path2D()
   for (const sign of [-1, 1] as const) {
-    ctx.beginPath()
     for (let col = 0; col < COLS; col += 1) {
       const y = mid + sign * amps[col]! * half
-      if (col === 0) ctx.moveTo(xAt(col), y)
-      else ctx.lineTo(xAt(col), y)
+      if (col === 0) envelope.moveTo(xAt(col), y)
+      else envelope.lineTo(xAt(col), y)
     }
-    ctx.stroke()
   }
-  ctx.shadowBlur = 0
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = colors.accent
+  ctx.globalAlpha = isLive ? 0.22 : 0.08
+  ctx.lineWidth = isLive ? 5 : 3
+  ctx.stroke(envelope)
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = isLive ? colors.accent : colors.dim
+  ctx.lineWidth = 1.4
+  ctx.stroke(envelope)
 
   // 扫描线：一道竖直亮线缓慢扫过（HUD 仪器感；播报中更快更亮）
-  const sweepX = ((t * (live.value ? 90 : 36)) % (w + 60)) - 30
+  const sweepX = ((t * (isLive ? 90 : 36)) % (w + 60)) - 30
   const sweep = ctx.createLinearGradient(sweepX - 14, 0, sweepX + 14, 0)
   sweep.addColorStop(0, 'transparent')
   sweep.addColorStop(0.5, colors.accent)
   sweep.addColorStop(1, 'transparent')
-  ctx.globalAlpha = live.value ? 0.16 : 0.08
+  ctx.globalAlpha = isLive ? 0.16 : 0.08
   ctx.fillStyle = sweep
   ctx.fillRect(sweepX - 14, 1, 28, h - 2)
   ctx.globalAlpha = 1
 }
 
 onMounted(() => {
+  if (canvas.value) {
+    resizeObserver = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect
+      boxW = box?.width ?? 0
+      boxH = box?.height ?? 0
+    })
+    resizeObserver.observe(canvas.value)
+  }
   raf = requestAnimationFrame(drawFrame)
   document.addEventListener('pointerdown', onDocPointerDown)
   navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange)
@@ -229,6 +252,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
+  resizeObserver?.disconnect()
   document.removeEventListener('pointerdown', onDocPointerDown)
   navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange)
 })

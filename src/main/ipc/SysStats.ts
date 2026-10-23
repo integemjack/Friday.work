@@ -7,7 +7,7 @@
 // 服务器时，渲染层用协议 fs.read 读它（协议没有系统采样方法，这是纯客户端侧的跨机器桥）。
 // 结果缓存 2.5 秒：HUD 每 3 秒问一次刚好逐轮刷新，多个窗口同问也不会重复开子进程。
 
-import { execFile } from 'node:child_process'
+import { exec, execFile } from 'node:child_process'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { ipcMain } from 'electron'
@@ -56,13 +56,27 @@ async function sampleGpu(): Promise<Pick<SysStats, 'gpuPct' | 'vramUsedMiB' | 'v
 }
 
 // ---- 进程数：Windows tasklist 数行 / 类 Unix ps 数行 ----
+// Windows 上让 cmd 管道里的 find /c 数行，主进程只读回一个数字：tasklist 往管道里是一个 CSV 字段一个字段地写，
+// 直接读它的 stdout 主进程每秒要被唤醒 ~850 次（每次一轮 stream push + nextTick），而且一次 tasklist 要跑 2 秒多，
+// 3 秒一采几乎一直在跑——实测空闲时主进程常驻 20%+ CPU 就是它。进程总数变化慢，15 秒取一次足够。
+// 两个程序都写全路径：PATH 里排在前面的 Git usr/bin 也有个 find（GNU 版，语义完全不同）
+const WIN_PROC_COUNT_CMD = '"%SystemRoot%\\System32\\tasklist.exe" /fo csv /nh | "%SystemRoot%\\System32\\find.exe" /c /v ""'
+const PROC_CACHE_MS = 15_000
+let procCache: { at: number; count: number | null } | null = null
+
+function runShell(command: string, timeoutMs = 6000): Promise<string | null> {
+  return new Promise((resolve) => {
+    exec(command, { timeout: timeoutMs, windowsHide: true }, (error, stdout) => resolve(error ? null : stdout))
+  })
+}
+
 async function sampleProcCount(): Promise<number | null> {
-  let out: string | null
-  if (process.platform === 'win32') out = await run('tasklist', ['/fo', 'csv', '/nh'])
-  else out = await run('sh', ['-c', 'ps -A -o pid= | wc -l'])
-  if (!out) return null
-  const count = process.platform === 'win32' ? out.split('\n').filter((l) => l.trim() && l.includes('"')).length : Number(out.trim())
-  return Number.isFinite(count) && count > 0 ? count : null
+  if (procCache && Date.now() - procCache.at < PROC_CACHE_MS) return procCache.count
+  const out = process.platform === 'win32' ? await runShell(WIN_PROC_COUNT_CMD) : await run('sh', ['-c', 'ps -A -o pid= | wc -l'])
+  const count = out == null ? NaN : Number(out.trim())
+  const value = Number.isFinite(count) && count > 0 ? count : null
+  procCache = { at: Date.now(), count: value }
+  return value
 }
 
 // ---- 采样 + 缓存（inFlight 让同一轮的并发请求共享一次采样） ----

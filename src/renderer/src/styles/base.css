@@ -5,6 +5,20 @@
   box-sizing: border-box;
 }
 
+/* 鼠标视差变量（App.vue 每帧写到带 data-parallax 的元素上）：声明为不继承，
+   改值只让那个元素自己重算样式，不连带整棵子树 */
+@property --par-x {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --par-y {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+
 html,
 body,
 #app {
