@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('fridayRequestPort', () => {
 })
 
 contextBridge.exposeInMainWorld('fridayBridge', {
+  /** 客户端设备：最近一轮 navigator.serial.getPorts() 里各串口的 COM 名（主进程从设备许可回调里记的） */
+  serialPortNames: (): Promise<Array<{ portName: string; displayName?: string; vendorId?: number; productId?: number }>> =>
+    ipcRenderer.invoke('serial:port-names'),
   pickAttachments: (): Promise<PickedFile[]> => ipcRenderer.invoke('dialog:pick-attachments'),
   /** 拖放进来的 File：在 preload 里换出本机路径，主进程登记白名单后返回句柄 */
   registerDrop: (file: File): Promise<PickedFile | null> => {

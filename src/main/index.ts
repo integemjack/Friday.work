@@ -13,6 +13,7 @@ import { CredentialStore } from './CredentialStore.js'
 import { handleMediaStackRequest } from './MediaStack.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
 import { IpcBridge } from './ipc/bridge.js'
+import { registerSerialPorts } from './ipc/SerialPorts.js'
 import { THEME_BG } from '../shared/theme-tokens.js'
 
 // 媒体叠本地缓存的供文件协议（friday-media://stack/<name>，只出 MediaStack 目录里的文件）：
@@ -199,6 +200,8 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media')
   })
+  // 客户端设备（方案-客户端设备）：WebSerial 列全部串口、不弹系统选择框，授权由应用自己的弹窗管
+  registerSerialPorts(session.defaultSession)
 
   // 媒体叠本地缓存：看图/看视频归档的文件落在本机，这个协议供 <img>/<video> 直接加载
   // （支持 Range，视频可拖进度）；必须在建窗口前接好

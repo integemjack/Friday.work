@@ -128,6 +128,15 @@ class WorkChannel {
     }
   }
 
+  /** 在同一个 PC 上再开一条 DataChannel（客户端设备的串口会话；带内 DCEP，不用重新协商）。
+   *  工作通道还没通就返回 null */
+  openDataChannel(label: string): RTCDataChannel | null {
+    if (!this.pc || this.dc?.readyState !== 'open') return null
+    const channel = this.pc.createDataChannel(label, { ordered: true })
+    channel.binaryType = 'arraybuffer'
+    return channel
+  }
+
   private onFrame(data: unknown): void {
     // 服务端发文本帧时 data 是 string，二进制片时是 ArrayBuffer（binaryType='arraybuffer'）
     if (typeof data === 'string') {
@@ -211,6 +220,11 @@ export class WorkChannelHub {
   /** 协议进程要发一条 JSON（work.out） */
   send(machineID: string, text: string): void {
     this.channels.get(machineID)?.send(text)
+  }
+
+  /** 客户端设备：在这台机器的工作连接上开一条额外的 DataChannel */
+  openDataChannel(machineID: string, label: string): RTCDataChannel | null {
+    return this.channels.get(machineID)?.openDataChannel(label) ?? null
   }
 
   disposeAll(): void {

@@ -11,6 +11,7 @@ import { saveLayout, useAppStore } from './stores/app.js'
 import { uiTheme } from './lib/theme.js'
 import { host } from './lib/host.js'
 import { WorkChannelHub, type WorkSignalIn } from './lib/workChannel.js'
+import { deviceBroker } from './lib/devices/broker.js'
 import TitleBar from './components/TitleBar.vue'
 import TerminalCard from './components/TerminalCard.vue'
 import FilesCard from './components/FilesCard.vue'
@@ -28,6 +29,7 @@ import DesktopOps from './components/DesktopOps.vue'
 import DesktopMediaStacks from './components/DesktopMediaStacks.vue'
 import MediaLightbox from './components/MediaLightbox.vue'
 import UpdateOverlay from './components/UpdateOverlay.vue'
+import DeviceOverlay from './components/DeviceOverlay.vue'
 import CenterScene from './components/CenterScene.vue'
 import VoiceHud from './components/VoiceHud.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
@@ -53,6 +55,11 @@ const offWork = host.onWork((message) => {
     workHub.send(message.machineID, String(message.text ?? ''))
   }
 })
+
+// 客户端设备（方案-客户端设备）：服务端的 device.* 请求（串口 / 本机烧录 / 摄像头）在这里处理，
+// 串口会话的专用 DataChannel 开在上面这条工作连接上
+deviceBroker.attach(workHub, (machineID) => store.machines.find((machine) => machine.id === machineID)?.name ?? '远端机器')
+const offDevice = host.onDevice((message) => deviceBroker.handle(message))
 
 // 贾维斯界面开着才挂桌面 HUD（雷达/时钟/连接状态）和深空层（星野/流星）
 const jarvis = computed(() => uiTheme.value === 'jarvis')
@@ -115,6 +122,7 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(parRaf)
   store.stopCastTicker()
   offWork()
+  offDevice()
   workHub.disposeAll()
 })
 
@@ -309,6 +317,7 @@ const calling = computed(() => store.calling)
 
     <!-- 桌面更新浮层：自动更新管线把进度直接摆到桌面右下角（下载进度/倒计时/安装中） -->
     <UpdateOverlay />
+    <DeviceOverlay />
 
     <!-- 全局错误横幅 -->
     <div
