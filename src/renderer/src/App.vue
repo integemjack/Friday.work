@@ -195,6 +195,24 @@ function onGlobalKeydown(event: KeyboardEvent): void {
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
+// 文件拖到没有接拖放的地方（桌面、聊天栏…）时什么也不做：Electron 默认会把整个窗口导航到那个文件，
+// 应用当场被替换成一张文件预览（状态全丢）。输入台 / 文件管理器 / 设置的音色区有自己的投放处理，元素上先处理掉
+function blockStrayDrop(event: DragEvent): void {
+  if (![...(event.dataTransfer?.types ?? [])].includes('Files')) return
+  // 元素自己接了（preventDefault 过）的不动它的光标；没人接的显示「不能放」
+  const handled = event.defaultPrevented
+  event.preventDefault()
+  if (event.type === 'dragover' && event.dataTransfer && !handled) event.dataTransfer.dropEffect = 'none'
+}
+onMounted(() => {
+  window.addEventListener('dragover', blockStrayDrop)
+  window.addEventListener('drop', blockStrayDrop)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('dragover', blockStrayDrop)
+  window.removeEventListener('drop', blockStrayDrop)
+})
+
 // 通话中（来电/呼出/接通中/通话中）：右栏顶部给通话面板让出 1/3、聊天缩到 2/3；空闲时聊天占满整栏
 const calling = computed(() => store.calling)
 </script>

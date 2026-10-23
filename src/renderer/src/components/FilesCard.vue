@@ -6,6 +6,8 @@
 // 协议能力（服务端 2.75）：fs.list / fs.read / fs.mkdir + 会话改动 fs.changes / fs.diff / fs.revert；
 // 没有重命名、删除、移动、写入——这些做不了，界面里就不摆。
 // 下载到本地走 lib/remoteDownload（fs.read 分块读回，主进程落盘，保存位置由用户在系统对话框里选）。
+// 上传：把本机文件 / 文件夹拖进来（或工具条「上传」），落到当前目录（拖到某个文件夹行上就落进那个文件夹）——
+// lib/remoteUpload：file.upload 传上去，再用一条后台命令挪进目标目录（协议没有直接写目录的方法）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   FsChange,
@@ -19,6 +21,8 @@ import type {
 import { rpc } from '../lib/host.js'
 import { useAppStore } from '../stores/app.js'
 import { cancelDownload, dismissDownload, downloadJobs, downloadToLocal, revealDownload, type DownloadJob } from '../lib/remoteDownload.js'
+import { cancelUpload, dismissUpload, uploadJobs, uploadToRemote, type DropTree, type ShellFlavor, type UploadJob } from '../lib/remoteUpload.js'
+import { runRemoteCommand } from '../lib/remoteCommand.js'
 
 const store = useAppStore()
 const rootEl = ref<HTMLElement | null>(null)
@@ -672,6 +676,142 @@ function jobText(job: DownloadJob): string {
   }
 }
 
+// MARK: 上传（拖进来 / 工具条按钮）
+
+const dragActive = ref(false)
+let dragDepth = 0
+/** 拖到某个文件夹行 / 图标上：落进那个文件夹（访达行为）；空 = 当前目录 */
+const dropFolder = ref<FsEntry | null>(null)
+
+const canUpload = computed(() => section.value === 'browse' && !!currentPath.value && store.connected)
+const shellFlavor = computed<ShellFlavor>(() => (serverInfo.value?.platform === 'windows' ? 'powershell' : 'posix'))
+const dropTargetName = computed(() => dropFolder.value?.name ?? (baseName(currentPath.value) || currentPath.value))
+
+function isFileDrag(event: DragEvent): boolean {
+  return [...(event.dataTransfer?.types ?? [])].includes('Files')
+}
+
+function onDragEnter(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  dragDepth += 1
+  dragActive.value = true
+}
+
+function onDragOver(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = canUpload.value ? 'copy' : 'none'
+  const el = (event.target as Element | null)?.closest?.('[data-path]') as HTMLElement | null
+  const hit = el ? shownEntries.value.find((entry) => entry.path === el.dataset.path) : undefined
+  dropFolder.value = hit?.dir ? hit : null
+}
+
+function onDragLeave(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  dragDepth = Math.max(0, dragDepth - 1)
+  if (dragDepth === 0) {
+    dragActive.value = false
+    dropFolder.value = null
+  }
+}
+
+async function onDrop(event: DragEvent): Promise<void> {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  const folder = dropFolder.value
+  dragDepth = 0
+  dragActive.value = false
+  dropFolder.value = null
+  if (!canUpload.value) return
+  const files = [...(event.dataTransfer?.files ?? [])]
+  const trees = (await Promise.all(files.map((file) => window.fridayBridge.registerDropTree(file).catch(() => null)))).filter(
+    (tree): tree is DropTree => !!tree
+  )
+  if (!trees.length) {
+    error.value = '拖进来的东西读不到（没权限或已经不在了）'
+    return
+  }
+  await startUpload(trees, folder)
+}
+
+/** 工具条「上传」/ 右键「上传文件到这里」：系统对话框选文件（对话框只能选文件；整个文件夹请直接拖进来） */
+async function pickUpload(): Promise<void> {
+  closeMenu()
+  if (!canUpload.value) return
+  const picked = await window.fridayBridge.pickAttachments()
+  const trees: DropTree[] = picked.map((file) => ({
+    name: file.name,
+    files: [{ handle: file.handle, rel: file.name, size: file.size }],
+    dirs: [],
+    truncated: false
+  }))
+  if (trees.length) await startUpload(trees, null)
+}
+
+async function startUpload(trees: DropTree[], folder: FsEntry | null): Promise<void> {
+  const machine = store.currentMachine
+  // 服务端跑挪文件命令的终端必须挂在一段会话上：当前会话，没有就最近一段
+  const conversationID = store.activeConversationID || store.summaries[0]?.id || ''
+  if (!machine) return
+  if (!conversationID) {
+    error.value = '上传要先有一段会话（服务端挪文件的命令挂在会话上）：先新建一段会话再拖进来'
+    return
+  }
+  error.value = ''
+  const target = folder?.path ?? currentPath.value
+  let existing = entries.value.map((entry) => entry.name)
+  if (folder) {
+    try {
+      existing = ((await rpc(machine, 'fs.list', { path: folder.path, files: true })) as FsListResult).entries.map((entry) => entry.name)
+    } catch {
+      existing = []
+    }
+  }
+  const job = await uploadToRemote({
+    targetDir: target,
+    flavor: shellFlavor.value,
+    existing,
+    trees,
+    io: {
+      upload: (handle) => store.uploadFile(handle),
+      run: (command) => runRemoteCommand(machine, conversationID, command)
+    }
+  })
+  // 还停在上传的那个目录：刷新并选中刚放进来的
+  if (job.phase !== 'canceled' && samePath(currentPath.value, folder ? currentPath.value : target)) {
+    await list(currentPath.value, { history: false })
+    const names = new Set(folder ? [folder.name] : job.placed)
+    const hits = entries.value.filter((entry) => names.has(entry.name))
+    if (hits.length) {
+      selected.value = new Set(hits.map((entry) => entry.path))
+      anchor.value = hits[0]!.path
+    }
+  }
+}
+
+function uploadPercent(job: UploadJob): number {
+  if (job.phase === 'placing') return 100
+  if (job.bytesTotal > 0) return Math.min(100, Math.round((job.bytesDone / job.bytesTotal) * 100))
+  return job.filesTotal ? Math.round((job.filesDone / job.filesTotal) * 100) : 0
+}
+
+function uploadText(job: UploadJob): string {
+  switch (job.phase) {
+    case 'uploading':
+      return `上传中 ${formatSize(job.bytesDone)} / ${formatSize(job.bytesTotal)}${job.filesTotal > 1 ? ` · ${job.filesDone}/${job.filesTotal} 个` : ''}`
+    case 'placing':
+      return '正在放进目录…'
+    case 'done':
+      return `已上传到「${baseName(job.target) || job.target}」${job.truncated ? '（文件夹太大，只传了前一部分）' : ''}`
+    case 'canceled':
+      return '已取消'
+    default:
+      return `失败：${job.error}`
+  }
+}
+
 // MARK: 右键菜单
 
 const menu = ref<{ x: number; y: number; target: FsEntry | null } | null>(null)
@@ -967,7 +1107,16 @@ watch(shownEntries, () => void loadThumbs())
 </script>
 
 <template>
-  <div ref="rootEl" class="finder" tabindex="0" @keydown="onKeydown">
+  <div
+    ref="rootEl"
+    class="finder"
+    tabindex="0"
+    @keydown="onKeydown"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <!-- 工具条：后退 / 前进 / 上一级 · 面包屑 · 视图 · 搜索 · 新建文件夹 · 下载 · 预览栏 -->
     <div class="toolbar">
       <div class="nav-group">
@@ -1008,6 +1157,9 @@ watch(shownEntries, () => void loadThumbs())
 
       <button v-if="canMkdir" class="tool" :disabled="section !== 'browse'" title="新建文件夹（Ctrl+Shift+N）" @click="startMkdir">
         <svg viewBox="0 0 16 16"><path d="M1.8 4.2c0-.6.4-1 1-1h3l1.4 1.5h5.9c.6 0 1 .4 1 1v6.6c0 .6-.4 1-1 1H2.8c-.6 0-1-.4-1-1z" /><path d="M8 7.2v3.6M6.2 9h3.6" /></svg>
+      </button>
+      <button class="tool" :disabled="!canUpload" title="上传文件到当前文件夹（也可以把文件 / 文件夹直接拖进来）" @click="pickUpload">
+        <svg viewBox="0 0 16 16"><path d="M8 10.5v-8M4.5 6 8 2.5 11.5 6M3 13.5h10" /></svg>
       </button>
       <button class="tool" :disabled="!selectedEntries.length" title="下载到本地" @click="download(selectedEntries)">
         <svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" /></svg>
@@ -1081,6 +1233,14 @@ watch(shownEntries, () => void loadThumbs())
       <!-- 文件区 -->
       <section class="content">
         <div v-if="error" class="error">{{ error }}</div>
+        <!-- 拖着文件进来时的投放提示（不接鼠标：下面的文件夹行照样能当投放目标） -->
+        <div v-if="dragActive" class="drop-overlay" :class="{ blocked: !canUpload, into: !!dropFolder }">
+          <div class="drop-card">
+            <svg viewBox="0 0 16 16"><path d="M8 10.5v-8M4.5 6 8 2.5 11.5 6M3 13.5h10" /></svg>
+            <span v-if="canUpload">松手上传到「{{ dropTargetName }}」</span>
+            <span v-else>{{ section === 'browse' ? '还没连上机器' : '切回文件夹再拖进来' }}</span>
+          </div>
+        </div>
 
         <template v-if="section === 'browse'">
           <!-- 列表视图 -->
@@ -1119,7 +1279,7 @@ watch(shownEntries, () => void loadThumbs())
                 v-for="entry in shownEntries"
                 :key="entry.path"
                 class="row"
-                :class="{ selected: selected.has(entry.path), dir: entry.dir }"
+                :class="{ selected: selected.has(entry.path), dir: entry.dir, 'drop-into': dropFolder?.path === entry.path }"
                 :data-path="entry.path"
                 :title="entry.path"
                 @click.stop="onItemClick($event, entry)"
@@ -1159,7 +1319,7 @@ watch(shownEntries, () => void loadThumbs())
               v-for="entry in shownEntries"
               :key="entry.path"
               class="tile"
-              :class="{ selected: selected.has(entry.path) }"
+              :class="{ selected: selected.has(entry.path), 'drop-into': dropFolder?.path === entry.path }"
               :data-path="entry.path"
               :title="`${entry.name}\n${kindOf(entry)}${entry.dir ? '' : ' · ' + formatSize(entry.size)}\n${formatDate(entry.modified)}`"
               @click.stop="onItemClick($event, entry)"
@@ -1295,7 +1455,17 @@ watch(shownEntries, () => void loadThumbs())
     </footer>
 
     <!-- 下载列表：进行中的 + 最近完成的（可在文件夹中显示 / 取消 / 移除） -->
-    <div v-if="downloadJobs.length" class="downloads">
+    <div v-if="downloadJobs.length || uploadJobs.length" class="downloads">
+      <div v-for="job in uploadJobs.slice(0, 3)" :key="'u' + job.id" class="dl up" :class="job.phase">
+        <span class="dl-icon">⤒</span>
+        <div class="dl-main">
+          <div class="dl-title">{{ job.title }}<span v-if="job.current && job.filesTotal > 1" class="dim"> · {{ job.current }}</span></div>
+          <div v-if="job.phase === 'uploading' || job.phase === 'placing'" class="dl-bar"><i :style="{ width: uploadPercent(job) + '%' }" /></div>
+          <div class="dl-text">{{ uploadText(job) }}</div>
+        </div>
+        <button v-if="job.phase === 'uploading'" class="link" @click="cancelUpload(job)">取消</button>
+        <button v-else-if="job.phase !== 'placing'" class="link muted" title="移除这条记录" @click="dismissUpload(job)">✕</button>
+      </div>
       <div v-for="job in downloadJobs.slice(0, 3)" :key="job.id" class="dl" :class="job.phase">
         <span class="dl-icon">⤓</span>
         <div class="dl-main">
@@ -1330,6 +1500,7 @@ watch(shownEntries, () => void loadThumbs())
       </template>
       <template v-else>
         <button v-if="canMkdir" class="ctx-item" @click="closeMenu(); startMkdir()">新建文件夹</button>
+        <button class="ctx-item" :disabled="!canUpload" @click="pickUpload">上传文件到这里…</button>
         <button class="ctx-item" @click="download([{ name: baseName(currentPath) || 'folder', path: currentPath, dir: true }])">
           下载整个文件夹…
         </button>
@@ -2257,6 +2428,79 @@ watch(shownEntries, () => void loadThumbs())
   color: var(--fail);
 }
 
+/* ---- 拖放上传 ---- */
+.content {
+  position: relative;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 6px;
+  z-index: 10;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 18px;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  pointer-events: none;
+}
+
+/* 拖到文件夹上时整片提示退淡，让被高亮的那一行当主角 */
+.drop-overlay.into {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: transparent;
+}
+
+.drop-overlay.blocked {
+  border-color: var(--text-3);
+  background: color-mix(in srgb, var(--text-3) 6%, transparent);
+}
+
+.drop-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.drop-overlay.blocked .drop-card {
+  background: var(--panel);
+  color: var(--text-2);
+}
+
+.drop-card svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.row.drop-into,
+.tile.drop-into {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.dl.up .dl-icon {
+  transform: none;
+}
+
+.ctx-item:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* ---- 右键菜单 ---- */
 .ctx-menu {
   position: absolute;
@@ -2494,6 +2738,20 @@ watch(shownEntries, () => void loadThumbs())
   background: var(--accent-a22);
   color: var(--text);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+[data-theme='jarvis'] .drop-overlay {
+  box-shadow: inset 0 0 30px var(--accent-a15);
+}
+
+[data-theme='jarvis'] .drop-card {
+  background: var(--accent-a22);
+  color: var(--accent);
+  border: 1px solid var(--accent-a60);
+  font-family: var(--font-hud);
+  letter-spacing: 1px;
+  text-shadow: 0 0 8px var(--accent-a50);
+  box-shadow: 0 0 18px var(--accent-a30);
 }
 
 [data-theme='jarvis'] .dl-bar i {

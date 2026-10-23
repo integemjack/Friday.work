@@ -131,10 +131,10 @@ function schedulePersistWindowState(): void {
 const credentialStore = new CredentialStore()
 const protocolProcessHost = new ProtocolProcessHost(credentialStore, (handle) => resolveHandle(handle))
 
-// 句柄 → 路径（IpcBridge 登记，协议进程解析）
-const handleTable = new Map<string, string>()
+// 句柄 → 路径（IpcBridge 登记，协议进程解析）。原来这里另有一张 handleTable，从来没人往里写——
+// IpcBridge 把句柄记在自己的表里，协议进程来解析时这边永远查不到：附件、拖放上传全部报「主进程拒绝了请求」
 function resolveHandle(handle: string): string | null {
-  return handleTable.get(handle) ?? null
+  return bridge?.resolveHandle(handle) ?? null
 }
 
 let bridge: IpcBridge | null = null

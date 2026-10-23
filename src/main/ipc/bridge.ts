@@ -3,8 +3,8 @@
 // （preload 用 webUtils 换出路径），协议进程只能读这里背书过的路径。
 
 import { app, BrowserWindow, dialog, ipcMain, Notification, type FileFilter, type WebContents } from 'electron'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { deleteStackMediaFiles, isValidStackMediaName, listStackMediaFiles, saveStackMediaFile } from '../MediaStack.js'
 import { registerSysStatsIpc } from './SysStats.js'
@@ -16,6 +16,18 @@ export interface PickedFile {
   size: number
 }
 
+/** 拖进文件管理器的一项（文件或整个文件夹）展开后的清单：每个文件一个上传句柄 + 相对路径，空目录单列 */
+export interface DropTree {
+  name: string
+  files: Array<{ handle: string; rel: string; size: number }>
+  dirs: string[]
+  /** 文件太多被截断（超过上限没再往下走） */
+  truncated: boolean
+}
+
+/** 一次拖放最多登记多少个文件（防止误拖整个盘） */
+const DROP_TREE_MAX_FILES = 20_000
+
 export class IpcBridge {
   private readonly handles = new Map<string, string>()
 
@@ -25,6 +37,11 @@ export class IpcBridge {
     /** 底色变了的回调：主进程记下来，下次建窗直接用（启动第一帧就是上次主题的底色） */
     private readonly onBackground: (color: string) => void = () => {}
   ) {}
+
+  /** 协议进程上传时来解析句柄（main/index.ts 的 ProtocolHost 回调） */
+  resolveHandle(handle: string): string | null {
+    return this.handles.get(handle) ?? null
+  }
 
   private async registerPath(path: string): Promise<PickedFile | null> {
     try {
@@ -68,6 +85,50 @@ export class IpcBridge {
     ipcMain.handle('upload:register-drop', async (_event, path: unknown): Promise<PickedFile | null> => {
       if (typeof path !== 'string' || !path) return null
       return this.registerPath(path)
+    })
+
+    // 文件管理器拖放上传：拖进来的文件 / 文件夹（preload 换出的本机路径）展开成清单，每个文件领一个上传句柄。
+    // 只认拖放来的路径（和附件同一套白名单句柄），协议进程只能读这里登记过的文件；符号链接不跟（防止绕出去 / 死循环）
+    ipcMain.handle('upload:register-tree', async (_event, path: unknown): Promise<DropTree | null> => {
+      if (typeof path !== 'string' || !path) return null
+      let info
+      try {
+        info = await stat(path)
+      } catch {
+        return null
+      }
+      const name = basename(path)
+      if (info.isFile()) {
+        const file = await this.registerPath(path)
+        return file ? { name, files: [{ handle: file.handle, rel: name, size: file.size }], dirs: [], truncated: false } : null
+      }
+      if (!info.isDirectory()) return null
+      const tree: DropTree = { name, files: [], dirs: [], truncated: false }
+      const walk = async (dir: string, rel: string): Promise<void> => {
+        if (tree.truncated) return
+        let children
+        try {
+          children = await readdir(dir, { withFileTypes: true })
+        } catch {
+          return // 没权限读的子目录跳过
+        }
+        if (children.length === 0) tree.dirs.push(rel)
+        for (const child of children) {
+          if (tree.files.length >= DROP_TREE_MAX_FILES) {
+            tree.truncated = true
+            return
+          }
+          const childPath = join(dir, child.name)
+          const childRel = `${rel}/${child.name}`
+          if (child.isDirectory()) await walk(childPath, childRel)
+          else if (child.isFile()) {
+            const file = await this.registerPath(childPath)
+            if (file) tree.files.push({ handle: file.handle, rel: childRel, size: file.size })
+          }
+        }
+      }
+      await walk(path, name)
+      return tree
     })
 
     // 语音（M3-A）：渲染进程录好的一段音频字节落成临时文件、领一个句柄（路径由主进程决定，不信任渲染进程）

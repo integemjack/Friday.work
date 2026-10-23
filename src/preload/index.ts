@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     const path = webUtils.getPathForFile(file)
     return ipcRenderer.invoke('upload:register-drop', path)
   },
+  /** 拖进文件管理器的文件 / 文件夹：换出本机路径，主进程展开成清单（每个文件一个上传句柄） */
+  registerDropTree: (
+    file: File
+  ): Promise<{ name: string; files: Array<{ handle: string; rel: string; size: number }>; dirs: string[]; truncated: boolean } | null> => {
+    const path = webUtils.getPathForFile(file)
+    return ipcRenderer.invoke('upload:register-tree', path)
+  },
   /** 一段录音（M3-A）：字节交给主进程落成临时文件、领句柄 */
   saveVoiceClip: (bytes: ArrayBuffer, mimeType: string): Promise<PickedFile | null> =>
     ipcRenderer.invoke('voice:save-clip', { bytes, mimeType }),

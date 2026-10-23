@@ -87,6 +87,10 @@ declare global {
       listStackMedia(): Promise<string[]>
       /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
       systemStats(): Promise<SysStats>
+      /** 拖进文件管理器的文件 / 文件夹：展开成清单，每个文件一个上传句柄（相对路径以拖进来的名字开头），空目录单列 */
+      registerDropTree(
+        file: File
+      ): Promise<{ name: string; files: Array<{ handle: string; rel: string; size: number }>; dirs: string[]; truncated: boolean } | null>
       /** 文件管理器下载到本地（保存位置由用户在系统对话框里选；之后按会话 id 分块写） */
       downloadBegin(mode: 'file' | 'dir', suggestedName: string, count: number): Promise<{ id: string; target: string } | null>
       downloadWrite(id: string, rel: string, offset: number, data: Uint8Array): Promise<boolean>

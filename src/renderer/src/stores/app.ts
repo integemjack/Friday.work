@@ -192,6 +192,23 @@ export interface DesktopWindow {
 }
 
 /** 每类窗口的默认大小（只剩子 Agent / 设置两个浮动窗口，其余内容常驻桌面） */
+/** 应用自己开的一次性后台命令终端（文件管理器上传后把文件挪进目标目录等）：
+ *  不进终端列表、不弹终端窗口；这里记着它们最新的状态（跑完没有、退出码），给发起方轮询。
+ *  值为 null = 已登记、服务端还没报过 */
+const backgroundTerminals = new Map<string, TerminalInfo | null>()
+
+export function registerBackgroundTerminal(id: string): void {
+  backgroundTerminals.set(id, null)
+}
+
+export function backgroundTerminalInfo(id: string): TerminalInfo | null {
+  return backgroundTerminals.get(id) ?? null
+}
+
+export function releaseBackgroundTerminal(id: string): void {
+  backgroundTerminals.delete(id)
+}
+
 const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH: number }> = {
   terminals: { w: 820, h: 500, minW: 420, minH: 260 },
   files: { w: 920, h: 580, minW: 480, minH: 320 },
@@ -1279,7 +1296,15 @@ export const useAppStore = defineStore('app', {
           const state = params as { terminals: TerminalInfo[]; available: boolean; reason?: string }
           const before = new Set(this.terminals.map((terminal) => terminal.id))
           const hadTerminals = this.terminals.length > 0
-          this.terminals = state.terminals ?? []
+          // 后台命令终端（registerBackgroundTerminal 登记过的）：记状态，不进列表（否则带 command 的新终端会自动弹终端窗口）
+          for (const terminal of state.terminals ?? []) {
+            if (backgroundTerminals.has(terminal.id)) backgroundTerminals.set(terminal.id, terminal)
+          }
+          // 登记过、报过状态、这次快照里却没了（服务端回收了）：当它已经跑完
+          for (const [id, info] of backgroundTerminals) {
+            if (info && !(state.terminals ?? []).some((terminal) => terminal.id === id)) backgroundTerminals.set(id, { ...info, running: false })
+          }
+          this.terminals = (state.terminals ?? []).filter((terminal) => !backgroundTerminals.has(terminal.id))
           this.terminalsAvailable = state.available
           this.terminalsReason = state.reason ?? ''
           // 活动的那个已经不在这份快照里了（终端跑完被回收 / Agent 关掉）：清掉，
