@@ -649,10 +649,14 @@ async function pumpSpeech(): Promise<void> {
  *  兜底直送（splitForSpeech 会按逗号 / 60 字硬切，不会憋着不出声）。
  *  ``` 代码块、$$ 公式块是跨行结构：按句切开后每片都凑不齐成对围栏，cleanForSpeech
  *  认不出来，代码会被逐行念出（2026-10 修）。所以游标自己记着「在不在围栏里」：
- *  围栏里的内容直接丢、不参与切句，闭合后接着按句攒；收尾时还没闭合就整段丢掉。 */
+ *  围栏里的内容直接丢、不参与切句，闭合后接着按句攒；收尾时还没闭合就整段丢掉。
+ *  中途起播（已有文本当历史不念）也得让游标过一遍历史：历史停在围栏里时，后面长出来
+ *  的是代码的下半截，不过一遍游标就当成正文念了——所以历史走 skip 而不是直接跳过。 */
 export interface SpeechIncrement {
   /** 流式又来了一片：接进缓冲，攒出完整句就送播 */
   push(chunk: string): void
+  /** 不念的一片（历史 / 不该播的增量）：只用来跟踪围栏状态，正文丢掉、已攒的半句也作废 */
+  skip(chunk: string): void
   /** 结束（消息完成）：把还没等到句末标点的尾巴整段播完 */
   flush(): void
 }
@@ -664,10 +668,21 @@ const SPEECH_FENCES = ['```', '$$']
 export function createSpeechIncrement(): SpeechIncrement {
   let buffer = '' // 围栏外、还没成句的文本
   let pending = '' // 还没判定的原始增量（可能卡着半个围栏记号，如片尾的「``」）
+  let muted = 0 // pending 开头有几个字来自 skip：只参与围栏判定，不进句缓冲
   let fence: string | null = null // 当前所在围栏的记号；null = 在围栏外
+
+  /** 从 pending 头上取走 n 个字，返回其中可念的部分（skip 来的那段不算） */
+  const take = (n: number): string => {
+    const piece = pending.slice(0, n)
+    const drop = Math.min(muted, piece.length)
+    muted -= drop
+    pending = pending.slice(piece.length)
+    return piece.slice(drop)
+  }
 
   /** 围栏外的文本接进句缓冲：攒到句末就送播，太长兜底直送 */
   const feed = (text: string) => {
+    if (!text) return
     buffer += text
     for (let i = buffer.length - 1; i >= 0; i--) {
       if (SENTENCE_END.includes(buffer[i])) {
@@ -689,10 +704,10 @@ export function createSpeechIncrement(): SpeechIncrement {
         const close = pending.indexOf(fence)
         if (close < 0) {
           // 没闭合：内容丢掉，只留可能是半个闭合记号的尾巴
-          pending = pending.slice(-(fence.length - 1))
+          take(Math.max(0, pending.length - (fence.length - 1)))
           return
         }
-        pending = pending.slice(close + fence.length)
+        take(close + fence.length)
         fence = null
         // 围栏占位当空白（和 cleanForSpeech 整段清理一致），句子在围栏两侧接着攒
         if (buffer) buffer += ' '
@@ -708,15 +723,14 @@ export function createSpeechIncrement(): SpeechIncrement {
         }
       }
       if (open >= 0) {
-        feed(pending.slice(0, open))
-        pending = pending.slice(open + marker.length)
+        feed(take(open))
+        take(marker.length)
         fence = marker
         continue
       }
       // 片尾的 ` / `` / $ 可能是下一片记号的前半，先扣住
       const hold = /(?:`{1,2}|\$)$/.exec(pending)?.[0].length ?? 0
-      feed(pending.slice(0, pending.length - hold))
-      pending = pending.slice(pending.length - hold)
+      feed(take(pending.length - hold))
       return
     }
   }
@@ -727,10 +741,18 @@ export function createSpeechIncrement(): SpeechIncrement {
       pending += chunk
       drain()
     },
+    skip(chunk: string) {
+      if (!chunk) return
+      buffer = '' // 中间隔了不念的一段，前面攒的半句接不上了
+      pending += chunk
+      muted = pending.length
+      drain()
+    },
     flush() {
       // 扣住的半个记号到收尾也没凑成围栏：当普通字符；还在围栏里：未闭合部分整段丢
-      if (!fence) buffer += pending
+      if (!fence) buffer += pending.slice(muted)
       pending = ''
+      muted = 0
       fence = null
       if (buffer.trim()) speakText(buffer, { append: true })
       buffer = ''

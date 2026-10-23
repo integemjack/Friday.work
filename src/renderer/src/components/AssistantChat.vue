@@ -188,12 +188,17 @@ watch(
         !entry.data?.silent && !entry.interrupted && !entry.data?.error && entry.text.trim().length > 0
       let stream = entryStreams.get(entry.id)
       if (!stream) {
-        stream = { inc: createSpeechIncrement(), len: initial ? entry.text.length : 0 }
+        stream = { inc: createSpeechIncrement(), len: 0 }
         entryStreams.set(entry.id, stream)
       }
       // 首帧已有的文本当历史不补播；之后流式长出来的部分实时送播（新条目直接落地也
-        // 从 0 全播——它刚出现，不算历史）
-      if (!initial && speakable && entry.text.length > stream.len) stream.inc.push(entry.text.slice(stream.len))
+        // 从 0 全播——它刚出现，不算历史）。不播的那段也要过一遍游标（skip）：历史停在
+      // 代码块中间时，游标得知道后面长出来的是代码下半截
+      if (entry.text.length > stream.len) {
+        const grown = entry.text.slice(stream.len)
+        if (!initial && speakable) stream.inc.push(grown)
+        else stream.inc.skip(grown)
+      }
       if (entry.text.length !== stream.len) stream.len = entry.text.length
       // streaming → 完成：把还没等到句末标点的尾句播完（打断 / 出错的整条不再收尾）
       if (!initial && done && (mark === undefined || mark.streaming) && speakable) stream.inc.flush()
@@ -297,12 +302,22 @@ watch(
           // 完结消息里「新出现的块」= 服务端重推历史换了块 id（noteAssistantStream 同款
           // 场景：新一轮活动把已见过的消息按新块 id 重弹）：内容念过了，游标直接对齐、
           // 不重播；未完成消息的新块才是流式新段，从头播
-          stream = { inc: createSpeechIncrement(), len: historical || done ? full.length : 0 }
+          stream = { inc: createSpeechIncrement(), len: 0 }
           blockStreams.set(key, stream)
+          if (historical || done) {
+            stream.inc.skip(full)
+            stream.len = full.length
+          }
         }
         // 新进监听 / 首帧的已有文本当历史；之后流式长出来的增量（=气泡正在显示的新
-        // 文本）实时送播；块长度回退（重发/修正，罕见）只对齐游标不重播
-        if (!historical && speakable && full.length > stream.len) stream.inc.push(full.slice(stream.len))
+        // 文本）实时送播；块长度回退（重发/修正，罕见）只对齐游标不重播。
+        // 不播的那段也要过一遍游标（skip）：中途起播时历史可能停在代码块 / 公式块
+        // 中间，游标不知道的话后面长出来的代码下半截会被当正文念
+        if (full.length > stream.len) {
+          const grown = full.slice(stream.len)
+          if (!historical && speakable) stream.inc.push(grown)
+          else stream.inc.skip(grown)
+        }
         if (full.length !== stream.len) stream.len = full.length
         // finishedAt 出现：把还没等到句末标点的尾句播完（打断/出错/带通知的整条不收尾）
         if (justFinished && speakable) stream.inc.flush()

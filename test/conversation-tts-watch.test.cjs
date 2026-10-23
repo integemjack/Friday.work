@@ -119,10 +119,19 @@ function setupWatch(store) {
           let stream = blockStreams.get(key)
           if (!stream) {
             // 完结消息里「新出现的块」= 服务端重推历史换了块 id：念过了，不重播
-            stream = { inc: createSpeechIncrement(), len: historical || done ? full.length : 0 }
+            stream = { inc: createSpeechIncrement(), len: 0 }
             blockStreams.set(key, stream)
+            if (historical || done) {
+              stream.inc.skip(full)
+              stream.len = full.length
+            }
           }
-          if (!historical && speakable && full.length > stream.len) stream.inc.push(full.slice(stream.len))
+          // 不播的那段也过一遍游标（skip）：历史停在代码块中间时，后面长出来的代码下半截不念
+          if (full.length > stream.len) {
+            const grown = full.slice(stream.len)
+            if (!historical && speakable) stream.inc.push(grown)
+            else stream.inc.skip(grown)
+          }
           if (full.length !== stream.len) stream.len = full.length
           if (justFinished && speakable) stream.inc.flush()
         }
@@ -366,6 +375,31 @@ test('组合复现：A 播两轮→淘汰 A→B 新会话播→A 重订阅后有
     await drain()
     assert.ok(calls.includes('A 后来的新句子。'), `A 重开后的新回复照常播（calls=${JSON.stringify(calls)}）`)
     assert.equal(calls.filter((c) => c === 'A 的第一句。').length, 1, '历史不重播')
+  } finally {
+    w.stop()
+    restore()
+  }
+})
+
+// ---- 中途起播落在代码块里：新订阅的会话里有条还在流式的消息，已有文本停在 ``` 围栏中间 ----
+test('中途起播：已有文本停在代码块里，后面长出来的代码下半截不念、围栏后照常播', async () => {
+  const { calls, drain, flushMicro, restore } = mockBridge()
+  const w = setupWatch(store)
+  try {
+    await nextTick()
+    store.details.B = newDetail()
+    const m = { id: 'a-mid', role: 'assistant', blocks: [{ id: 'ab-mid', kind: { text: '示例如下：\n```ts\nconst a' } }] }
+    store.details.B.messages.push({ message: m, version: 0 })
+    await nextTick() // B 刚进监听：已有文本当历史（只过游标）
+    streamChunk('B', m, ' = foo(1);\nconsole.log(a);\n')
+    await nextTick()
+    streamChunk('B', m, '```\n运行即可。')
+    await nextTick()
+    finishMessage('B', m)
+    await nextTick()
+    await flushMicro()
+    await drain()
+    assert.deepEqual(calls, ['运行即可。'], `代码下半截不进合成（calls=${JSON.stringify(calls)}）`)
   } finally {
     w.stop()
     restore()

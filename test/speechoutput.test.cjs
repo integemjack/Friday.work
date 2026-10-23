@@ -329,3 +329,30 @@ test('流式围栏：行内代码 / 单个 $ 被片尾扣住后照常放出，�
   assert.equal(tail.length, 1, '片尾扣住的 $ 收尾时放出')
   assert.ok(tail[0].includes('5$'), `$ 当普通字符念（实际 ${tail[0]}）`)
 })
+
+test('中途起播：历史经 skip 过游标，停在代码块中间时后面的代码下半截不念', async () => {
+  const { calls, release, flushMicro, restore } = mockBridge()
+  try {
+    const inc = speech.createSpeechIncrement()
+    inc.skip('已经念过的开头。示例如下：\n``') // 历史停在半个围栏记号上
+    inc.push('`ts\nconst a = foo(1);\n')
+    inc.push('console.log(a);\n```\n运行即可。')
+    inc.flush()
+    for (let i = 0; i < 8; i++) {
+      await flushMicro()
+      release()
+    }
+    assert.deepEqual(calls, ['运行即可。'], '历史不念、代码下半截不念，围栏闭合后照常')
+
+    const fresh = speech.createSpeechIncrement()
+    fresh.skip('历史里没说完的半句')
+    fresh.push('，后面接上的半句。')
+    for (let i = 0; i < 8; i++) {
+      await flushMicro()
+      release()
+    }
+    assert.deepEqual(calls.slice(1), ['，后面接上的半句。'], 'skip 的正文丢掉，不拼进下一句')
+  } finally {
+    restore()
+  }
+})
