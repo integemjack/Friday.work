@@ -10,6 +10,19 @@ declare global {
     fridayBridge: {
       /** 客户端设备：最近一轮 navigator.serial.getPorts() 里各串口的 COM 名（按枚举顺序） */
       serialPortNames(): Promise<Array<{ portName: string; displayName?: string; vendorId?: number; productId?: number }>>
+      /** 客户端设备：UF2 盘、往里写 .uf2（只写真的 UF2 镜像） */
+      uf2Drives(): Promise<Array<{ id: string; root: string; label: string; model: string; boardId: string }>>
+      uf2Write(root: string, bytes: Uint8Array): Promise<{ bytes: number; blocks: number }>
+      /** 客户端设备：跑白名单里的烧录 / 调试工具；background 时回 runId，结束时 onToolExited */
+      toolRun(request: {
+        tool: string
+        args: string[]
+        files: Array<{ name: string; data: ArrayBuffer }>
+        background: boolean
+        timeoutMs: number
+      }): Promise<{ exitCode?: number; output?: string; elapsedMs?: number; command: string; runId?: string }>
+      toolStop(runId: string): Promise<boolean>
+      onToolExited(listener: (event: { runId: string; exitCode: number; output: string }) => void): () => void
       pickAttachments(): Promise<PickedFile[]>
       registerDrop(file: File): Promise<PickedFile | null>
       /** 一段录音交给主进程落盘（M3-A） */

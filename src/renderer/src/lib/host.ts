@@ -1,5 +1,5 @@
 // 渲染进程 ⇆ 协议进程的 API 消息等共有类型。
-import type { DevicePortMessage, HostEvent, HostRequest, HostResponse, PickedFile } from '../../../shared/api.js'
+import type { DevicePortMessage, HostEvent, HostRequest, HostResponse, PickedFile, TunnelPortMessage } from '../../../shared/api.js'
 
 export type { PickedFile, HostEvent, HostRequest, HostResponse }
 
@@ -22,6 +22,7 @@ class HostLink {
   private readonly callSignalListeners = new Set<(signal: unknown) => void>()
   private readonly workListeners = new Set<(message: { type: string; machineID: string } & Record<string, unknown>) => void>()
   private readonly deviceListeners = new Set<(message: DevicePortMessage) => void>()
+  private readonly tunnelListeners = new Set<(message: TunnelPortMessage) => void>()
   /** port 还没到时排队等它的请求（渲染层挂载比 preload 建 port 早，登录页的自动登录首拍就会撞上） */
   private portWaiters: Array<() => void> = []
 
@@ -78,6 +79,9 @@ class HostLink {
         } else if (incoming.type === 'device.request' || incoming.type === 'device.cancel') {
           // 客户端设备：服务端的 device.* 请求（DeviceBroker 接）
           for (const listener of this.deviceListeners) listener(incoming as unknown as DevicePortMessage)
+        } else if (incoming.type === 'tunnel.data' || incoming.type === 'tunnel.closed') {
+          // 客户端设备：TCP 隧道 socket 那头的字节 / 关了（DeviceBroker 的 TcpSession 接）
+          for (const listener of this.tunnelListeners) listener(incoming as unknown as TunnelPortMessage)
         }
       }
     }
@@ -151,6 +155,17 @@ class HostLink {
   onDevice(listener: (message: DevicePortMessage) => void): () => void {
     this.deviceListeners.add(listener)
     return () => this.deviceListeners.delete(listener)
+  }
+
+  /** 客户端设备：TCP 隧道 socket 那头的消息 */
+  onTunnel(listener: (message: TunnelPortMessage) => void): () => void {
+    this.tunnelListeners.add(listener)
+    return () => this.tunnelListeners.delete(listener)
+  }
+
+  /** 客户端设备：隧道的字节 / 关 / 暂停 / 恢复，发给协议进程的 socket */
+  postTunnel(message: TunnelPortMessage): void {
+    this.port?.postMessage(message)
   }
 
   /** 客户端设备：回结果 / 发通知（不带 reqID，不是请求） */

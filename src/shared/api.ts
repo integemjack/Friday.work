@@ -119,6 +119,10 @@ export type HostRequest =
   | { type: 'schat.call.reject' }
   | { type: 'schat.call.hangup' }
   | { type: 'schat.call.ice' }
+  /** 客户端设备：这台电脑连着的手机（adb server / usbmuxd 里的） */
+  | { type: 'device.phones' }
+  /** 客户端设备：TCP 隧道这台电脑这头连上目标（失败抛错）；字节之后走 tunnel.* 端口消息 */
+  | { type: 'device.tunnel.open'; id: string; target: TunnelTarget }
 
 // MARK: 协议 → 渲染
 
@@ -142,6 +146,17 @@ export interface HostEnvelope {
 }
 
 // MARK: 客户端设备（方案-客户端设备）：服务端的 device.* 请求在渲染进程处理
+
+/** TCP 隧道的目标：局域网 / 本机的 host:port，或本机的 adb server（只放行一台手机）、usbmuxd */
+export type TunnelTarget = { kind: 'tcp'; host: string; port: number } | { kind: 'adb'; serial: string } | { kind: 'usbmux' }
+
+/** TCP 隧道的字节（渲染进程的 DataChannel ⇆ 协议进程的 socket，走数据面端口） */
+export type TunnelPortMessage =
+  | { type: 'tunnel.data'; id: string; data: ArrayBuffer }
+  | { type: 'tunnel.close'; id: string }
+  | { type: 'tunnel.pause'; id: string }
+  | { type: 'tunnel.resume'; id: string }
+  | { type: 'tunnel.closed'; id: string; reason: string }
 
 /** 协议进程 ⇆ 渲染进程的 device 消息（不带 reqID，和 work.* 一样走数据面端口） */
 export type DevicePortMessage =

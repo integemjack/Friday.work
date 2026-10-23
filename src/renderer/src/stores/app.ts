@@ -175,6 +175,8 @@ export type WindowKind =
   | 'browser'
   | 'agents'
   | 'settings'
+  /** 客户端设备：这台电脑上能交给远端用的设备、使用中、始终允许 */
+  | 'devices'
 
 export interface DesktopWindow {
   id: string
@@ -215,7 +217,8 @@ const WINDOW_SIZE: Record<WindowKind, { w: number; h: number; minW: number; minH
   files: { w: 920, h: 580, minW: 480, minH: 320 },
   browser: { w: 820, h: 620, minW: 420, minH: 320 },
   agents: { w: 580, h: 460, minW: 360, minH: 240 },
-  settings: { w: 620, h: 560, minW: 420, minH: 320 }
+  settings: { w: 620, h: 560, minW: 420, minH: 320 },
+  devices: { w: 560, h: 560, minW: 380, minH: 300 }
 }
 
 /** 置顶节流：两次抬 z 的最小间隔，全局一个窗口（castZAt）。窗口到期时由 castTick 抬
@@ -235,7 +238,8 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
   files: { title: '文件', icon: '🗂' },
   browser: { title: '浏览器', icon: '🌐' },
   agents: { title: '子 Agent', icon: '◈' },
-  settings: { title: '设置', icon: '⚙' }
+  settings: { title: '设置', icon: '⚙' },
+  devices: { title: '设备', icon: '🔌' }
 }
 
 /** 操作卡是否已到终态（终态才计时渐隐） */

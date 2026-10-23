@@ -3,8 +3,10 @@
 
 import { reactive } from 'vue'
 
-/** serial = 开串口会话；esp = 烧录 / 读芯片；camera = 拍照 */
-export type DeviceCapability = 'serial' | 'esp' | 'camera'
+/** serial = 开串口会话；esp = 烧录 / 读芯片（ESP、UF2、Arduino、STM32 都算）；camera = 拍照；
+ *  network = 连局域网 / 本机的 host:port；android = 把一台安卓手机交给服务端的 adb；ios = 交出 usbmuxd；
+ *  tool = 在这台电脑上跑烧录 / 调试工具（每次都问，没有「始终允许」） */
+export type DeviceCapability = 'serial' | 'esp' | 'camera' | 'network' | 'android' | 'ios' | 'tool'
 
 export interface DeviceGrant {
   machineID: string
@@ -58,5 +60,9 @@ export function revokeGrant(grant: Pick<DeviceGrant, 'machineID' | 'capability' 
 export const CAPABILITY_LABEL: Record<DeviceCapability, string> = {
   serial: '串口',
   esp: '烧录',
-  camera: '摄像头'
+  camera: '摄像头',
+  network: '局域网连接',
+  android: '安卓手机',
+  ios: 'iOS 设备',
+  tool: '运行工具'
 }

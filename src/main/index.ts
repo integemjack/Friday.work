@@ -14,6 +14,7 @@ import { handleMediaStackRequest } from './MediaStack.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
 import { IpcBridge } from './ipc/bridge.js'
 import { registerSerialPorts } from './ipc/SerialPorts.js'
+import { registerDeviceTools, stopDeviceTools } from './ipc/DeviceTools.js'
 import { THEME_BG } from '../shared/theme-tokens.js'
 
 // 媒体叠本地缓存的供文件协议（friday-media://stack/<name>，只出 MediaStack 目录里的文件）：
@@ -202,6 +203,8 @@ app.whenReady().then(() => {
   })
   // 客户端设备（方案-客户端设备）：WebSerial 列全部串口、不弹系统选择框，授权由应用自己的弹窗管
   registerSerialPorts(session.defaultSession)
+  // UF2 盘烧录、本机烧录 / 调试工具（白名单）
+  registerDeviceTools(() => mainWindow)
 
   // 媒体叠本地缓存：看图/看视频归档的文件落在本机，这个协议供 <img>/<video> 直接加载
   // （支持 Range，视频可拖进度）；必须在建窗口前接好
@@ -244,5 +247,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  stopDeviceTools()
   protocolProcessHost.stop()
 })
