@@ -33,7 +33,10 @@ function toggleMachineMenu() {
 
 // 机器菜单开着时 Esc 收起（遮罩点一下也收）
 function onMenuKey(event: KeyboardEvent) {
-  if (event.key === 'Escape') machineMenuOpen.value = false
+  if (event.key === 'Escape') {
+    event.preventDefault() // 这次 Esc 已用来收菜单，别再取消选中会话（App.vue）
+    machineMenuOpen.value = false
+  }
 }
 watch(machineMenuOpen, (open) => {
   if (open) window.addEventListener('keydown', onMenuKey)

@@ -814,7 +814,10 @@ function onVoiceClick(): void {
 
 /* 识别中 Esc 停止（焦点不在输入框时也要能停） */
 function onWindowKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && listening.value) stopListen()
+  if (event.key === 'Escape' && listening.value) {
+    event.preventDefault() // 这次 Esc 已用来停录音，别再取消选中会话（App.vue）
+    stopListen()
+  }
 }
 /* 主进程推模型准备进度（首次使用要下载模型）：下载中显示在输入框上方的下载条
    （进度 + 速度 + 已下/总量），下载完的加载阶段回落到底行提示「准备中」。速度按

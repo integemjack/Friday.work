@@ -174,6 +174,27 @@ function scheduleErrorDismiss(): void {
 watch(() => store.error, scheduleErrorDismiss)
 onBeforeUnmount(() => window.clearTimeout(errorTimer))
 
+// Esc 取消选中会话：回到默认态（聊天栏显示「新对话」，输入台发出去就开一段新的）；只取消选中，不退订——
+// 后台的流式气泡 / 播报照常。别的东西先吃掉这次 Esc 的（灯箱、登录页、机器菜单、命令菜单、停录音…
+// 它们都会 preventDefault）就不再取消选中；判断放到下一个任务里做，晚注册的监听也来得及标记。
+// 在输入框里按 Esc 不算，除非是输入台且里面没字（有字时取消选中会让正在写的这条发到新会话去）。
+function onGlobalKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.repeat) return
+  const target = event.target as HTMLElement | null
+  const editable = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+  if (editable) {
+    const inComposer = target!.tagName === 'TEXTAREA' && !!target!.closest('.composer-card')
+    if (!inComposer || (target as HTMLTextAreaElement).value.trim()) return
+  }
+  window.setTimeout(() => {
+    if (event.defaultPrevented) return
+    if (showLogin.value || store.zoomMedia || store.assistantChat || !store.activeConversationID) return
+    store.activeConversationID = ''
+  })
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
+
 // 通话中（来电/呼出/接通中/通话中）：右栏顶部给通话面板让出 1/3、聊天缩到 2/3；空闲时聊天占满整栏
 const calling = computed(() => store.calling)
 </script>

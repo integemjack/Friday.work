@@ -106,7 +106,10 @@ function parallaxTick(): void {
 
 /** Esc：从工作台打开的登录页直接退回（首次进入时没有可退的工作台，不响应） */
 function onKey(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && store.workbenchReady) store.closeLogin()
+  if (event.key === 'Escape' && store.workbenchReady) {
+    event.preventDefault() // 这次 Esc 已用来退回工作台，别再取消选中会话（App.vue）
+    store.closeLogin()
+  }
 }
 
 onMounted(() => {

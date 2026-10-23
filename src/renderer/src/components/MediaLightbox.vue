@@ -23,7 +23,10 @@ const { url, state, note, setMediaEl } = useToolMedia(tool, {
 })
 
 function onKey(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && store.zoomMedia) store.closeMediaZoom()
+  if (event.key === 'Escape' && store.zoomMedia) {
+    event.preventDefault() // 这次 Esc 已用来关灯箱，别再取消选中会话（App.vue）
+    store.closeMediaZoom()
+  }
 }
 
 onMounted(() => window.addEventListener('keydown', onKey))
