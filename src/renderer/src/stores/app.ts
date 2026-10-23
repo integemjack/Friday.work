@@ -45,6 +45,7 @@ import {
   type SessionActivity,
   type TeamRun,
   type TerminalInfo,
+  type ThinkingLevel,
   type ToolEvent
 } from '../../../protocol/rpc/protocol.js'
 import type { MachineStateInfo } from '../../../shared/api.js'
@@ -1123,14 +1124,21 @@ export const useAppStore = defineStore('app', {
     /** 新建会话并打开。注意：服务端会规范化 id（转大写存储），必须用回执里的 id，后续事件的 id 都以它为准。
      *  options：新建时直接带上工作目录 / 引擎（REMOTE.md conversation.create 支持），不用建完再改一遍。
      *  返回新会话 id（没连上/出错时 undefined） */
-    async createConversation(options?: { workingDirectory?: string; engineID?: string }): Promise<string | undefined> {
+    async createConversation(options?: {
+      workingDirectory?: string
+      engineID?: string
+      teamMode?: string
+      thinking?: ThinkingLevel
+    }): Promise<string | undefined> {
       if (!this.currentMachine) return
       try {
         const id = crypto.randomUUID()
         const result = (await rpc(this.currentMachine, 'conversation.create', {
           id,
           ...(options?.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
-          ...(options?.engineID ? { engineID: options.engineID } : {})
+          ...(options?.engineID ? { engineID: options.engineID } : {}),
+          ...(options?.teamMode ? { teamMode: options.teamMode } : {}),
+          ...(options?.thinking ? { thinking: options.thinking } : {})
         })) as { id: string }
         const canonicalID = result.id ?? id
         if (options?.workingDirectory) {
@@ -1788,6 +1796,34 @@ export const useAppStore = defineStore('app', {
       await rpc(this.currentMachine, 'runner.setEngine', { conversationID, engineID })
       const summary = this.summaries.find((item) => item.id === conversationID)
       if (summary) summary.engineID = engineID
+    },
+
+    /** 新对话默认用的模型（REMOTE.md：2.5 起 runner.setEngine 只改这段，改默认用 settings.update 的 defaultEngineID） */
+    async setDefaultEngine(engineID: string) {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'settings.update', { defaultEngineID: engineID })
+      this.defaultEngineID = engineID
+    },
+
+    /** 这段对话的任务模式（REMOTE.md runner.setTeamMode，2.9 起 feature teamModePerConversation：服务端同时记成新对话默认；
+     *  没有这个功能的旧服务端改那台的全局 settings.update teamMode） */
+    async setTeamMode(conversationID: string, mode: string) {
+      if (!this.currentMachine) return
+      const perConversation = this.currentMachineInfo?.serverInfo?.features?.includes('teamModePerConversation') ?? false
+      if (perConversation) await rpc(this.currentMachine, 'runner.setTeamMode', { conversationID, mode })
+      else await rpc(this.currentMachine, 'settings.update', { teamMode: mode })
+      const summary = this.summaries.find((item) => item.id === conversationID)
+      if (summary) summary.teamMode = mode
+    },
+
+    /** 这段对话的深度思考档位（REMOTE.md runner.setThinking {conversationID, level}） */
+    async setThinking(conversationID: string, level: ThinkingLevel) {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'runner.setThinking', { conversationID, level })
+      const summary = this.summaries.find((item) => item.id === conversationID)
+      if (summary) summary.thinking = level
+      const runtime = this.details[conversationID]?.runtime
+      if (runtime) runtime.thinkingLevel = level
     },
 
     /** 切换这段会话的工作目录（REMOTE.md：runner.setWorkingDirectory {conversationID, path?}；path 不写 = 回默认）。

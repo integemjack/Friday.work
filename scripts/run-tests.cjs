@@ -33,6 +33,7 @@ run('npx', ['esbuild', 'src/shared/update.ts', '--bundle', '--platform=node', '-
 run('npx', ['esbuild', 'src/renderer/src/lib/remoteDownload.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/remotedownload.cjs'])
 run('npx', ['esbuild', 'src/main/ipc/Downloads.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--outfile=.tmp/downloads-main.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/remoteUpload.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/remoteupload.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/builtinCommands.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/builtincommands.cjs'])
 run('node', ['--test', 'test/'])
 
 rmSync(tmp, { recursive: true, force: true })
