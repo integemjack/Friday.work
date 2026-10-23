@@ -116,22 +116,7 @@ async function scrollToBottom(immediate = false) {
 
 watch(messages, () => void scrollToBottom(), { deep: false })
 
-// 助手模式：新的日志条（自己说的 user）强制贴底，流式增长跟随滚动（同会话那套规则）。
-// deep 必须开：store 的 mergeAssistantEntry 用 splice 原地变异 assistantEntries，
-// getter watch 只 track 数组引用、引用不变就永不触发（播报不响的根因同此）
-watch(
-  () => store.assistantEntries,
-  (next, prev) => {
-    const from = prev?.length ?? 0
-    if (next.length > from && next[from]?.kind === 'user') {
-      stickToBottom.value = true
-      void scrollToBottom(true)
-    } else {
-      void scrollToBottom()
-    }
-  },
-  { deep: true }
-)
+// （助手模式的贴底跟随并进了下面「助手日志」那个 watch：同一个签名源，一次变动只算一遍）
 // 进/出助手模式：重置窗口化、回到底部
 watch(assistantChat, () => {
   stickToBottom.value = true
@@ -172,17 +157,39 @@ watch(queued, (next, prev) => {
 const seenEntryStreaming = new Map<string, { streaming?: boolean; interrupted?: boolean; spoken?: boolean }>()
 /** 日志条游标：entryID → { 增量游标, 已播到的文本长度 }（按 entry 记，流式一断再续从游标续播） */
 const entryStreams = new Map<string, { inc: SpeechIncrement; len: number }>()
-// deep 必须开：store 的 mergeAssistantEntry 用 splice 原地变异 assistantEntries（同 id 更新、
-// 新条目插入都不换数组引用），getter watch 只 track 引用、不开 deep 就永远等不到
-// 流式增量——气泡照常渲染（渲染函数自己 track 了内容）但播报从不触发。
+// 源是每条的「id / kind / 文本长度 / 状态位」签名串：store 的 mergeAssistantEntry 用 splice
+// 原地变异 assistantEntries（同 id 更新、新条目插入都不换数组引用），只 track 数组引用的话
+// 永远等不到流式增量；签名逐条读了这几个字段，依赖就挂在它们上。不用 deep：deep 每个流式
+// 增量都要把整份日志（含工具调用参数 / 结果）遍历一遍，原先贴底和播报两个 deep watch 就是两遍。
+// 同一个 watch 也管助手模式的贴底跟随：新日志条是自己说的（user）强制贴底，其余跟随滚动。
+const assistantSignature = () =>
+  store.assistantEntries
+    .map(
+      (entry) =>
+        `${entry.id}|${entry.kind}|${entry.text.length}|${entry.streaming ? 1 : 0}|${entry.interrupted ? 1 : 0}|${entry.data?.silent ? 1 : 0}|${entry.data?.error ? 1 : 0}`
+    )
+    .join('\n')
+/** 上一次回调时的条数（null = 还没回调过：首帧只登记、不滚动） */
+let assistantSeenLength: number | null = null
 watch(
-  () => store.assistantEntries,
-  (entries, prev) => {
-    const initial = prev === undefined
+  assistantSignature,
+  () => {
+    const entries = store.assistantEntries
+    const initial = assistantSeenLength === null
+    if (assistantSeenLength !== null) {
+      const from = assistantSeenLength
+      if (entries.length > from && entries[from]?.kind === 'user') {
+        stickToBottom.value = true
+        void scrollToBottom(true)
+      } else {
+        void scrollToBottom()
+      }
+    }
+    assistantSeenLength = entries.length
     for (const entry of entries) {
       if (entry.kind === 'user') {
         if (entry.data?.silent) continue
-        // 只登记已见（deep 之下每帧重跑，靠它跳过重复处理）；自己发言不断播报，
+        // 只登记已见（每次签名变都整份重跑，靠它跳过重复处理）；自己发言不断播报，
         // 新回复的句子 append 到队尾接着播
         seenEntryStreaming.set(entry.id, {})
         continue
@@ -211,7 +218,7 @@ watch(
       seenEntryStreaming.set(entry.id, { streaming: entry.streaming, spoken: true })
     }
   },
-  { immediate: true, deep: true }
+  { immediate: true }
 )
 
 // 会话模式：按「回复气泡」的块级流式增量实时播——桌面气泡（noteAssistantStream）
@@ -284,6 +291,14 @@ watch(
       if (!seenConversations.has(conv)) freshConvs.add(conv)
     }
     for (const conv of freshConvs) seenConversations.add(conv)
+    // 消息按 conv:id 先建一遍索引（O(n)）：逐条 messages.find 是 O(n²)，每个流式增量都要扫一遍
+    const entryIndex = new Map<string, NonNullable<(typeof store.details)[string]>['messages'][number]>()
+    for (const conv of Object.keys(store.details)) {
+      for (const candidate of store.details[conv]?.messages ?? []) {
+        const key = `${conv}:${candidate.message.id}`
+        if (!entryIndex.has(key)) entryIndex.set(key, candidate) // 同 id 重复时取第一条（与 find 一致）
+      }
+    }
     for (const item of list) {
       if (item.key === '__convs__') continue
       if (item.user) {
@@ -293,7 +308,7 @@ watch(
         continue
       }
       if (item.conv === undefined || item.msgID === undefined) continue
-      const entry = store.details[item.conv]?.messages.find((candidate) => candidate.message.id === item.msgID)
+      const entry = entryIndex.get(`${item.conv}:${item.msgID}`)
       if (!entry) continue
       const before = seenMessageFinish.get(item.key)
       const done = !!item.finishedAt

@@ -101,6 +101,13 @@ function setupWatch(store) {
         if (!seenConversations.has(conv)) freshConvs.add(conv)
       }
       for (const conv of freshConvs) seenConversations.add(conv)
+      const entryIndex = new Map()
+      for (const conv of Object.keys(store.details)) {
+        for (const candidate of store.details[conv]?.messages ?? []) {
+          const key = `${conv}:${candidate.message.id}`
+          if (!entryIndex.has(key)) entryIndex.set(key, candidate)
+        }
+      }
       for (const item of list) {
         if (item.key === '__convs__') continue
         if (item.user) {
@@ -108,7 +115,7 @@ function setupWatch(store) {
           continue
         }
         if (item.conv === undefined || item.msgID === undefined) continue
-        const entry = store.details[item.conv]?.messages.find((candidate) => candidate.message.id === item.msgID)
+        const entry = entryIndex.get(`${item.conv}:${item.msgID}`)
         if (!entry) continue
         const before = seenMessageFinish.get(item.key)
         const done = !!item.finishedAt

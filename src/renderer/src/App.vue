@@ -5,7 +5,7 @@
 //   右栏   ：与助手聊天（默认占满整栏）；拨打视频/语音时顶部让出 1/3 给通话面板、聊天缩到 2/3
 // 会话的思考/文本以气泡投在桌面随机处（5 秒渐隐）；操作以极简终端卡投在桌面（有结果 5 秒后渐隐）。
 // 剩下的浮动窗口只有子 Agent / 设置，入口在标题栏。
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
 import { uiTheme } from './lib/theme.js'
@@ -117,8 +117,12 @@ onMounted(() => {
   store.restoreLayout()
   store.bindHost()
   store.startCastTicker() // 投层置顶 tick：窗口到期时抬「当前最活跃」的气泡/卡
-  store.$subscribe(() => scheduleLayoutSave(), { detached: true })
 })
+
+// 只盯布局相关的几个字段（签名串变了才排一次保存）。不能用 store.$subscribe：它是对整个
+// store state 的 deep watch，流式增量 / machines 事件每改一次就把含会话详情的整棵树遍历一遍
+// （实测单次 12-15ms，HMR 后 detached 订阅还会叠加，dev 下每次变动 ~77ms，界面一顿一顿）
+watch(layoutSignature, () => scheduleLayoutSave())
 
 const componentFor: Record<WindowKind, unknown> = {
   terminals: TerminalCard,
