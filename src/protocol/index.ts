@@ -10,6 +10,7 @@ import type { CredentialBackend } from './session/PairingStore.js'
 interface PendingCall {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
+  timer?: NodeJS.Timeout
 }
 
 const parentPort = process.parentPort
@@ -23,6 +24,7 @@ function reply<T>(pending: Map<string, PendingCall>, reqID: string, data: { ok: 
   const entry = pending.get(reqID)
   if (!entry) return
   pending.delete(reqID)
+  if (entry.timer) clearTimeout(entry.timer)
   if (data.ok) entry.resolve(data.value ?? data.path ?? null)
   else entry.reject(new Error('主进程拒绝了请求'))
 }
@@ -30,15 +32,14 @@ function reply<T>(pending: Map<string, PendingCall>, reqID: string, data: { ok: 
 function callMain(type: string, payload: Record<string, unknown>, pending: Map<string, PendingCall>): Promise<unknown> {
   const reqID = randomUUID()
   return new Promise((resolve, reject) => {
-    pending.set(reqID, { resolve, reject })
-    parentPort.postMessage({ type, reqID, ...payload })
-    // 30 秒没人回就失败，免得挂死
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (pending.has(reqID)) {
         pending.delete(reqID)
         reject(new Error('主进程没有回应'))
       }
     }, 30_000)
+    pending.set(reqID, { resolve, reject, timer })
+    parentPort.postMessage({ type, reqID, ...payload })
   })
 }
 
@@ -72,7 +73,11 @@ parentPort.on('message', (event) => {
       const userDataPath = String(data.userDataPath ?? '')
       const appVersion = String(data.appVersion ?? '0.0.0')
       initParams = { userDataPath, appVersion }
-      void ensureHost()
+      void ensureHost().then(() => {
+        // 端口先于 init 到达时上面只存了模块变量：host 起来后补挂上，
+        // 不然 listen 的是 null 端口，渲染层永远等不到回应、假死到 reload
+        if (port) protocolHost?.setPort(port)
+      })
       break
     }
     case 'attach': {

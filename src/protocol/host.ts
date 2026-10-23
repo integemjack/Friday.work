@@ -94,13 +94,16 @@ export class ProtocolHost {
 
   /** 窗口 reload 时换端口，机器连接保持 */
   setPort(newPort: MessagePortMain): void {
-    if (this.port !== newPort) {
+    const replace = this.port !== newPort
+    // 先换端口再做「重载清理」：failPendingDevice 的拒绝、tunnels.closeAll 的
+    // tunnel.closed 都要发给新页面——旧端口随重载已经死了，发给它没人收
+    this.port = newPort
+    if (replace) {
       this.listeningPort = null
       // 换了端口 = 窗口重载：旧页面里在处理的设备请求没人回了
       this.failPendingDevice(() => true, '客户端界面重载了')
       this.tunnels.closeAll()
     }
-    this.port = newPort
     this.listen()
     this.broadcastMachines()
     // SChat 状态也补推一次：它在端口挂上前就可能已静默恢复在线（load → connectWs），
@@ -137,13 +140,13 @@ export class ProtocolHost {
     if (!machine) return
     switch (message.type) {
       case 'work.open':
-        machine.handleWorkOpen()
+        machine.handleWorkOpen(message.requestId)
         break
       case 'work.in':
         machine.handleWorkIn(message.text)
         break
       case 'work.closed':
-        machine.handleWorkClosed(message.reason)
+        machine.handleWorkClosed(message.requestId, message.reason)
         break
       case 'work.signalOut':
         machine.handleWorkSignalOut(message.signalType, message.payload)

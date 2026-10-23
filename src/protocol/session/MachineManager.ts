@@ -217,9 +217,14 @@ export class MachineConnection {
       this.detail = '机器人已接听，正在建立 WebRTC 通道…'
       this.host.onStateChange(this)
     }
-    // 自己 teardown 时的挂断回调（workSignaling 已经先置空）：不是对端的事件，忽略——
-    // 不然它会重入 onTransportDown，用「已断开」盖掉真正的失败原因（超时 / 被拒…）
-    if (event.kind === 'ended' && !this.workSignaling) return
+    // 自己 teardown 时的挂断回调（workSignaling 已经先置空）：不是对端的事件，状态不动——
+    // 不然它会重入 onTransportDown，用「已断开」盖掉真正的失败原因（超时 / 被拒…）。
+    // 但要转给渲染进程把旧 PC 拆掉：不拆的话旧 DataChannel 一直挂着，等对端关的时候
+    // 会发来旧 requestId 的 work.closed，把重拨出来的新连接拆掉
+    if (event.kind === 'ended' && !this.workSignaling) {
+      this.host.workPortSend({ type: 'work.signal', machineID: this.id, signal: event })
+      return
+    }
     if (event.kind === 'ended' && event.permanent) {
       // 重拨也没用的拒绝（不是好友 / 不是主人）：停止自动重拨，原因写明；用户处理后在机器菜单里点它手动重连
       this.wanted = false
@@ -251,8 +256,10 @@ export class MachineConnection {
     this.host.workPortSend({ type: 'work.signal', machineID: this.id, signal: event })
   }
 
-  /** 渲染进程：DataChannel 打开了（接着 hello） */
-  handleWorkOpen(): void {
+  /** 渲染进程：DataChannel 打开了（接着 hello）。旧拨号的迟到事件不认：
+   *  迟到 open 会把没打开的新通道标成已开、hello 发进死通道静默丢失 */
+  handleWorkOpen(requestId: string): void {
+    if (requestId && this.workSignaling && requestId !== this.workSignaling.activeRequestID) return
     const transport = this.transport instanceof WorkTransport ? this.transport : null
     if (!transport) return
     // 通道通了：建通道的看门狗收掉，接下来是 hello（自带 30 秒超时）
@@ -284,8 +291,9 @@ export class MachineConnection {
     if (this.transport instanceof WorkTransport) this.transport.handleMessage(text)
   }
 
-  /** 渲染进程：通道断了 */
-  handleWorkClosed(reason: string): void {
+  /** 渲染进程：通道断了。旧拨号的迟到 closed 不认：会拆掉重拨出来的新连接 */
+  handleWorkClosed(requestId: string, reason: string): void {
+    if (requestId && this.workSignaling && requestId !== this.workSignaling.activeRequestID) return
     if (this.transport instanceof WorkTransport) this.transport.handleClosed(reason)
   }
 
@@ -345,7 +353,7 @@ export class MachineConnection {
           client: {
             name: 'Friday Work',
             version: this.host.appVersion,
-            platform: 'windows',
+            platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'windows',
             kind: 'desktop'
           },
           features: ['messagePatch', 'clientDevices'],
