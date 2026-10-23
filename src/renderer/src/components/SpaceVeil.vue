@@ -8,6 +8,7 @@
 // 本机 Windows 关了「动画效果」，跟随 hint 会静默变纯静态（实测 matchMedia 报 reduce）。
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ACCENT_FALLBACK_RGB } from '../../../shared/theme-tokens.js'
+import { subscribeFrames, wakeFrames } from '../lib/frameTicker.js'
 
 const STAR_COUNT = 120
 
@@ -40,7 +41,7 @@ interface Meteor {
 
 const stars: Star[] = []
 const meteors: Meteor[] = []
-let raf = 0
+let unsubscribeFrames: (() => void) | null = null
 let ctx: CanvasRenderingContext2D | null = null
 let running = true
 let width = 0
@@ -125,13 +126,16 @@ function drawStar(ctx: CanvasRenderingContext2D, star: Star, alpha: number): voi
   }
 }
 
-/** 没有流星时的最小帧间隔（≈30fps；留 4ms 余量免得 60Hz 下抖成 20fps） */
-const IDLE_FRAME_MS = 1000 / 30 - 4
+/** 帧率交给共用的 lib/frameTicker：平时随空闲帧率（≈30fps）和语音波形同帧画；
+ *  有流星（或下一颗 50ms 内就来）时要逐帧——流星 500+ px/s，30fps 会一跳一跳 */
+function wantsEveryFrame(): boolean {
+  return meteors.length > 0 || nextMeteorAt - performance.now() < 50
+}
 
 function step(now: number): void {
-  raf = requestAnimationFrame(step)
   if (!ctx || !running) return
-  if (!meteors.length && now < nextMeteorAt && now - last < IDLE_FRAME_MS) return
+  // 别人要逐帧（正在播报）时帧驱动每个 vsync 都会来：星野自己没流星就仍按 ~30fps 画
+  if (!wantsEveryFrame() && now - last < 1000 / 30 - 4) return
   const dt = Math.min((now - last) / 1000, 0.05)
   last = now
   const t = now / 1000
@@ -147,7 +151,10 @@ function step(now: number): void {
   }
 
   // 流星
-  if (now >= nextMeteorAt) spawnMeteor(now)
+  if (now >= nextMeteorAt) {
+    spawnMeteor(now)
+    wakeFrames()
+  }
   for (let i = meteors.length - 1; i >= 0; i -= 1) {
     const m = meteors[i]
     m.age += dt
@@ -193,7 +200,7 @@ onMounted(() => {
   window.addEventListener('resize', onResize)
   document.addEventListener('visibilitychange', onVisibility)
   last = performance.now()
-  raf = requestAnimationFrame(step)
+  unsubscribeFrames = subscribeFrames(step, wantsEveryFrame)
 })
 
 function onResize(): void {
@@ -201,7 +208,8 @@ function onResize(): void {
 }
 
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf)
+  unsubscribeFrames?.()
+  unsubscribeFrames = null
   ctx = null
   window.removeEventListener('resize', onResize)
   document.removeEventListener('visibilitychange', onVisibility)

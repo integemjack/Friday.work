@@ -375,6 +375,11 @@ onMounted(() => {
   text-align: center;
 }
 
+/* 贾维斯：悬停行左缘先亮一道淡青线（选中态是实色线，悬停是它的预告） */
+[data-theme='jarvis'] .row:not(.active):hover {
+  box-shadow: inset 2px 0 0 var(--accent-a35);
+}
+
 /* 贾维斯：表头标题后拉一道渐隐发丝线（HUD 报文头，和消息头的分隔线同一语言） */
 [data-theme='jarvis'] .head .spacer {
   align-self: center;

@@ -4,11 +4,12 @@
 // （source → masterGain → analyser → destination），反映的是「实际听到的」——
 // 静音即归零、音量小波形也矮；静音不打断播报队列，取消静音能接回正在念的那句。
 // 偏好全部 localStorage 持久化（重启仍在）。两个主题（跟随系统 / 贾维斯）都挂载。
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { subscribeFrames, wakeFrames } from '../lib/frameTicker.js'
 import { getTtsAnalyser, setTtsMuted, setTtsSinkId, setTtsVolume, ttsMuted, ttsPhase, ttsSinkId, ttsVolume } from '../lib/speechOutput.js'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
-let raf = 0
+let unsubscribeFrames: (() => void) | null = null
 
 const speaking = computed(() => ttsPhase.value === 'speaking')
 const live = computed(() => speaking.value && !ttsMuted.value)
@@ -135,17 +136,16 @@ function columnLevels(analyser: AnalyserNode | null): number[] {
 let boxW = 0
 let boxH = 0
 let resizeObserver: ResizeObserver | null = null
-let lastDraw = 0
-/** 空闲（没在播报）时的最小帧间隔：待机呼吸波很慢，~24fps 足够顺，省下大半绘制 */
-const IDLE_FRAME_MS = 1000 / 24 - 4
+// 帧率交给共用的 lib/frameTicker：播报中逐帧（波形要跟上声音），空闲时随空闲帧率（≈30fps）
+// 和深空星野同一帧画——待机呼吸波很慢，用不着逐帧
+watch(live, (isLive) => {
+  if (isLive) wakeFrames()
+})
 
-function drawFrame(now: number): void {
-  raf = requestAnimationFrame(drawFrame)
+function drawFrame(): void {
   const el = canvas.value
   if (!el) return
   const isLive = live.value
-  if (!isLive && now - lastDraw < IDLE_FRAME_MS) return
-  lastDraw = now
   const ctx = el.getContext('2d')
   if (!ctx) return
 
@@ -245,13 +245,14 @@ onMounted(() => {
     })
     resizeObserver.observe(canvas.value)
   }
-  raf = requestAnimationFrame(drawFrame)
+  unsubscribeFrames = subscribeFrames(drawFrame, () => live.value)
   document.addEventListener('pointerdown', onDocPointerDown)
   navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange)
 })
 
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf)
+  unsubscribeFrames?.()
+  unsubscribeFrames = null
   resizeObserver?.disconnect()
   document.removeEventListener('pointerdown', onDocPointerDown)
   navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange)

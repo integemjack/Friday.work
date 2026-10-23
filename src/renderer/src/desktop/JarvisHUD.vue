@@ -41,19 +41,29 @@ function tick(): void {
   }
 }
 
-// ---- FPS：rAF 计帧，每 500ms 结算一次（真实测量） ----
+// ---- FPS：rAF 计帧（真实测量）。每 4 秒采样 1 秒：常驻的逐帧 rAF 会让主线程每个 vsync
+//      都跑一整个主帧（样式重算 + 提交），只为了数帧数不值得 ----
 const fps = ref(0)
 let fpsRaf = 0
+let fpsTimer = 0
 let fpsFrames = 0
-let fpsLast = 0
+let fpsStart = 0
+const FPS_SAMPLE_MS = 1000
+const FPS_GAP_MS = 3000
 function fpsLoop(now: number): void {
-  fpsRaf = requestAnimationFrame(fpsLoop)
+  if (!fpsStart) fpsStart = now
   fpsFrames += 1
-  if (now - fpsLast >= 500) {
-    fps.value = Math.round((fpsFrames * 1000) / (now - fpsLast))
+  if (now - fpsStart >= FPS_SAMPLE_MS) {
+    fps.value = Math.round(((fpsFrames - 1) * 1000) / (now - fpsStart))
     fpsFrames = 0
-    fpsLast = now
+    fpsStart = 0
+    fpsRaf = 0
+    fpsTimer = window.setTimeout(() => {
+      fpsRaf = requestAnimationFrame(fpsLoop)
+    }, FPS_GAP_MS)
+    return
   }
+  fpsRaf = requestAnimationFrame(fpsLoop)
 }
 
 // ---- 装饰性 hex 数据流（HUD 味，低频刷新） ----
@@ -399,7 +409,6 @@ onMounted(() => {
   timer = window.setInterval(tick, 1000)
   rollHex()
   hexTimer = window.setInterval(rollHex, 420)
-  fpsLast = performance.now()
   fpsRaf = requestAnimationFrame(fpsLoop)
   void pollRemote()
 })
@@ -408,6 +417,7 @@ onBeforeUnmount(() => {
   window.clearInterval(hexTimer)
   window.clearTimeout(remoteTimer)
   cancelAnimationFrame(fpsRaf)
+  window.clearTimeout(fpsTimer)
 })
 </script>
 
