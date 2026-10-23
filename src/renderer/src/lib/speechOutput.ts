@@ -56,6 +56,8 @@ const KEY_VOLUME = 'voice.tts.volume'
 const KEY_SINK = 'voice.tts.sink'
 const KEY_BG_VOLUME = 'voice.tts.bgVolume'
 const KEY_BG_VOICE_SWAP = 'voice.tts.bgVoiceSwap'
+const KEY_HRTF = 'voice.tts.hrtf'
+const KEY_FOLLOW_BUBBLE = 'voice.tts.followBubble'
 
 /** 回复语音播报总开关（默认开；合成本地免费、不联网，开着没有成本） */
 export const replySpeakEnabled = ref<boolean>(loadEnabled())
@@ -82,6 +84,10 @@ export const ttsSinkId = ref<string>(loadSinkId())
 export const ttsBackgroundVolume = ref<number>(loadBackgroundVolume())
 /** 后台会话自动换一个内置快音色：和前台的声音错开好分辨，也少占引擎 */
 export const ttsBackgroundVoiceSwap = ref<boolean>(loadBackgroundVoiceSwap())
+/** 耳机空间音频：各路换成 HRTF 定位（戴耳机听得出左右前后和高低；外放会发怪，默认关） */
+export const ttsSpatialHeadphones = ref<boolean>(loadFlag(KEY_HRTF, false))
+/** 后台会话的声音从它的桌面气泡那边来（关 = 按会话固定在左右某一侧） */
+export const ttsFollowBubble = ref<boolean>(loadFlag(KEY_FOLLOW_BUBBLE, true))
 
 /** 引擎是否可用（本机平台有包且已下好） */
 export const cosyVoiceReady = ref(false)
@@ -215,10 +221,24 @@ function loadBackgroundVolume(): number {
 }
 
 function loadBackgroundVoiceSwap(): boolean {
+  return loadFlag(KEY_BG_VOICE_SWAP, true)
+}
+
+/** 开关类偏好：存 '1' / '0'，没存过用默认值 */
+function loadFlag(key: string, fallback: boolean): boolean {
   try {
-    return localStorage.getItem(KEY_BG_VOICE_SWAP) !== '0'
+    const saved = localStorage.getItem(key)
+    return saved === null ? fallback : saved === '1'
   } catch {
-    return true
+    return fallback
+  }
+}
+
+function saveFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? '1' : '0')
+  } catch {
+    // 不可写：本次会话内生效即可
   }
 }
 
@@ -321,11 +341,19 @@ export function setTtsBackgroundVolume(value: number): void {
 
 export function setTtsBackgroundVoiceSwap(on: boolean): void {
   ttsBackgroundVoiceSwap.value = on
-  try {
-    localStorage.setItem(KEY_BG_VOICE_SWAP, on ? '1' : '0')
-  } catch {
-    // 不可写：本次会话内生效即可
-  }
+  saveFlag(KEY_BG_VOICE_SWAP, on)
+}
+
+export function setTtsSpatialHeadphones(on: boolean): void {
+  ttsSpatialHeadphones.value = on
+  saveFlag(KEY_HRTF, on)
+  rebuildSpatial() // 已建好的各路就地换定位节点，正在说的那句不断
+}
+
+export function setTtsFollowBubble(on: boolean): void {
+  ttsFollowBubble.value = on
+  saveFlag(KEY_FOLLOW_BUBBLE, on)
+  applyMix()
 }
 
 // MARK: 回复文本 → 朗读文本（纯函数，test/speechoutput.test.cjs 直接测）
@@ -390,7 +418,7 @@ export const ttsPhase: Ref<TtsPhase> = ref('idle')
 export const ttsDetail = ref('')
 
 let audioContext: AudioContext | null = null
-/** 主增益（静音/音量）与波形分析器：播放链 source → 通道 gain → 通道 panner → masterGain → analyser → destination。
+/** 主增益（静音/音量）与波形分析器：播放链 source → 通道 gain → 通道定位节点（声像 / HRTF） → masterGain → analyser → destination。
  *  analyser 挂在主增益之后，波形反映的是「实际听到的」（各通道混起来）——静音即归零、音量小波形也矮。 */
 let masterGain: GainNode | null = null
 let outputAnalyser: AnalyserNode | null = null
@@ -424,6 +452,19 @@ const BACKGROUND_HOLD_MS = 3000
 const BACKGROUND_PANS = [-0.6, 0.6, -0.85, 0.85]
 /** 增益 / 声像过渡的时间常数（setTargetAtTime，约 3 倍到位：切前台时 0.4s 左右滑过去） */
 const MIX_TIME_CONSTANT = 0.13
+/** 跟随气泡时后台离正中至少这么远：气泡落在桌面中间也别和居中的前台叠在一个方向 */
+const BUBBLE_PAN_MIN = 0.35
+const BUBBLE_PAN_MAX = 0.9
+/** HRTF 下气泡高低换成仰角（弧度，±0.5 ≈ ±29°）：桌面上方的气泡声音也偏上 */
+const BUBBLE_ELEVATION_MAX = 0.5
+/** 后台排着轮不到的：等了这么久还没开口、或积压超过这么多字，就不再逐字念——
+ *  压成一句「XX 有新回复」（等一分钟才念出来的长文已经没用，要的是知道那边说完了） */
+const BACKGROUND_STALE_MS = 30_000
+const BACKGROUND_STALE_CHARS = 300
+/** 压缩后这一路安静这么久才算那条回复说完：之后来的文本当新回复正常排队；没安静下来的照丢 */
+const COLLAPSE_RESET_MS = 20_000
+/** 积压检查的间隔（有后台在排队时才转） */
+const STALE_SWEEP_MS = 2000
 
 interface SynthAudio {
   samples: Float32Array
@@ -451,9 +492,21 @@ interface SpeechChannel {
   token: number
   /** 这一轮排上队的先后（后台按先来后到占麦） */
   since: number
+  /** 这一轮开始 / 最近一句开口的时刻（积压判定：后台多久没出声了） */
+  startedAt: number
+  spokeAt: number
+  /** 积压被压成「有新回复」之后：这条回复后面的文本都丢，直到安静 COLLAPSE_RESET_MS 或成了前台 */
+  collapsed: boolean
+  /** 最近一次来文本的时刻（含被丢掉的） */
+  inputAt: number
+  /** 桌面气泡位置（归一化 -1..1，x 左负右正、y 上负下正）；没有气泡过 = null，用固定一侧 */
+  position: { x: number; y: number } | null
   gain: GainNode | null
-  panner: StereoPannerNode | null
+  spatial: Spatial | null
 }
+
+/** 定位节点：外放用左右声像；耳机模式用 HRTF（能表现前后高低） */
+type Spatial = { kind: 'stereo'; node: StereoPannerNode } | { kind: 'hrtf'; node: PannerNode }
 
 const channels = new Map<string, SpeechChannel>()
 let arrivals = 0
@@ -470,6 +523,25 @@ let inFlight: { channel: string; gen: number } | null = null
 let engineGen = 0
 /** 最近一次合成失败、之后还没有新句子入队：空闲时状态行停在「出错」 */
 let failed = false
+let staleTimer: ReturnType<typeof setTimeout> | null = null
+/** 来源 → 念给人听的名字（压缩成「XX 有新回复」时用）；AssistantChat 注册 */
+let titleOfSource: (source: string) => string = () => ''
+
+/** 注册来源名字的查法（会话标题 / 「助手」） */
+export function setSpeechTitleResolver(resolve: (source: string) => string): void {
+  titleOfSource = resolve
+}
+
+/** 某一路的桌面气泡位置（归一化 -1..1，x 左负右正、y 上负下正）。只更新不清除：
+ *  气泡 5 秒渐隐后声音留在原处，不会念到一半跳回固定的那一侧 */
+export function setSpeechPosition(source: string, position: { x: number; y: number }): void {
+  const ch = channelFor(source)
+  const x = Math.min(1, Math.max(-1, position.x))
+  const y = Math.min(1, Math.max(-1, position.y))
+  if (ch.position && Math.abs(ch.position.x - x) < 0.01 && Math.abs(ch.position.y - y) < 0.01) return
+  ch.position = { x, y }
+  applyMix()
+}
 
 /** 模型准备进度（主进程事件 → 状态行 / 设置页进度条） */
 export function initTtsProgressListener(): void {
@@ -505,6 +577,7 @@ export function stopSpeaking(source?: string): void {
     ch.ready = []
     ch.synthesizing = false
     ch.playing = false
+    ch.collapsed = false
     if (ch.current) {
       try {
         ch.current.stop()
@@ -527,6 +600,10 @@ export function stopSpeaking(source?: string): void {
   if (all) {
     failed = false
     if (ttsPhase.value === 'error') ttsPhase.value = 'idle'
+    if (staleTimer) {
+      clearTimeout(staleTimer)
+      staleTimer = null
+    }
   }
   onAudibleChange()
   kick()
@@ -538,6 +615,16 @@ export function setSpeechForeground(source: string): void {
   if (source === foregroundSource) return
   foregroundSource = source
   if (backgroundHolder === source) releaseBackground() // 占麦的后台成了前台：后台麦空出来
+  const front = channels.get(source)
+  if (front?.collapsed) {
+    // 被压成「有新回复」的会话切到眼前了：提示不用念了，之后长出来的文本照常实时念
+    front.collapsed = false
+    if (!front.playing && !front.synthesizing) {
+      front.token += 1
+      front.queue = []
+      front.ready = []
+    }
+  }
   onAudibleChange()
   applyMix()
   kick()
@@ -546,7 +633,24 @@ export function setSpeechForeground(source: string): void {
 function channelFor(id: string): SpeechChannel {
   let ch = channels.get(id)
   if (!ch) {
-    ch = { id, queue: [], ready: [], synthesizing: false, playing: false, current: null, chars: 0, token: 0, since: 0, gain: null, panner: null }
+    ch = {
+      id,
+      queue: [],
+      ready: [],
+      synthesizing: false,
+      playing: false,
+      current: null,
+      chars: 0,
+      token: 0,
+      since: 0,
+      startedAt: 0,
+      spokeAt: 0,
+      collapsed: false,
+      inputAt: 0,
+      position: null,
+      gain: null,
+      spatial: null
+    }
     channels.set(id, ch)
   }
   return ch
@@ -606,7 +710,40 @@ function kick(): void {
     if (ch.ready.length && !ch.playing) void runPlayback(ch)
   }
   schedule()
+  sweepStale()
   updatePhase()
+}
+
+/** 积压检查：排着轮不到的后台（不占麦、没在说也没在合成），等太久或攒太多字就压成一句提示。
+ *  还有后台在排队就隔 STALE_SWEEP_MS 再查一次，都排空了就停 */
+function sweepStale(): void {
+  const now = Date.now()
+  let waiting = false
+  for (const ch of channels.values()) {
+    if (isFront(ch.id) || ch.id === backgroundHolder || ch.collapsed || ch.playing || ch.synthesizing) continue
+    if (!ch.queue.length && !ch.ready.length) continue
+    const waited = now - Math.max(ch.startedAt, ch.spokeAt)
+    const backlog = ch.queue.reduce((sum, part) => sum + part.length, 0)
+    if (waited >= BACKGROUND_STALE_MS || backlog >= BACKGROUND_STALE_CHARS) collapse(ch)
+    else waiting = true
+  }
+  if (waiting && !staleTimer) {
+    staleTimer = setTimeout(() => {
+      staleTimer = null
+      kick()
+    }, STALE_SWEEP_MS)
+  }
+}
+
+/** 一路积压压成「XX 有新回复」：没播的句子（含已合成的）作废，只留这一句提示排队；
+ *  这条回复后面再来的文本也丢（collapsed），直到安静下来或切到眼前 */
+function collapse(ch: SpeechChannel): void {
+  const title = cleanForSpeech(titleOfSource(ch.id)).slice(0, 24)
+  ch.token += 1 // 迟到的合成结果作废（调用方已确认它此刻不在合成、不在说）
+  ch.queue = [title ? `${title} 有新回复。` : '另一个会话有新回复。']
+  ch.ready = []
+  ch.chars = 0
+  ch.collapsed = true
 }
 
 function updatePhase(): void {
@@ -644,12 +781,17 @@ function applyOutputGain(): void {
   masterGain.gain.setTargetAtTime(target, audioContext.currentTime, 0.02)
 }
 
-/** 某通道此刻该有的增益与声像：前台居中原声；后台偏到固定一侧，前台出声时压到后台音量、
- *  前台安静时抬回 BACKGROUND_IDLE_GAIN */
-function mixFor(ch: SpeechChannel): { gain: number; pan: number } {
-  if (isFront(ch.id)) return { gain: 1, pan: 0 }
+/** 某通道此刻该有的增益与方位：前台居中原声；后台偏到一侧（跟随气泡开着且有过气泡 = 气泡那边，
+ *  否则按 id 固定一侧），前台出声时压到后台音量、前台安静时抬回 BACKGROUND_IDLE_GAIN。
+ *  elevation 只在 HRTF 下有用（立体声像表现不了高低） */
+function mixFor(ch: SpeechChannel): { gain: number; pan: number; elevation: number } {
+  if (isFront(ch.id)) return { gain: 1, pan: 0, elevation: 0 }
   const low = ttsBackgroundVolume.value
-  return { gain: ducking || low === 0 ? low : Math.max(low, BACKGROUND_IDLE_GAIN), pan: backgroundPan(ch.id) }
+  const gain = ducking || low === 0 ? low : Math.max(low, BACKGROUND_IDLE_GAIN)
+  if (ttsFollowBubble.value && ch.position) {
+    return { gain, pan: bubblePan(ch.position.x, ch.id), elevation: -ch.position.y * BUBBLE_ELEVATION_MAX }
+  }
+  return { gain, pan: backgroundPan(ch.id), elevation: 0 }
 }
 
 function backgroundPan(id: string): number {
@@ -658,15 +800,51 @@ function backgroundPan(id: string): number {
   return BACKGROUND_PANS[Math.abs(hash) % BACKGROUND_PANS.length]
 }
 
-/** 把每个通道的增益 / 声像平滑推到目标值（切前台、闪避起落、改后台音量时调） */
+/** 气泡横坐标 → 声像：同侧，离正中至少 BUBBLE_PAN_MIN（正好在中间的按 id 那一侧） */
+export function bubblePan(x: number, id: string): number {
+  const side = Math.abs(x) < 0.01 ? Math.sign(backgroundPan(id)) : Math.sign(x)
+  return side * Math.min(BUBBLE_PAN_MAX, Math.max(BUBBLE_PAN_MIN, Math.abs(x) * BUBBLE_PAN_MAX))
+}
+
+/** 声像 -1..1 → 方位角 ±90°，配仰角换成 HRTF 的单位球坐标（听者在原点、面朝 -z、头顶 +y） */
+export function hrtfPosition(pan: number, elevation: number): { x: number; y: number; z: number } {
+  const azimuth = (pan * Math.PI) / 2
+  return {
+    x: Math.sin(azimuth) * Math.cos(elevation),
+    y: Math.sin(elevation),
+    z: -Math.cos(azimuth) * Math.cos(elevation)
+  }
+}
+
+/** 定位节点推到目标方位（immediate：刚建的节点直接落位，不从正中滑过去） */
+function placeSpatial(spatial: Spatial, pan: number, elevation: number, now: number, immediate: boolean): void {
+  if (spatial.kind === 'stereo') {
+    if (immediate) spatial.node.pan.value = pan
+    else spatial.node.pan.setTargetAtTime(pan, now, MIX_TIME_CONSTANT)
+    return
+  }
+  const { x, y, z } = hrtfPosition(pan, elevation)
+  const node = spatial.node
+  if (immediate) {
+    node.positionX.value = x
+    node.positionY.value = y
+    node.positionZ.value = z
+  } else {
+    node.positionX.setTargetAtTime(x, now, MIX_TIME_CONSTANT)
+    node.positionY.setTargetAtTime(y, now, MIX_TIME_CONSTANT)
+    node.positionZ.setTargetAtTime(z, now, MIX_TIME_CONSTANT)
+  }
+}
+
+/** 把每个通道的增益 / 方位平滑推到目标值（切前台、闪避起落、改后台音量、气泡挪位时调） */
 function applyMix(): void {
   if (!audioContext) return
   const now = audioContext.currentTime
   for (const ch of channels.values()) {
-    if (!ch.gain || !ch.panner) continue
-    const { gain, pan } = mixFor(ch)
+    if (!ch.gain || !ch.spatial) continue
+    const { gain, pan, elevation } = mixFor(ch)
     ch.gain.gain.setTargetAtTime(gain, now, MIX_TIME_CONSTANT)
-    ch.panner.pan.setTargetAtTime(pan, now, MIX_TIME_CONSTANT)
+    placeSpatial(ch.spatial, pan, elevation, now, false)
   }
 }
 
@@ -693,18 +871,45 @@ function onAudibleChange(): void {
   updatePhase()
 }
 
-/** 通道自己那段 gain → panner（接到公共主增益上），首次出声时建；初值直接落位不做渐变 */
+/** 按当前模式建定位节点：耳机 = HRTF（距离不衰减，音量全由闪避管），外放 = 左右声像 */
+function createSpatial(context: AudioContext): Spatial {
+  if (!ttsSpatialHeadphones.value) return { kind: 'stereo', node: context.createStereoPanner() }
+  const node = context.createPanner()
+  node.panningModel = 'HRTF'
+  node.distanceModel = 'inverse'
+  node.refDistance = 1
+  node.rolloffFactor = 0
+  return { kind: 'hrtf', node }
+}
+
+/** 通道自己那段 gain → 定位节点（接到公共主增益上），首次出声时建；初值直接落位不做渐变 */
 function ensureChannelNodes(context: AudioContext, ch: SpeechChannel): GainNode {
-  if (!ch.gain || !ch.panner) {
+  if (!ch.gain || !ch.spatial) {
     ch.gain = context.createGain()
-    ch.panner = context.createStereoPanner()
-    const { gain, pan } = mixFor(ch)
+    ch.spatial = createSpatial(context)
+    const { gain, pan, elevation } = mixFor(ch)
     ch.gain.gain.value = gain
-    ch.panner.pan.value = pan
-    ch.gain.connect(ch.panner)
-    ch.panner.connect(ensureGraph(context))
+    placeSpatial(ch.spatial, pan, elevation, context.currentTime, true)
+    ch.gain.connect(ch.spatial.node)
+    ch.spatial.node.connect(ensureGraph(context))
   }
   return ch.gain
+}
+
+/** 切耳机模式：已建好的各路把定位节点就地换掉（gain 断开重接，正在播的 source 不受影响） */
+function rebuildSpatial(): void {
+  const context = audioContext
+  if (!context) return
+  for (const ch of channels.values()) {
+    if (!ch.gain || !ch.spatial) continue
+    ch.gain.disconnect()
+    ch.spatial.node.disconnect()
+    ch.spatial = createSpatial(context)
+    const { pan, elevation } = mixFor(ch)
+    placeSpatial(ch.spatial, pan, elevation, context.currentTime, true)
+    ch.gain.connect(ch.spatial.node)
+    ch.spatial.node.connect(ensureGraph(context))
+  }
 }
 
 /** 把选中的输出设备落到 AudioContext 的 sink（Chromium 110+ 支持且切换平滑，不中断正在播的）。
@@ -858,16 +1063,27 @@ export function speakText(
   // 后台不播：直接丢，不攒着——攒下来等切过去再念的是过时的内容
   if (!options?.force && !isFront(source) && ttsBackgroundVolume.value === 0) return
   const ch = channelFor(source)
+  const now = Date.now()
+  if (ch.collapsed && options?.append) {
+    // 已压成「有新回复」的那条回复：后面的文本照丢，直到这一路安静 COLLAPSE_RESET_MS（那就是新回复了）
+    const quietFor = now - ch.inputAt
+    ch.inputAt = now
+    if (quietFor < COLLAPSE_RESET_MS) return
+    ch.collapsed = false
+  }
+  ch.inputAt = now
   if (!options?.append) {
     stopSpeaking() // 先全停、清空，再取新 token：此后任何新打断都会使 token 失配
     ch.voice = options?.voice
     ch.chars = 0
     ch.since = ++arrivals
+    ch.startedAt = now
   } else if (!channelBusy(ch)) {
     // 这一路闲着（刚被打断 / 上一轮播完）：这次 append 启动新一轮
     ch.voice = options?.voice
     ch.chars = 0
     ch.since = ++arrivals
+    ch.startedAt = now
   }
   if (ch.id === backgroundHolder && holderTimer) {
     // 占麦的后台在让出前等到了新句子：接着说，不让
@@ -878,6 +1094,7 @@ export function speakText(
   ch.queue.push(...parts)
   ch.chars += parts.reduce((sum, part) => sum + part.length, 0)
   schedule()
+  sweepStale() // 后台一下攒了太多字：当场压成提示，别等下一轮检查
   updatePhase()
 }
 
@@ -966,6 +1183,7 @@ async function runPlayback(ch: SpeechChannel): Promise<void> {
   try {
     while (ch.ready.length && token === ch.token && mayPlay(ch)) {
       const audio = ch.ready.shift()!
+      ch.spokeAt = Date.now()
       schedule() // 垫着的少了一句：空着的合成名额可以给这一路补上
       await playSamples(ch, token, audio.samples, audio.sampleRate)
     }

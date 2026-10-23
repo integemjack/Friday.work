@@ -13,6 +13,8 @@ import {
   ASSISTANT_SPEECH_SOURCE,
   createSpeechIncrement,
   setSpeechForeground,
+  setSpeechPosition,
+  setSpeechTitleResolver,
   stopSpeaking,
   ttsDetail,
   ttsPhase,
@@ -338,6 +340,41 @@ watch(
 watch(
   [assistantChat, conversationID],
   ([assistant, conv]) => setSpeechForeground(assistant ? ASSISTANT_SPEECH_SOURCE : (conv ?? '')),
+  { immediate: true }
+)
+
+// 后台积压压成一句「XX 有新回复」时念的名字
+setSpeechTitleResolver((source) =>
+  source === ASSISTANT_SPEECH_SOURCE ? '助手' : (store.summaries.find((item) => item.id === source)?.title ?? '')
+)
+
+// 声音跟着桌面气泡走：每个会话取最近还在长的那条回复气泡，中心点按窗口归一化成 -1..1
+// 交给播报（后台那路从气泡那边出声；前台恒居中，不受影响）。气泡渐隐后位置保留在原处。
+// 气泡宽上限 360（DesktopBubbles 的 max-width），高度不定按 120 估中心——只用来分左右高低，够用
+const BUBBLE_HALF_W = 180
+const BUBBLE_HALF_H = 60
+watch(
+  () =>
+    store.bubbles
+      .filter((bubble) => bubble.kind === 'text' && !bubble.fading)
+      .map((bubble) => `${bubble.conversationID}|${bubble.x}|${bubble.y}|${bubble.activeAt}`)
+      .join(';'),
+  () => {
+    const latest = new Map<string, { x: number; y: number; at: number }>()
+    for (const bubble of store.bubbles) {
+      if (bubble.kind !== 'text' || bubble.fading) continue
+      const seen = latest.get(bubble.conversationID)
+      if (!seen || bubble.activeAt > seen.at) latest.set(bubble.conversationID, { x: bubble.x, y: bubble.y, at: bubble.activeAt })
+    }
+    const width = Math.max(1, window.innerWidth)
+    const height = Math.max(1, window.innerHeight)
+    for (const [conv, spot] of latest) {
+      setSpeechPosition(conv, {
+        x: ((spot.x + BUBBLE_HALF_W) / width) * 2 - 1,
+        y: ((spot.y + BUBBLE_HALF_H) / height) * 2 - 1
+      })
+    }
+  },
   { immediate: true }
 )
 

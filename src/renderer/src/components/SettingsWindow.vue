@@ -19,6 +19,8 @@ import {
   setReplySpeak,
   setTtsBackgroundVoiceSwap,
   setTtsBackgroundVolume,
+  setTtsFollowBubble,
+  setTtsSpatialHeadphones,
   setTtsDynamicSpeed,
   setTtsSpeed,
   setTtsSpeedMax,
@@ -26,6 +28,8 @@ import {
   stopSpeaking,
   ttsBackgroundVoiceSwap,
   ttsBackgroundVolume,
+  ttsFollowBubble,
+  ttsSpatialHeadphones,
   ttsDetail,
   ttsDynamicSpeed,
   ttsPhase,
@@ -591,7 +595,21 @@ async function pickVoiceFiles(): Promise<void> {
           <button class="small-btn" :class="{ strong: !ttsBackgroundVoiceSwap }" @click="setTtsBackgroundVoiceSwap(false)">关</button>
         </span>
       </div>
-      <div class="note">几个会话同时回复时一起念：正在看的会话居中、原声；其他会话偏到左右一侧，前台说话时压到这个音量、前台安静时稍抬高。同一时刻最多再加一个后台会话，其余的排队。后台换音色：后台自动用一个和前台不同的快音色，好分辨，也少占本机合成。调到「不播」就只念正在看的会话。</div>
+      <div class="row">
+        <span class="key">声音跟随气泡</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: ttsFollowBubble }" @click="setTtsFollowBubble(true)">开</button>
+          <button class="small-btn" :class="{ strong: !ttsFollowBubble }" @click="setTtsFollowBubble(false)">关</button>
+        </span>
+      </div>
+      <div class="row">
+        <span class="key">耳机空间音频</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: ttsSpatialHeadphones }" @click="setTtsSpatialHeadphones(true)">开</button>
+          <button class="small-btn" :class="{ strong: !ttsSpatialHeadphones }" @click="setTtsSpatialHeadphones(false)">关</button>
+        </span>
+      </div>
+      <div class="note">几个会话同时回复时一起念：正在看的会话居中、原声；其他会话偏到左右一侧，前台说话时压到这个音量、前台安静时稍抬高。同一时刻最多再加一个后台会话，其余的排队。后台换音色：后台自动用一个和前台不同的快音色，好分辨，也少占本机合成。调到「不播」就只念正在看的会话。排队超过半分钟（或积压太多）的后台会话不再逐字念，只说一句「XX 有新回复」。声音跟随气泡：后台会话从它在桌面上的回复气泡那一侧出声；关掉则每个会话固定在左右某一侧。耳机空间音频：戴耳机时打开，声音有前后高低的方位感（HRTF）；用音箱外放请关着。</div>
 
       <div class="row">
         <span class="key">语音引擎</span>

@@ -464,3 +464,76 @@ test('并行：切前台后下一句按新身份合成；后台音量 0 时后�
     restore()
   }
 })
+
+// ---- 第二步：后台积压压成一句提示、气泡方位 / HRTF 坐标 ----
+test('方位：气泡横坐标同侧、离正中至少 0.35；HRTF 坐标在单位球上', () => {
+  assert.equal(speech.bubblePan(-1, 'x'), -0.9, '最左 → -0.9（不打满）')
+  assert.equal(speech.bubblePan(0.1, 'x'), 0.35, '靠中间也至少偏 0.35，别和居中的前台叠')
+  assert.ok(Math.abs(Math.abs(speech.bubblePan(0, 'x')) - 0.35) < 1e-9, '正中按 id 定一侧')
+  const front = speech.hrtfPosition(0, 0)
+  assert.ok(Math.abs(front.x) < 1e-9 && Math.abs(front.y) < 1e-9 && Math.abs(front.z + 1) < 1e-9, '正前方 (0,0,-1)')
+  const right = speech.hrtfPosition(1, 0)
+  assert.ok(Math.abs(right.x - 1) < 1e-9 && Math.abs(right.z) < 1e-9, 'pan 1 → 正右方')
+  const up = speech.hrtfPosition(0.5, 0.4)
+  assert.ok(Math.abs(Math.hypot(up.x, up.y, up.z) - 1) < 1e-9 && up.y > 0, '带仰角仍在单位球上、偏上')
+})
+
+test('积压：排着轮不到的后台等满 30 秒压成「XX 有新回复」，这条回复后面的文本丢掉', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const { release, flushMicro, restore, texts } = payloadBridge()
+  try {
+    speech.setSpeechTitleResolver((source) => `会话${source}`)
+    speech.setSpeechForeground('A')
+    speech.speakText('B 一直在说。', { force: true, append: true, source: 'B' })
+    await flushMicro()
+    speech.speakText('C 的第一句。', { force: true, append: true, source: 'C' })
+    speech.speakText('C 的第二句。', { force: true, append: true, source: 'C' })
+    await flushMicro()
+    assert.deepEqual(texts(), ['B 一直在说。'], 'B 占着麦，C 排队')
+
+    t.mock.timers.tick(30_000) // B 那句合成一直没回来：C 等满 30 秒
+    await flushMicro()
+    speech.speakText('C 后来又说的。', { force: true, append: true, source: 'C' }) // 同一条回复还在流式：丢
+    release() // B 说完
+    await flushMicro()
+    t.mock.timers.tick(3000) // B 空了 3 秒让麦
+    await flushMicro()
+    assert.deepEqual(texts().slice(1), ['会话C 有新回复。'], 'C 只念一句提示，旧句和后来的文本都不念')
+    release()
+    await flushMicro()
+
+    t.mock.timers.tick(20_000) // C 安静 20 秒：那条回复说完了
+    speech.speakText('C 的新回复。', { force: true, append: true, source: 'C' })
+    await flushMicro()
+    assert.deepEqual(texts().slice(2), ['C 的新回复。'], '安静过后来的新回复照常念')
+    release()
+    await flushMicro()
+  } finally {
+    speech.setSpeechTitleResolver(() => '')
+    restore()
+  }
+})
+
+test('积压：后台一下攒了 300 字以上当场压成提示；切到眼前时提示作废、之后的文本实时念', async () => {
+  const { release, flushMicro, restore, texts } = payloadBridge()
+  try {
+    speech.setSpeechTitleResolver((source) => `会话${source}`)
+    speech.setSpeechForeground('A')
+    speech.speakText('B 占着麦。', { force: true, append: true, source: 'B' })
+    await flushMicro()
+    const long = Array.from({ length: 20 }, (_, i) => `这是 C 积压的第${i + 1}句比较长的内容。`).join('')
+    speech.speakText(long, { force: true, append: true, source: 'C' })
+    await flushMicro()
+    speech.setSpeechForeground('C') // 用户切过去看 C：提示不用念了
+    speech.speakText('切过来之后的新句子。', { force: true, append: true, source: 'C' })
+    await flushMicro()
+    release()
+    await flushMicro()
+    assert.deepEqual(texts(), ['B 占着麦。', '切过来之后的新句子。'], '积压不念、提示不念，眼前的新文本照念')
+    release()
+    await flushMicro()
+  } finally {
+    speech.setSpeechTitleResolver(() => '')
+    restore()
+  }
+})
