@@ -74,6 +74,12 @@ const resultSummary = computed(() => {
   return text.split('\n')[0]!.slice(0, 300)
 })
 
+/** 点卡片开合；刚拖选了一段文字（想复制参数/结果）时不算点击，别把卡片收起来 */
+function onCardClick(): void {
+  if (window.getSelection()?.toString()) return
+  open.value = !open.value
+}
+
 function symbol(): string {
   switch (props.tool.symbol) {
     case undefined: case '': return '⚙️'
@@ -88,7 +94,7 @@ function symbol(): string {
 </script>
 
 <template>
-  <div class="tool-card" :class="[statusClass, { open }]" @click="open = !open">
+  <div class="tool-card" :class="[statusClass, { open }]" @click="onCardClick">
     <div class="tool-head">
       <span class="tool-symbol">{{ symbol() }}</span>
       <span class="tool-title">{{ title }}</span>
@@ -102,7 +108,9 @@ function symbol(): string {
       <div v-if="argumentSummary" class="arg">参数：{{ argumentSummary }}</div>
       <div v-if="resultSummary" class="res">{{ resultSummary }}</div>
     </div>
-    <div v-if="open" class="tool-open">
+    <!-- 展开区里的点击不冒泡到本卡：运行记录里的子卡点开时不能把父卡一起收起，
+         在完整参数/结果里点选文字也不该收起 -->
+    <div v-if="open" class="tool-open" @click.stop>
       <div v-if="tool.arguments" class="section">
         <div class="section-label">参数</div>
         <pre>{{ prettyArguments }}</pre>
@@ -140,6 +148,11 @@ function symbol(): string {
 
 .tool-card.open {
   background: var(--panel);
+}
+
+/* 展开区：点击不收起（见模板），可以正常选文字复制 */
+.tool-open {
+  cursor: auto;
 }
 
 .tool-head {

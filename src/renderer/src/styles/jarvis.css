@@ -130,8 +130,23 @@ html[data-theme='jarvis'] .tool-card {
   background: var(--panel-card-deep);
 }
 
+/* 运行中呼吸：亮条是伪元素、动的是它的 opacity（合成器线程）；原来动 border-left-color，
+   每张在跑的卡每帧都要重绘。几何不变：去掉 2px 左边框、补 2px 内边距，亮条正好落在原边框位置 */
 html[data-theme='jarvis'] .tool-card.run {
-  border-left: 2px solid var(--run);
+  position: relative;
+  border-left: none;
+  padding-left: 2px;
+}
+
+html[data-theme='jarvis'] .tool-card.run::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--run);
+  pointer-events: none;
   animation: jarvis-tool-run 1.6s ease-in-out infinite;
 }
 
@@ -149,7 +164,7 @@ html[data-theme='jarvis'] .tool-card.warn {
 
 @keyframes jarvis-tool-run {
   50% {
-    border-left-color: var(--run-a25);
+    opacity: 0.25;
   }
 }
 

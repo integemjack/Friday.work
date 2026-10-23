@@ -104,7 +104,13 @@ function parallaxTick(): void {
   parallaxRaf = requestAnimationFrame(parallaxTick)
 }
 
+/** Esc：从工作台打开的登录页直接退回（首次进入时没有可退的工作台，不响应） */
+function onKey(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && store.workbenchReady) store.closeLogin()
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', onKey)
   store.loginActive = true
   // 静默场景：登录页冒出来时其实已有连着的机器（窗口 reload、布局恢复）——没事可做，直接进工作台
   if (!manualOpen.value && store.machines.some((machine) => machine.state === 'ready')) {
@@ -125,6 +131,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
   store.loginActive = false
   rootEl.value?.removeEventListener('mousemove', onPointerMove)
   cancelAnimationFrame(parallaxRaf)
@@ -224,6 +231,12 @@ async function switchAccount(): Promise<void> {
     <Starfield class="stars" />
     <div class="grid-floor" />
     <div class="vignette" />
+
+    <!-- 从工作台里手动打开（换账号 / 扫码连新机器）时可以随时退回去：store.closeLogin 原来没有任何入口调用，
+         打开了就只能连上一台机器才能出来。首次进入（还没有工作台）不显示 -->
+    <button v-if="store.workbenchReady" class="back-btn" title="返回工作台（Esc）" @click="store.closeLogin()">
+      返回工作台 <span class="back-x">✕</span>
+    </button>
     <i class="hud-frame tl" /><i class="hud-frame tr" /><i class="hud-frame bl" /><i class="hud-frame br" />
 
     <div class="brand-hud">FRIDAY · WORK</div>
@@ -450,6 +463,38 @@ async function switchAccount(): Promise<void> {
   color: color-mix(in srgb, var(--accent) 80%, #fff 10%);
   text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
   pointer-events: none;
+}
+
+/* 返回工作台（右上角，和左上角的 HUD 铭牌对称） */
+.back-btn {
+  position: absolute;
+  top: 14px;
+  right: 22px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: color-mix(in srgb, var(--accent) 85%, #fff 10%);
+  font-family: var(--font-hud, 'Cascadia Code', Consolas, monospace);
+  font-size: 11px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.back-btn:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.back-x {
+  font-size: 10px;
+  opacity: 0.8;
 }
 
 /* 中央 3D 场景 */

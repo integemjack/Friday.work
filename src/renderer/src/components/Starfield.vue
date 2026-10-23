@@ -70,8 +70,9 @@ function step(now: number): void {
     const alpha = Math.min(1, Math.max(0.06, near * 1.2))
     const size = 0.6 + near * 2
     const rgb = star.accent ? accentRgb : starRgb
-    // 拖尾：往远处多投一个点，连线（近处的星拖尾更长）
-    const [tx, ty] = project(Math.min(star.z + dt * props.speed * 9, 1))
+    // 拖尾：往远处多投一个点，连线（近处的星拖尾更长）。长度按固定的 1/60 秒算，
+    // 不用实际帧间隔：窗口被降到 30fps（后台/遮挡/远程桌面）时拖尾会凭空长一倍
+    const [tx, ty] = project(Math.min(star.z + (1 / 60) * props.speed * 9, 1))
     ctx.strokeStyle = `rgba(${rgb}, ${alpha * 0.55})`
     ctx.lineWidth = size * 0.8
     ctx.beginPath()

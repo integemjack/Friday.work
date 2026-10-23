@@ -429,7 +429,7 @@ async function pickVoiceFiles(): Promise<void> {
     </div>
 
     <template v-if="tab === 'machine'">
-    <div class="note" style="padding-top: 0">来自 {{ machine?.name ?? '（未连接）' }} 的只读信息。</div>
+    <div class="note intro">来自 {{ machine?.name ?? '（未连接）' }} 的只读信息。</div>
     <section>
       <h3>客户端更新</h3>
       <div class="row">
@@ -894,6 +894,12 @@ h3 {
   color: var(--text-3);
   font-size: 11.5px;
   padding-top: 6px;
+}
+
+/* 机器页顶上那句来源说明：和下面第一个分区标题拉开（原来贴着，贾维斯下两行字几乎叠在一起） */
+.note.intro {
+  padding-top: 0;
+  margin-bottom: 14px;
 }
 
 .empty,

@@ -103,13 +103,17 @@
   height: 64%;
   transform: rotateX(64deg);
   transform-origin: 50% 100%;
+  overflow: hidden; /* 网格层上下各多出一格用来平移，裁在地面里 */
   -webkit-mask-image: linear-gradient(180deg, transparent 2%, #000 42%);
   mask-image: linear-gradient(180deg, transparent 2%, #000 42%);
 }
 
+/* 网格流动：动 transform（合成器线程）而不是 background-position（每帧重绘整块 3D 地面）；
+   网格层往上多出一格（72px），平移一格正好无缝循环 */
 .floor-grid {
   position: absolute;
-  inset: 0;
+  inset: -72px 0 0;
+  will-change: transform;
   background-image:
     linear-gradient(to right, var(--accent-a18, rgba(90, 220, 255, 0.16)) 1px, transparent 1px),
     linear-gradient(to top, var(--accent-a18, rgba(90, 220, 255, 0.16)) 1px, transparent 1px);
@@ -118,11 +122,8 @@
 }
 
 @keyframes floor-flow {
-  from {
-    background-position: 0 0, 0 0;
-  }
   to {
-    background-position: 0 72px, 0 72px;
+    transform: translateY(72px);
   }
 }
 

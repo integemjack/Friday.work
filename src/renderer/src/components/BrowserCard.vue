@@ -212,17 +212,26 @@ async function handOverDone(): Promise<void> {
 }
 
 let observer: ResizeObserver | null = null
+/** 尺寸上报防抖：拖着窗口边缩放时 ResizeObserver 每帧都回调，原来每帧发一次 browser.container 给远端 */
+let containerTimer: ReturnType<typeof setTimeout> | undefined
+let lastContainer = ''
+
+function reportContainer(): void {
+  if (!store.currentMachine || !watchedTab.value) return
+  const width = Math.round(canvas.value?.clientWidth || 1280)
+  const height = Math.round(canvas.value?.clientHeight || 800)
+  const key = `${watchedTab.value}:${width}x${height}`
+  if (key === lastContainer) return
+  lastContainer = key
+  void rpc(store.currentMachine, 'browser.container', { tab: watchedTab.value, width, height }).catch(() => {})
+}
 
 onMounted(() => {
   if (tab.value) void watchTab(tab.value.id)
   if (canvas.value) {
     observer = new ResizeObserver(() => {
-      if (!store.currentMachine || !watchedTab.value) return
-      void rpc(store.currentMachine, 'browser.container', {
-        tab: watchedTab.value,
-        width: Math.round(canvas.value?.clientWidth || 1280),
-        height: Math.round(canvas.value?.clientHeight || 800)
-      }).catch(() => {})
+      clearTimeout(containerTimer)
+      containerTimer = setTimeout(reportContainer, 150)
     })
     observer.observe(canvas.value)
   }
@@ -230,6 +239,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   observer?.disconnect()
+  clearTimeout(containerTimer)
   clearTimeout(frameRetryTimer)
   if (store.currentMachine && watchedTab.value) {
     void rpc(store.currentMachine, 'browser.unwatch', { tab: watchedTab.value }).catch(() => {})

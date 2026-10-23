@@ -588,13 +588,18 @@ export const useAppStore = defineStore('app', {
       const offset = (this.cascade++ % 7) * 28
       const w = Math.min(size.w, Math.max(size.minW, desktopWidth - 60))
       const h = Math.min(size.h, Math.max(size.minH, desktopHeight - 40))
+      // 默认落在中间主区（左栏 248 + 间距、右栏 352 + 间距之间）居中，再按开窗次数错开；
+      // 原来固定从 x=96 起，新窗口总是压在左侧会话列表上
+      const mainLeft = 264
+      const mainRight = desktopWidth - 368
+      const centeredX = mainRight - mainLeft >= w ? mainLeft + (mainRight - mainLeft - w) / 2 : (desktopWidth - w) / 2
       const id = `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
       const item: DesktopWindow = {
         id,
         kind,
         title: options.title ?? WINDOW_TITLE[kind].title,
         icon: WINDOW_TITLE[kind].icon,
-        x: Math.max(8, Math.min(96 + offset, Math.max(8, desktopWidth - w - 8))),
+        x: Math.round(Math.max(8, Math.min(centeredX + offset, Math.max(8, desktopWidth - w - 8)))),
         y: Math.max(8, Math.min(36 + offset, Math.max(8, desktopHeight - h - 8))),
         w,
         h,
