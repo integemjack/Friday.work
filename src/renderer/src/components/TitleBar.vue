@@ -65,6 +65,7 @@ const launchers: Array<{ kind: WindowKind; label: string }> = [
   { kind: 'browser', label: '浏览器' },
   { kind: 'files', label: '文件' },
   { kind: 'agents', label: '子 Agent' },
+  { kind: 'devices', label: '设备（这台电脑上能给远端用的串口、摄像头、手机）' },
   { kind: 'settings', label: '设置' }
 ]
 
@@ -101,7 +102,7 @@ const bridge = window.fridayBridge
         class="launch-btn"
         :class="{ open: kindOpen(entry.kind) }"
         :title="entry.label"
-        :disabled="entry.kind !== 'settings' && !store.connected"
+        :disabled="entry.kind !== 'settings' && entry.kind !== 'devices' && !store.connected"
         @click="launch(entry.kind)"
       >
         <svg v-if="entry.kind === 'terminals'" class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -119,6 +120,11 @@ const bridge = window.fridayBridge
         <svg v-else-if="entry.kind === 'agents'" class="ico" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
           <path d="M7 4.8 9.2 7 7 9.2 4.8 7Z" fill="currentColor" />
+        </svg>
+        <svg v-else-if="entry.kind === 'devices'" class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M5.6 1.8v3M10.4 1.8v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          <path d="M3.6 4.8h8.8v2.4a4.4 4.4 0 0 1-8.8 0z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+          <path d="M8 11.6v2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
         </svg>
         <svg v-else class="ico" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />

@@ -14,6 +14,9 @@ import { parseTarget, targetToText, targetDisplayName } from './session/TargetPa
 import type { WorkPortMessage } from './work/WorkTransport.js'
 import { SchatService } from './schat/SchatService.js'
 import { Uploads } from './media/Uploads.js'
+import { listPhones } from './device/Phones.js'
+import { Tunnels } from './device/Tunnels.js'
+import type { TunnelPortMessage } from '../shared/api.js'
 
 /** 剥掉 UTF-8 BOM（Windows 记事本/PowerShell 写的文件常带） */
 function stripBOM(text: string): string {
@@ -54,6 +57,8 @@ export class ProtocolHost {
   private readonly remotesFile: string
 
   private readonly schat: SchatService
+  /** 客户端设备的 TCP 隧道（socket 在这里，DataChannel 在渲染进程） */
+  private readonly tunnels = new Tunnels((message) => this.port?.postMessage(message))
   /** 转给渲染进程、还没回的 device.* 请求 */
   private readonly pendingDevice = new Map<number, PendingDevice>()
   private nextDeviceRid = 1
@@ -93,6 +98,7 @@ export class ProtocolHost {
       this.listeningPort = null
       // 换了端口 = 窗口重载：旧页面里在处理的设备请求没人回了
       this.failPendingDevice(() => true, '客户端界面重载了')
+      this.tunnels.closeAll()
     }
     this.port = newPort
     this.listen()
@@ -114,6 +120,10 @@ export class ProtocolHost {
       }
       if (data && typeof data === 'object' && typeof data.type === 'string' && data.type.startsWith('device.')) {
         this.handleDevicePortMessage(data as DevicePortMessage)
+        return
+      }
+      if (data && typeof data === 'object' && typeof data.type === 'string' && data.type.startsWith('tunnel.')) {
+        this.tunnels.handle(data as TunnelPortMessage)
         return
       }
       void this.handleMessage(event.data as HostEnvelope)
@@ -377,6 +387,13 @@ export class ProtocolHost {
 
       case 'schat.call.ice':
         return { iceServers: await this.schat.iceServers() }
+
+      case 'device.phones':
+        return { phones: await listPhones() }
+
+      case 'device.tunnel.open':
+        await this.tunnels.open(request.id, request.target)
+        return {}
 
       default:
         throw new Error('不认识的请求')

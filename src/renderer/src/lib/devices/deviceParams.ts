@@ -140,3 +140,99 @@ export function parseSnapshot(params: unknown): { deviceId?: string; options: Sn
     }
   }
 }
+
+/** 服务端给的进度令牌（devices 能力的 job id）：进度通知里带回去 */
+export function progressToken(params: unknown): string | undefined {
+  const token = record(params).progressToken
+  return typeof token === 'string' && token.length <= 64 ? token : undefined
+}
+
+export type TcpOpenParams =
+  | { kind: 'tcp'; host: string; port: number }
+  | { kind: 'adb'; deviceId: string }
+  | { kind: 'usbmux' }
+
+/** device.tcp.open：{host, port} | {service: 'adb', deviceId: 'android:…'} | {service: 'usbmux'} */
+export function parseTcpOpen(params: unknown): TcpOpenParams {
+  const p = record(params)
+  if (p.service === 'adb') return { kind: 'adb', deviceId: requireDeviceId(params, 'android:') }
+  if (p.service === 'usbmux') return { kind: 'usbmux' }
+  if (p.service !== undefined) throw invalid('service 只能是 adb / usbmux')
+  const host = p.host
+  if (typeof host !== 'string' || host.length === 0 || host.length > 253 || /[\s/]/.test(host)) throw invalid('host 要是地址或主机名')
+  return { kind: 'tcp', host, port: integer(p.port, 0, 1, 65535, 'port') }
+}
+
+export interface OtherFlashParams {
+  deviceId: string
+  method: 'uf2' | 'stk500' | 'stm32'
+  /** 要烧的字节（hex 已经展开） */
+  data: Uint8Array
+  address: number
+  baudRate: number
+  pageSize: number
+  reset: 'none' | 'dtr-rts'
+}
+
+/** device.flash：UF2 拷盘 / Arduino STK500 / STM32 串口引导（ESP 走 device.esp.flash） */
+export function parseOtherFlash(params: unknown, parseHex: (text: string) => { base: number; data: Uint8Array }): OtherFlashParams {
+  const p = record(params)
+  const method = pick(p.method, ['uf2', 'stk500', 'stm32'] as const, 'uf2', 'method')
+  const deviceId = requireDeviceId(params, method === 'uf2' ? 'uf2:' : 'serial:')
+  if (typeof p.data !== 'string' || p.data.length === 0) throw invalid('data 要是 base64')
+  let data: Uint8Array
+  try {
+    data = base64ToBytes(p.data)
+  } catch {
+    throw invalid('data 不是合法的 base64')
+  }
+  const format = pick(p.format, ['bin', 'hex'] as const, 'bin', 'format')
+  let address = method === 'stm32' ? 0x08000000 : 0
+  if (format === 'hex') {
+    if (method === 'uf2') throw invalid('uf2 要 .uf2 文件，不是 hex')
+    const image = parseHex(new TextDecoder().decode(data))
+    data = image.data
+    address = image.base
+  }
+  if (p.address !== undefined && p.address !== null) address = parseAddress(p.address)
+  return {
+    deviceId,
+    method,
+    data,
+    address,
+    baudRate: integer(p.baudRate, method === 'stm32' ? 57600 : 115200, 1200, 1_000_000, 'baudRate'),
+    pageSize: integer(p.pageSize, 128, 16, 1024, 'pageSize'),
+    reset: pick(p.reset, ['none', 'dtr-rts'] as const, 'none', 'reset')
+  }
+}
+
+export interface ToolRunParams {
+  tool: string
+  args: string[]
+  files: Array<{ name: string; data: ArrayBuffer }>
+  background: boolean
+  timeoutMs: number
+}
+
+/** device.tool.run：白名单在主进程里核，这里只管形状 */
+export function parseToolRun(params: unknown): ToolRunParams {
+  const p = record(params)
+  if (typeof p.tool !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(p.tool)) throw invalid('tool 要是程序名（如 avrdude、openocd）')
+  const args = p.args === undefined ? [] : p.args
+  if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string') || args.length > 200) throw invalid('args 要是字符串数组')
+  const files = (p.files === undefined ? [] : p.files) as unknown
+  if (!Array.isArray(files) || files.length > 32) throw invalid('files 要是 [{name, data}]')
+  return {
+    tool: p.tool,
+    args: args as string[],
+    files: files.map((entry, index) => {
+      const file = record(entry)
+      if (typeof file.name !== 'string' || file.name.length === 0) throw invalid(`files[${index}].name 不对`)
+      if (typeof file.data !== 'string') throw invalid(`files[${index}].data 要是 base64`)
+      const bytes = base64ToBytes(file.data)
+      return { name: file.name, data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer }
+    }),
+    background: p.background === true,
+    timeoutMs: integer(p.timeoutMs, 300_000, 1000, 3_600_000, 'timeoutMs')
+  }
+}

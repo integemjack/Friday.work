@@ -20,7 +20,7 @@ onBeforeUnmount(() => window.clearInterval(ticker))
 const prompts = computed(() => deviceUi.prompts)
 const activity = computed(() => deviceUi.activity)
 
-const KIND_LABEL = { serial: '串口', flash: '烧录', info: '读芯片', camera: '摄像头' } as const
+const KIND_LABEL = { serial: '串口', flash: '烧录', info: '读芯片', camera: '摄像头', tunnel: '连接', tool: '工具' } as const
 
 function secondsLeft(expiresAt: number): number {
   return Math.max(0, Math.ceil((expiresAt - now.value) / 1000))
@@ -37,7 +37,7 @@ function secondsLeft(expiresAt: number): number {
       <div class="action">{{ prompt.action }}</div>
       <div class="actions">
         <button class="btn strong" @click="deviceBroker.answerPrompt(prompt.id, 'once')">允许这次</button>
-        <button class="btn" @click="deviceBroker.answerPrompt(prompt.id, 'always')">始终允许</button>
+        <button v-if="prompt.allowAlways" class="btn" @click="deviceBroker.answerPrompt(prompt.id, 'always')">始终允许</button>
         <button class="btn" @click="deviceBroker.answerPrompt(prompt.id, 'deny')">拒绝（{{ secondsLeft(prompt.expiresAt) }}）</button>
       </div>
     </div>
@@ -49,7 +49,9 @@ function secondsLeft(expiresAt: number): number {
         <span class="detail">{{ item.detail }}</span>
       </span>
       <span v-if="item.progress !== undefined" class="pct">{{ Math.round(item.progress * 100) }}%</span>
-      <button v-if="item.kind === 'serial'" class="btn" @click="deviceBroker.stopActivity(item.key)">断开</button>
+      <button v-if="item.kind === 'serial' || item.kind === 'tunnel' || (item.kind === 'tool' && item.detail === '后台运行')" class="btn" @click="deviceBroker.stopActivity(item.key)">
+        {{ item.kind === 'tool' ? '停止' : '断开' }}
+      </button>
       <div v-if="item.progress !== undefined" class="progress">
         <div class="bar" :style="{ width: `${Math.round(item.progress * 100)}%` }" />
       </div>

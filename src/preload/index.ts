@@ -21,6 +21,24 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   /** 客户端设备：最近一轮 navigator.serial.getPorts() 里各串口的 COM 名（主进程从设备许可回调里记的） */
   serialPortNames: (): Promise<Array<{ portName: string; displayName?: string; vendorId?: number; productId?: number }>> =>
     ipcRenderer.invoke('serial:port-names'),
+  /** 客户端设备：UF2 盘（按住 BOOTSEL 插上的 Pico 等）、往里写 .uf2 */
+  uf2Drives: (): Promise<Array<{ id: string; root: string; label: string; model: string; boardId: string }>> => ipcRenderer.invoke('uf2:list'),
+  uf2Write: (root: string, bytes: Uint8Array): Promise<{ bytes: number; blocks: number }> => ipcRenderer.invoke('uf2:write', root, bytes),
+  /** 客户端设备：跑白名单里的烧录 / 调试工具（渲染进程已经问过人） */
+  toolRun: (request: {
+    tool: string
+    args: string[]
+    files: Array<{ name: string; data: ArrayBuffer }>
+    background: boolean
+    timeoutMs: number
+  }): Promise<{ exitCode?: number; output?: string; elapsedMs?: number; command: string; runId?: string }> =>
+    ipcRenderer.invoke('tool:run', request),
+  toolStop: (runId: string): Promise<boolean> => ipcRenderer.invoke('tool:stop', runId),
+  onToolExited: (listener: (event: { runId: string; exitCode: number; output: string }) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { runId: string; exitCode: number; output: string }): void => listener(payload)
+    ipcRenderer.on('tool:exited', handler)
+    return () => ipcRenderer.removeListener('tool:exited', handler)
+  },
   pickAttachments: (): Promise<PickedFile[]> => ipcRenderer.invoke('dialog:pick-attachments'),
   /** 拖放进来的 File：在 preload 里换出本机路径，主进程登记白名单后返回句柄 */
   registerDrop: (file: File): Promise<PickedFile | null> => {

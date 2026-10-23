@@ -18,6 +18,7 @@ import FilesCard from './components/FilesCard.vue'
 import BrowserCard from './components/BrowserCard.vue'
 import AgentsCard from './components/AgentsCard.vue'
 import SettingsWindow from './components/SettingsWindow.vue'
+import DevicesWindow from './components/DevicesWindow.vue'
 import LoginView from './components/LoginView.vue'
 import AskOverlay from './components/AskOverlay.vue'
 import CallWidget from './components/CallWidget.vue'
@@ -60,6 +61,7 @@ const offWork = host.onWork((message) => {
 // 串口会话的专用 DataChannel 开在上面这条工作连接上
 deviceBroker.attach(workHub, (machineID) => store.machines.find((machine) => machine.id === machineID)?.name ?? '远端机器')
 const offDevice = host.onDevice((message) => deviceBroker.handle(message))
+const offTunnel = host.onTunnel((message) => deviceBroker.tunnelMessage(message))
 
 // 贾维斯界面开着才挂桌面 HUD（雷达/时钟/连接状态）和深空层（星野/流星）
 const jarvis = computed(() => uiTheme.value === 'jarvis')
@@ -123,6 +125,7 @@ onBeforeUnmount(() => {
   store.stopCastTicker()
   offWork()
   offDevice()
+  offTunnel()
   workHub.disposeAll()
 })
 
@@ -143,7 +146,8 @@ const componentFor: Record<WindowKind, unknown> = {
   files: FilesCard,
   browser: BrowserCard,
   agents: AgentsCard,
-  settings: SettingsWindow
+  settings: SettingsWindow,
+  devices: DevicesWindow
 }
 
 const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = {
@@ -151,7 +155,8 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
   files: { minWidth: 480, minHeight: 320 },
   browser: { minWidth: 420, minHeight: 320 },
   agents: { minWidth: 360, minHeight: 240 },
-  settings: { minWidth: 420, minHeight: 320 }
+  settings: { minWidth: 420, minHeight: 320 },
+  devices: { minWidth: 380, minHeight: 300 }
 }
 
 // 中间桌面底部的输入台：提交作用在当前选中会话上（没选中时默认和助手开一段新的，

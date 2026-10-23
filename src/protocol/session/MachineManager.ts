@@ -24,7 +24,7 @@ import { WorkSignaling, type WorkSignalingHost, type WorkSignalEvent } from '../
 import { WorkTransport, type WorkPortMessage } from '../work/WorkTransport.js'
 
 /** hello 里声明接得住的 device.* 能力（方案-客户端设备 §2） */
-const CLIENT_DEVICE_KINDS = ['serial', 'esp.flash', 'camera']
+const CLIENT_DEVICE_KINDS = ['serial', 'esp.flash', 'camera', 'tcp', 'android', 'ios', 'flash.uf2', 'flash.stk500', 'flash.stm32', 'tool']
 
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000]
 
