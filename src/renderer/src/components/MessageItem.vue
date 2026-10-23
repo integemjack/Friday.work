@@ -139,8 +139,25 @@ function md(blockID: string, caseName: string): string {
   color: var(--fail);
 }
 
+/* 通知（「对话较长，已把较早 N 轮…」「被打断」等）单独起一行、和名字左对齐：
+   挤在头像/名字那一行里时，窄栏会被压成三四行竖条 */
+.meta {
+  flex-wrap: wrap;
+}
+
 .notice {
+  order: 10;
+  flex-basis: 100%;
+  padding-left: 23px; /* 头像 17 + 间距 6：和名字对齐 */
+  font-size: 11.5px;
+  line-height: 1.5;
   color: var(--text-2);
+}
+
+.message.user .notice {
+  padding-left: 0;
+  padding-right: 23px;
+  text-align: right;
 }
 
 .block {

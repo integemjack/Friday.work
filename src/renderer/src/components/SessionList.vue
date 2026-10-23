@@ -374,4 +374,12 @@ onMounted(() => {
   font-size: 12px;
   text-align: center;
 }
+
+/* 贾维斯：表头标题后拉一道渐隐发丝线（HUD 报文头，和消息头的分隔线同一语言） */
+[data-theme='jarvis'] .head .spacer {
+  align-self: center;
+  height: 1px;
+  margin: 0 4px;
+  background: linear-gradient(90deg, var(--accent-a35), transparent);
+}
 </style>

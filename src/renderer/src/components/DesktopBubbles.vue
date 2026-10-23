@@ -27,10 +27,16 @@ const elOf = new Map<string, HTMLElement>()
 /** 用户滚轮上翻过的气泡：流式跟随滚动要让路（别把正在看旧内容的人拽回底部）；
  *  滚回底部附近时清除标记，恢复跟随 */
 const scrolledUp = new Map<string, true>()
+/** 已挂过滚轮监听的元素：函数 ref 每次重渲染（流式每续一片）都会再调一遍，
+ *  不去重的话同一个气泡上会叠出成百上千个监听 */
+const wheelBound = new WeakSet<HTMLElement>()
 function setEl(id: string, el: unknown) {
   if (el instanceof HTMLElement) {
     elOf.set(id, el)
-    el.addEventListener('wheel', () => scrolledUp.set(id, true), { passive: true })
+    if (!wheelBound.has(el)) {
+      wheelBound.add(el)
+      el.addEventListener('wheel', () => scrolledUp.set(id, true), { passive: true })
+    }
   } else elOf.delete(id)
 }
 

@@ -10,10 +10,13 @@ import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
 import { usageForEntry, usageKey, canQueryUsage, usageTip, type UsageLine, type UsageMeter } from '../lib/serviceUsage.js'
 
-const emit = defineEmits<{ submit: [text: string, attachments: Array<{ path: string; name: string }>] }>()
-
 const store = useAppStore()
-const props = defineProps<{ conversationId?: string }>()
+// 提交走 prop 回调（@submit 绑定到 onSubmit）而不是 emit：emit 拿不到结果，发送失败时
+// 文本和附件已经清掉了——消息直接丢、错误还成了未处理的 rejection。现在等它返回，成功才清空
+const props = defineProps<{
+  conversationId?: string
+  onSubmit?: (text: string, attachments: Array<{ path: string; name: string }>) => Promise<void> | void
+}>()
 const text = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const focused = ref(false)
@@ -422,12 +425,12 @@ async function send() {
       const path = await store.uploadFile(attachment.handle)
       uploaded.push({ path, name: attachment.name })
     }
-    emit('submit', value, uploaded)
+    await props.onSubmit?.(value, uploaded)
     text.value = ''
     attachments.value = []
     await nextTick(resize)
   } catch (error) {
-    uploadError.value = error instanceof Error ? error.message : String(error)
+    uploadError.value = `发送失败：${error instanceof Error ? error.message : String(error)}`
   } finally {
     busy.value = false
   }
@@ -975,7 +978,7 @@ onBeforeUnmount(() => {
           v-model="text"
           rows="1"
           :placeholder="placeholder"
-          @input="resize"
+          @input="resize(); uploadError = ''"
           @keydown="onKeydown"
           @focus="focused = true"
           @blur="focused = false"
@@ -1456,6 +1459,7 @@ textarea {
   line-height: 1.55;
   min-height: 36px;
   max-height: 200px;
+  overflow-x: hidden; /* 不折行的占位提示会撑出横向滚动条 */
   /* 占位提示（Enter/Shift+Enter）比输入区宽时超出部分向右渐隐，不硬切（照会话名行的做法）；
      渐隐带锚定在文字区右缘（border-box 右移 44px padding，否则渐变全落在空白 padding 里盖不住切点），
      最右 36px 恢复不透明，多行滚动时滚动条不隐身；正文长到滚动时右缘同样淡出 */
@@ -1463,8 +1467,10 @@ textarea {
   mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 72px), transparent calc(100% - 44px), #000 calc(100% - 36px), #000 100%);
 }
 
+/* 占位提示不折行（窄窗口下折成两行会被单行高度裁掉半截），超出部分由上面的 mask 渐隐 */
 textarea::placeholder {
   color: var(--text-3);
+  white-space: nowrap;
 }
 
 /* 输入区：文本域 + 左边「开新会话 / 和助手说」按钮组；按钮组、文本行、浮在右上的语音键垂直居中对齐 */

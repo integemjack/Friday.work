@@ -65,45 +65,12 @@
   }
 }
 
-/* MARK: 贾维斯界面（设置页「界面 › 贾维斯」开关；<html data-theme="jarvis"> 时生效）
-   深空黑底 + 电光青发光，照钢铁侠 J.A.R.V.I.S. 的全息 HUD 风。
-   specificity 是 0,2,0，压过上面浅/深两套 :root（0,1,0），不管系统偏好固定走这套。 */
-:root[data-theme='jarvis'] {
-  --bg: #060b14; /* = shared/theme-tokens.ts 的 THEME_BG.jarvis（窗口底色单源锚点） */
-  /* 面板半透明：桌面上的内容（窗口/挂件/工具栏）和全息网格背景融为一体，
-     配合各容器的 backdrop blur 成磨砂全息玻璃；文本对比靠深底色保住 */
-  --panel: rgba(9, 21, 38, 0.45);
-  --panel-2: rgba(13, 30, 52, 0.5);
-  --border: rgba(34, 211, 238, 0.22);
-  --text: #d7f2ff;
-  --text-2: #82b9d6;
-  --text-3: #4d7d99;
-  --accent: #22d3ee;
-  --accent-foreground: #000000;
-  --accent-bright: #67e8f9; /* 比 accent 亮一档的青（HUD 扫描线/内环） */
-  --accent-brighter: #a5f3fc; /* 最亮档（HUD 核心辉光/目标点） */
-  --accent-weak: rgba(34, 211, 238, 0.12);
-  --ok: #2dd4a7;
-  --run: #38bdf8;
-  --warn: #fbbf24;
-  --fail: #fb5f7d;
-  --code-bg: #0a1a2e;
-  --radius: 10px;
-
-  --line: var(--border);
-  --fg: var(--text);
-  --muted: var(--text-2);
-  --hover: rgba(34, 211, 238, 0.08);
-  --selected: rgba(34, 211, 238, 0.14);
-  --chip: rgba(34, 211, 238, 0.12);
-
-  /* HUD 文案（状态行、时间戳、提示）用的等宽字体 */
-  --font-hud: 'Cascadia Code', Consolas, monospace;
-
-  /* ---- 透明度梯度（color-mix 从基色派生，改基色自动跟随）----
-     命名：<基色令牌>-a<透明度×100>。供 [data-theme='jarvis'] 下的结构装饰层
-     （styles/jarvis.css 与各组件 scoped 里的贾维斯段）引用；
-     浅/深主题不定义这些——它们没有这层装饰，效果走 base.css 的通用变量。 */
+/* MARK: 主题无关的派生令牌（所有主题都有）
+   透明度梯度用 color-mix 从基色派生，改基色自动跟随；命名 <基色令牌>-a<透明度×100>。
+   原来只定义在贾维斯段里，可会话列表、桌面气泡/操作卡、媒体叠、灯箱、提问浮层、
+   跟随系统主题专属的 3D 场景（CenterScene）都在用——跟随系统时这些全是未定义（选中态没底色、
+   3D 场景整个画不出来）。放到 :root 上，哪套主题都按自己的 --accent 派生。 */
+:root {
   --accent-a4: color-mix(in srgb, var(--accent) 4%, transparent);
   --accent-a4-5: color-mix(in srgb, var(--accent) 4.5%, transparent);
   --accent-a5: color-mix(in srgb, var(--accent) 5%, transparent);
@@ -165,6 +132,51 @@
   --fail-a85: color-mix(in srgb, var(--fail) 85%, transparent);
   --text-3-a70: color-mix(in srgb, var(--text-3) 70%, transparent);
   --text-3-a80: color-mix(in srgb, var(--text-3) 80%, transparent);
+
+  /* 更亮两档的强调色（贾维斯段另有手调值覆盖） */
+  --accent-bright: color-mix(in srgb, var(--accent) 70%, #fff);
+  --accent-brighter: color-mix(in srgb, var(--accent) 45%, #fff);
+  /* 正文字体（base.css body 引用）；HUD 文案字体跟随系统时就是正文字体（贾维斯段覆盖成等宽） */
+  --font-body: 'MiSans', 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
+  --font-hud: var(--font-body);
+  /* 桌面投层气泡底（贾维斯段覆盖成深色全息玻璃） */
+  --panel-card-deep-a82: color-mix(in srgb, var(--bg) 86%, transparent);
+}
+
+/* MARK: 贾维斯界面（设置页「界面 › 贾维斯」开关；<html data-theme="jarvis"> 时生效）
+   深空黑底 + 电光青发光，照钢铁侠 J.A.R.V.I.S. 的全息 HUD 风。
+   specificity 是 0,2,0，压过上面浅/深两套 :root（0,1,0），不管系统偏好固定走这套。 */
+:root[data-theme='jarvis'] {
+  --bg: #060b14; /* = shared/theme-tokens.ts 的 THEME_BG.jarvis（窗口底色单源锚点） */
+  /* 面板半透明：桌面上的内容（窗口/挂件/工具栏）和全息网格背景融为一体，
+     配合各容器的 backdrop blur 成磨砂全息玻璃；文本对比靠深底色保住 */
+  --panel: rgba(9, 21, 38, 0.45);
+  --panel-2: rgba(13, 30, 52, 0.5);
+  --border: rgba(34, 211, 238, 0.22);
+  --text: #d7f2ff;
+  --text-2: #82b9d6;
+  --text-3: #4d7d99;
+  --accent: #22d3ee;
+  --accent-foreground: #000000;
+  --accent-bright: #67e8f9; /* 比 accent 亮一档的青（HUD 扫描线/内环） */
+  --accent-brighter: #a5f3fc; /* 最亮档（HUD 核心辉光/目标点） */
+  --accent-weak: rgba(34, 211, 238, 0.12);
+  --ok: #2dd4a7;
+  --run: #38bdf8;
+  --warn: #fbbf24;
+  --fail: #fb5f7d;
+  --code-bg: #0a1a2e;
+  --radius: 10px;
+
+  --line: var(--border);
+  --fg: var(--text);
+  --muted: var(--text-2);
+  --hover: rgba(34, 211, 238, 0.08);
+  --selected: rgba(34, 211, 238, 0.14);
+  --chip: rgba(34, 211, 238, 0.12);
+
+  /* HUD 文案（状态行、时间戳、提示）用的等宽字体 */
+  --font-hud: 'Cascadia Code', Consolas, monospace;
 
   /* ---- 贾维斯专属面板层次（深色全息玻璃）---- */
   --panel-input: rgba(13, 30, 52, 0.35); /* 输入卡 */

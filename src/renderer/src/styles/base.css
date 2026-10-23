@@ -35,7 +35,7 @@ html {
 }
 
 body {
-  font-family: 'MiSans', 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-body);
   font-size: 14px;
   color: var(--text);
   background: var(--bg);

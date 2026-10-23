@@ -30,7 +30,11 @@ const conversationID = computed(() => store.activeConversationID)
 const detail = computed(() => store.details[conversationID.value] ?? null)
 const summary = computed(() => store.summaries.find((item) => item.id === conversationID.value) ?? null)
 const allMessages = computed(() => detail.value?.messages ?? [])
-const visibleCount = ref(40)
+/** 一次挂多少条（长会话只挂最近的，上滑到顶再往前放一页——DOM 不随会话长度膨胀） */
+const PAGE = 40
+const visibleCount = ref(PAGE)
+/** 还有多少条更早的消息没挂出来 */
+const earlierCount = computed(() => Math.max(0, allMessages.value.length - visibleCount.value))
 const messages = computed(() => {
   const all = allMessages.value
   return all.length <= visibleCount.value ? all : all.slice(all.length - visibleCount.value)
@@ -99,10 +103,25 @@ function onScroll() {
   if (!el) return
   stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   scrolledFromTop.value = el.scrollTop > 2
+  if (el.scrollTop < 60) void loadEarlier()
+}
+
+/** 上滑到顶：再往前挂一页，并把滚动位置补回去（新内容插在上面，读到的那条不跳走）。
+ *  原来窗口固定 40 条、没有任何加载入口，长会话更早的消息根本看不到 */
+let loadingEarlier = false
+async function loadEarlier(): Promise<void> {
+  const el = scrollEl.value
+  if (!el || loadingEarlier || assistantChat.value || earlierCount.value === 0) return
+  loadingEarlier = true
+  const fromBottom = el.scrollHeight - el.scrollTop
+  visibleCount.value += PAGE
+  await nextTick()
+  el.scrollTop = el.scrollHeight - fromBottom
+  loadingEarlier = false
 }
 
 watch(conversationID, () => {
-  visibleCount.value = 40
+  visibleCount.value = PAGE
   stickToBottom.value = true
   void scrollToBottom(true)
 })
@@ -466,6 +485,9 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
     <div class="top-fade" :class="{ on: scrolledFromTop }" aria-hidden="true" />
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
       <div ref="messagesEl" class="messages">
+        <button v-if="!assistantChat && earlierCount > 0" class="earlier" @click="loadEarlier">
+          ↑ 更早的 {{ earlierCount }} 条（上滑或点这里加载）
+        </button>
         <MessageItem v-for="entry in shownMessages" :key="entry.message.id" :message="entry.message" />
 
         <!-- 排队 / 待插入的消息（qt QueuedBubbles）：靠右虚线气泡，随列表滚动，接在消息流末尾（会话模式才有） -->
@@ -768,6 +790,23 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
   justify-content: flex-end;
 }
 
+.earlier {
+  align-self: center;
+  margin: 2px 0 8px;
+  padding: 3px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.earlier:hover {
+  color: var(--accent);
+  border-color: var(--accent-a45);
+}
+
 .hint {
   padding: 10px;
   color: var(--muted);
@@ -851,5 +890,13 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 .queued-resume:hover {
   background: var(--warn);
   color: #fff;
+}
+
+/* 贾维斯：表头标题后拉一道渐隐发丝线（HUD 报文头，和消息头的分隔线同一语言） */
+[data-theme='jarvis'] .head .spacer {
+  align-self: center;
+  height: 1px;
+  margin: 0 4px;
+  background: linear-gradient(90deg, var(--accent-a35), transparent);
 }
 </style>

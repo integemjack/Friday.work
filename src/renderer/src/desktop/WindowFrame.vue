@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 桌面上的一个窗口（用户 2026-10-19 要求：每一样都以窗口形式显示）：
 // 标题栏拖动、右下角/边角缩放、最小化/最大化/关闭、点击置顶。
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 export interface WindowRect {
   x: number
@@ -42,6 +42,25 @@ const dragging = ref<DragMode>(null)
 
 let startPointer = { x: 0, y: 0 }
 let startRect: WindowRect = { x: 0, y: 0, w: 0, h: 0 }
+const rootEl = ref<HTMLElement | null>(null)
+
+/** 窗口至少露在桌面里的部分：横向 120px、纵向整条标题栏——拖出右/下边缘也抓得回来 */
+const KEEP_VISIBLE_X = 120
+const TITLE_H = 34
+
+/** 窗口层（定位父级）的尺寸；拿不到时退回视口 */
+function layerSize(): { w: number; h: number } {
+  const layer = rootEl.value?.offsetParent as HTMLElement | null
+  return { w: layer?.clientWidth || window.innerWidth, h: layer?.clientHeight || window.innerHeight }
+}
+
+function clampPosition(x: number, y: number, w: number): { x: number; y: number } {
+  const layer = layerSize()
+  return {
+    x: Math.min(Math.max(-w + KEEP_VISIBLE_X, x), Math.max(0, layer.w - KEEP_VISIBLE_X)),
+    y: Math.min(Math.max(0, y), Math.max(0, layer.h - TITLE_H))
+  }
+}
 
 const style = computed(() => {
   if (props.maximized) {
@@ -74,12 +93,9 @@ function onMove(event: MouseEvent): void {
   const dx = event.clientX - startPointer.x
   const dy = event.clientY - startPointer.y
   if (mode === 'move') {
-    emit('move', {
-      x: Math.max(-startRect.w + 120, startRect.x + dx),
-      y: Math.max(0, startRect.y + dy),
-      w: startRect.w,
-      h: startRect.h
-    })
+    // 原来只限了左/上：往右/下拖能把整个窗口连标题栏一起拖出桌面，再也抓不回来
+    const next = clampPosition(startRect.x + dx, startRect.y + dy, startRect.w)
+    emit('move', { x: next.x, y: next.y, w: startRect.w, h: startRect.h })
     return
   }
   let { x, y, w, h } = startRect
@@ -104,12 +120,29 @@ function onUp(): void {
   window.removeEventListener('mouseup', onUp)
 }
 
-onBeforeUnmount(onUp)
+// 主窗口缩小后，原来在右/下边的浮动窗口可能整个落到桌面外：缩放时收回来
+let resizeRaf = 0
+function onWindowResize(): void {
+  cancelAnimationFrame(resizeRaf)
+  resizeRaf = requestAnimationFrame(() => {
+    if (props.maximized || props.minimized) return
+    const next = clampPosition(props.rect.x, props.rect.y, props.rect.w)
+    if (next.x !== props.rect.x || next.y !== props.rect.y) emit('move', { ...props.rect, ...next })
+  })
+}
+
+onMounted(() => window.addEventListener('resize', onWindowResize))
+onBeforeUnmount(() => {
+  onUp()
+  cancelAnimationFrame(resizeRaf)
+  window.removeEventListener('resize', onWindowResize)
+})
 </script>
 
 <template>
   <div
     v-show="!minimized"
+    ref="rootEl"
     class="win"
     :class="{ maximized, dragging, 'plain-chrome': plainChrome }"
     :style="style"

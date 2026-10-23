@@ -51,8 +51,11 @@ let accentRgb = ACCENT_FALLBACK_RGB
 const starRgb = '198, 224, 255'
 
 function resetStar(star: Star, first: boolean): void {
+  // 星野整体往下（vy > 0）、往左（vx < 0）漂：从底边出去的星要回到顶边重生。
+  // 原来重生在 height + 8（底边外、还在往下走）→ 下一帧又判出界、永远卡在屏外，
+  // 开着几分钟星星就一颗颗漏光；窗口拉高时卡住的那排星会在旧底边处排成一条线
   star.x = Math.random() * width
-  star.y = first ? Math.random() * height : height + 8
+  star.y = first ? Math.random() * height : -8
   star.r = 0.5 + Math.random() * 1.3
   star.base = 0.25 + Math.random() * 0.6
   star.phase = Math.random() * Math.PI * 2
@@ -85,8 +88,17 @@ function resize(): void {
   const parent = canvas?.parentElement
   if (!canvas || !parent) return
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  const prevW = width
+  const prevH = height
   width = parent.clientWidth
   height = parent.clientHeight
+  // 窗口缩放：已有的星按比例搬到新画布上（不然拉大窗口后新露出来的区域要等很久才有星）
+  if (prevW > 0 && prevH > 0 && (prevW !== width || prevH !== height)) {
+    for (const star of stars) {
+      star.x *= width / prevW
+      star.y *= height / prevH
+    }
+  }
   canvas.width = Math.round(width * dpr)
   canvas.height = Math.round(height * dpr)
   ctx = canvas.getContext('2d')
@@ -128,10 +140,8 @@ function step(now: number): void {
   for (const star of stars) {
     star.x += star.vx * dt
     star.y += star.vy * dt
-    if (star.y > height + 10 || star.x < -10) {
-      if (star.y > height + 10) resetStar(star, false)
-      else star.x = width + 8
-    }
+    if (star.y > height + 10) resetStar(star, false)
+    else if (star.x < -10) star.x = width + 8
     const alpha = star.base * (0.72 + 0.28 * Math.sin(t * star.twinkle + star.phase))
     drawStar(ctx, star, alpha)
   }

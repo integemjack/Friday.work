@@ -150,6 +150,8 @@ const sizeLimits: Record<WindowKind, { minWidth: number; minHeight: number }> = 
 // 「开新会话」键显式开）；「和助手说」开着时不走会话，直接发给所连机器的助手（assistant.say）
 const conversationID = computed(() => store.activeConversationID)
 async function onComposerSubmit(text: string, attachments: Array<{ path: string; name: string }>) {
+  // 没连机器时 store 的提交是静默 return：在这里抛出来，输入台保留原文并提示
+  if (!store.currentMachine) throw new Error('还没连上机器')
   if (store.assistantChat) {
     await store.assistantSay(text, attachments.map((attachment) => attachment.path))
     return
@@ -292,6 +294,8 @@ const calling = computed(() => store.calling)
 
 /* ---- 左栏 ---- */
 .side {
+  /* 定位：给贾维斯导轨伪元素作参照；顺带让两栏绘制在深空层（z-index 0）之上，星点不再压在正文上 */
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -423,6 +427,32 @@ const calling = computed(() => store.calling)
   text-transform: uppercase;
 }
 
+/* 贾维斯：两侧栏内缘的 HUD 导轨（栏间 8px 缝正中一道竖向发丝线 + 稀疏刻度，上下渐隐），
+   把中间舞台框出来；两栏本身仍然无卡片壳、融在桌面上 */
+[data-theme='jarvis'] .side-left::after,
+[data-theme='jarvis'] .side-right::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--accent-a30), var(--accent-a30)) center / 1px 100% no-repeat,
+    repeating-linear-gradient(180deg, var(--accent-a40) 0 1px, transparent 1px 32px);
+  -webkit-mask-image: linear-gradient(180deg, transparent 2%, #000 24%, #000 76%, transparent 98%);
+  mask-image: linear-gradient(180deg, transparent 2%, #000 24%, #000 76%, transparent 98%);
+  opacity: 0.6;
+}
+
+[data-theme='jarvis'] .side-left::after {
+  right: -7.5px;
+}
+
+[data-theme='jarvis'] .side-right::before {
+  left: -7.5px;
+}
+
 /* 贾维斯：桌面四角的 HUD 括号（压在窗口层下面，纯定位装饰） */
 [data-theme='jarvis'] .desktop::before {
   content: '';
@@ -442,8 +472,9 @@ const calling = computed(() => store.calling)
   opacity: 0.4;
 }
 
-/* 贾维斯：一条扫描线周期性扫过桌面（在窗口层下面，不干扰阅读） */
-[data-theme='jarvis'] .desktop::after {
+/* 贾维斯：一条扫描线周期性扫过中间主区（只扫 HUD 舞台：扫过两侧会话列表/聊天栏时会把正文刷亮一道，
+   读着晃眼，而且每帧都逼两栏里的磨砂层重算模糊） */
+[data-theme='jarvis'] .main-area::after {
   content: '';
   position: absolute;
   left: 0;
@@ -456,7 +487,11 @@ const calling = computed(() => store.calling)
     var(--accent-a7) 82%,
     var(--accent-a20)
   );
+  /* 两端渐隐：光带从舞台中间亮起、到两侧栏边缘前收掉，不切出硬边 */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
   animation: jarvis-scan 8s linear infinite;
+  will-change: transform;
   pointer-events: none;
 }
 

@@ -632,28 +632,6 @@ onBeforeUnmount(() => {
   gap: clamp(10px, 3cqw, 32px);
 }
 
-/* 主区太窄（窗口拉窄 / 小屏）：两侧遥测栏收起，雷达独占宽度；hex 流跟着收窄 */
-@container main (max-width: 600px) {
-  .jarvis-hud {
-    --radar-size: clamp(140px, min(470px, 100cqw - 40px, 100cqh - 282px), 470px);
-  }
-
-  .telemetry {
-    display: none;
-  }
-}
-
-/* 主区太矮：只留雷达和状态行，标题与 hex 流收起 */
-@container main (max-height: 520px) {
-  .hud-top,
-  .hex-stream {
-    display: none;
-  }
-
-  .jarvis-hud {
-    --radar-size: clamp(120px, min(470px, 100cqw - 268px, 100cqh - 230px), 470px);
-  }
-}
 
 /* 雷达方框：各图层绝对定位叠满；整体透明度放在容器上（组透明度，重叠处不会叠亮） */
 .radar {
@@ -865,4 +843,36 @@ onBeforeUnmount(() => {
 
 /* 注：装饰动画不随系统 prefers-reduced-motion 关闭——动效是主题核心体验，
    本机 Windows 关了「动画效果」，跟随 hint 会静默变纯静态（实测 matchMedia 报 reduce）。 */
+
+/* ---- 响应式（放在最后：要压过上面同优先级的 .telemetry 等基础规则）---- */
+/* 主区太窄（窗口拉窄 / 小屏）：两侧遥测栏收起，雷达独占宽度；hex 流跟着收窄 */
+@container main (max-width: 600px) {
+  /* 窄时左下角的媒体叠会和状态行重叠：下边让得更多（让过媒体叠），hex 流收起 */
+  .jarvis-hud {
+    padding-bottom: 196px;
+    --radar-size: clamp(140px, min(470px, 100cqw - 40px, 100cqh - 330px), 470px);
+  }
+
+  .telemetry,
+  .hex-stream {
+    display: none;
+  }
+
+  .hud-data {
+    gap: 12px;
+    letter-spacing: 1px;
+  }
+}
+
+/* 主区太矮：只留雷达和状态行，标题与 hex 流收起 */
+@container main (max-height: 520px) {
+  .hud-top,
+  .hex-stream {
+    display: none;
+  }
+
+  .jarvis-hud {
+    --radar-size: clamp(120px, min(470px, 100cqw - 268px, 100cqh - 230px), 470px);
+  }
+}
 </style>
