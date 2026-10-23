@@ -306,8 +306,8 @@ async function openBrowse(path?: string) {
   }
 }
 
-// 浏览时新建目录（REMOTE.md fs.mkdir）：服务端 features 里有 fsMkdir 才显示；在当前浏览的目录里建一级，建好直接进去
-const canMkdir = computed(() => store.currentMachineInfo?.serverInfo?.features?.includes('fsMkdir') ?? false)
+// 浏览时新建文件夹（v2.72 fs.mkdir：{path, name} → {path}，特性 mkdir；Friday v2.72 起的服务端才有，旧的不显示按钮）
+const canMkdir = computed(() => store.currentMachineInfo?.serverInfo?.features?.includes('mkdir') ?? false)
 const mkdirOpen = ref(false)
 const mkdirName = ref('')
 const mkdirBusy = ref(false)
@@ -325,14 +325,15 @@ async function submitMkdir() {
   const name = mkdirName.value.trim()
   if (!name || mkdirBusy.value || !browsePath.value) return
   if (/[\\/]/.test(name) || name === '.' || name === '..') {
-    mkdirError.value = '目录名里不能带路径分隔符'
+    mkdirError.value = '文件夹名字里不能有 / 或 \\，也不能是 . 或 ..'
     return
   }
   mkdirBusy.value = true
   mkdirError.value = ''
   try {
     const result = (await store.rpc(store.currentMachine, 'fs.mkdir', {
-      path: browsePath.value.replace(/\/+$/, '') + '/' + name
+      path: browsePath.value,
+      name
     })) as FsMkdirResult
     mkdirOpen.value = false
     mkdirName.value = ''
@@ -1123,16 +1124,16 @@ onBeforeUnmount(() => {
               <div class="dir-browse-bar">
                 <button v-if="browseParent" class="dir-up" title="上一级" @click="openBrowse(browseParent)">↑</button>
                 <span class="dir-browse-path" :title="browsePath">{{ browsePath || '主目录' }}</span>
-                <button v-if="canMkdir" class="dir-mkdir" title="在这里新建一个目录" @click="toggleMkdir">＋ 新建目录</button>
+                <button v-if="canMkdir" class="dir-mkdir" title="在这里新建一个文件夹" @click="toggleMkdir">＋ 新建文件夹</button>
                 <button class="dir-back" @click="browsing = false">返回</button>
               </div>
-              <!-- 新建目录（fs.mkdir）：名字只允许一级，Enter 提交，Esc 收起；建好直接进新目录 -->
+              <!-- 新建文件夹（fs.mkdir）：名字只允许一级，Enter 提交，Esc 收起；建好直接进新目录 -->
               <div v-if="mkdirOpen" class="dir-mkdir-row">
                 <input
                   ref="mkdirInput"
                   v-model="mkdirName"
                   class="dir-mkdir-input"
-                  placeholder="目录名"
+                  placeholder="文件夹名"
                   maxlength="80"
                   :disabled="mkdirBusy"
                   @keydown.enter.prevent="submitMkdir"

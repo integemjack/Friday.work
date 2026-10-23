@@ -630,11 +630,10 @@ export interface FsReadResult {
   eof: boolean
 }
 
-/** fs.mkdir（选工作目录时新建目录）：服务端 features 里有 fsMkdir 才有这个方法 */
+/** fs.mkdir（v2.72 选工作目录时新建文件夹）：{path, name} → {path}（建好的路径，客户端接着进去）；
+ *  hello 的 features 里有 mkdir 的服务端才有（旧服务端回「不认识的方法」） */
 export interface FsMkdirResult {
   path: string
-  /** 已经是个目录再建一次时 false */
-  created: boolean
 }
 
 export interface FsChange {
