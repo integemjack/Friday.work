@@ -199,3 +199,18 @@ test('work:<botUserID> 解析与序列化', () => {
   assert.equal(parseTarget('work:0'), null)
   assert.equal(parseTarget('work:-3'), null)
 })
+
+test('work 信令：not_friends / user_rejected 标记 permanent（上层不再自动重拨），其他拒绝不标', () => {
+  for (const [reason, permanent] of [['not_friends', true], ['user_rejected', true], ['error', false], ['busy', false]]) {
+    const { signaling, events } = rig()
+    signaling.dial(100)
+    signaling.onResponse(signaling.currentRequestID(), false, reason)
+    const ended = events.find((event) => event.kind === 'ended')
+    assert.ok(ended, reason)
+    assert.equal(!!ended.permanent, permanent, reason)
+  }
+  const { signaling, events } = rig()
+  signaling.dial(100)
+  signaling.onResponse(signaling.currentRequestID(), false, 'not_friends')
+  assert.match(events[0].reason, /好友/)
+})

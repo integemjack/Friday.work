@@ -54,3 +54,65 @@ test('普通 hangup（没被顶）：照旧退避重拨（用新的 requestId）
   assert.notEqual(dials[1].data.requestId, dials[0].data.requestId)
   connection.disconnect()
 })
+
+test('机器人接受后迟迟建不好通道（ICE 不通 / 接受帧丢了）：看门狗到点报失败并退避重拨，不再永远「正在呼叫」', async () => {
+  const frames = []
+  const stateChanges = []
+  const host = {
+    appVersion: 'test',
+    workConnectTimeoutMs: 200,
+    onStateChange: (connection) => stateChanges.push({ state: connection.state, detail: connection.detail }),
+    onEvent: () => {},
+    workSignalingHost: () => ({ sendCallFrame: (botID, event, data) => frames.push({ botID, event, data }), accountID: () => 42 }),
+    workPortSend: () => {}
+  }
+  const connection = new MachineConnection('m1', '测试机', { kind: 'work', botUserID: 100 }, host)
+  connection.connect()
+  const requestId = frames[0].data.requestId
+  connection.handleWorkEnvelope('p2p_response', { requestId, accepted: true, fromUserId: 100 })
+  assert.ok(stateChanges.some((change) => change.detail?.includes('已接听')), '接受后状态文案往前走')
+  await sleep(350)
+  const failed = stateChanges.find((change) => change.state === 'failed')
+  assert.ok(failed, '到点报失败')
+  assert.ok(failed.detail.includes('WebRTC 通道'), failed.detail)
+  await sleep(1300)
+  assert.equal(frames.filter((frame) => frame.event === 'p2p_request').length, 2, '退避后重拨了')
+  connection.disconnect()
+})
+
+test('通道按时打开：看门狗收掉，不会在握手阶段被误判超时', async () => {
+  const frames = []
+  const stateChanges = []
+  const host = {
+    appVersion: 'test',
+    workConnectTimeoutMs: 200,
+    onStateChange: (connection) => stateChanges.push({ state: connection.state, detail: connection.detail }),
+    onEvent: () => {},
+    workSignalingHost: () => ({ sendCallFrame: (botID, event, data) => frames.push({ botID, event, data }), accountID: () => 42 }),
+    workPortSend: () => {}
+  }
+  const connection = new MachineConnection('m1', '测试机', { kind: 'work', botUserID: 100 }, host)
+  connection.connect()
+  connection.handleWorkEnvelope('p2p_response', { requestId: frames[0].data.requestId, accepted: true, fromUserId: 100 })
+  connection.handleWorkOpen()
+  assert.ok(stateChanges.at(-1).detail.includes('握手'), stateChanges.at(-1).detail)
+  await sleep(350)
+  assert.ok(!stateChanges.some((change) => change.detail?.includes('没建好')), '看门狗没误触发')
+  connection.disconnect()
+})
+
+test('机器人不在好友里（not_friends）：原因写明、停止自动重拨', async () => {
+  const { connection, frames, stateChanges } = rig()
+  const requestId = frames[0].data.requestId
+  connection.handleWorkEnvelope('p2p_response', { requestId, accepted: false, reason: 'not_friends', fromUserId: 100 })
+  const last = stateChanges.at(-1)
+  assert.equal(last.state, 'failed')
+  assert.ok(last.detail.includes('好友'), last.detail)
+  assert.ok(!last.detail.includes('秒后重试'), '没排重拨')
+  await sleep(1300)
+  assert.equal(frames.filter((frame) => frame.event === 'p2p_request').length, 1)
+  // 手动重连照常能拨
+  connection.connect()
+  assert.equal(frames.filter((frame) => frame.event === 'p2p_request').length, 2)
+  connection.disconnect()
+})

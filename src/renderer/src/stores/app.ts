@@ -893,6 +893,9 @@ export const useAppStore = defineStore('app', {
     },
 
     async selectMachine(id: string) {
+      // 点了一台断开 / 失败的机器（包括停了自动重拨的：不是好友、被顶掉）：顺手重连——这是手动重连的入口
+      const picked = this.machines.find((machine) => machine.id === id)
+      if (picked && (picked.state === 'failed' || picked.state === 'disconnected')) void this.connectMachine(id)
       if (this.currentMachine === id) return
       await this.leaveConversation()
       await this.closeAssistantChat()

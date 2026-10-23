@@ -23,7 +23,11 @@ export interface WorkSignalingHost {
 export type WorkSignalEvent =
   | { kind: 'accepted'; requestId: string }
   | { kind: 'signal'; requestId: string; type: string; payload: string }
-  | { kind: 'ended'; requestId: string; reason: string; replaced?: boolean }
+  | { kind: 'ended'; requestId: string; reason: string; replaced?: boolean; permanent?: boolean }
+
+/** 这些拒绝重拨也没用（换不来结果，只会每分钟再「正在呼叫」一次）：上层停止自动重拨，等用户处理后手动重连。
+ *  not_friends = 这个机器人已经不在本账号的 SChat 好友里；user_rejected = 不是主人账号 */
+const PERMANENT_REJECTS = ['not_friends', 'user_rejected']
 
 /** 服务端 hangup 的 reason：同账号另一台设备把这条连接顶掉了
  *  （friday-server ≤ 2.43 的「新拨顶旧」；2.44 起多端并存不再发）。被顶时不能自动重拨——
@@ -95,10 +99,12 @@ export class WorkSignaling {
       const text =
         reason === 'user_rejected'
           ? '机器人拒绝了工作连接（不是主人账号？）'
-          : reason === 'error'
-            ? '机器人那头没有工作服务（装的是 2.38+ 吗？）'
-            : `机器人拒绝了连接（${reason}）`
-      this.finish(text)
+          : reason === 'not_friends'
+            ? '这个机器人已经不在你的 SChat 好友里（被删了或换了账号）：重新加好友后再连'
+            : reason === 'error'
+              ? '机器人那头没有工作服务（装的是 2.38+ 吗？）'
+              : `机器人拒绝了连接（${reason}）`
+      this.finish(text, false, PERMANENT_REJECTS.includes(reason))
     }
   }
 
@@ -144,7 +150,7 @@ export class WorkSignaling {
     this.finish('已断开')
   }
 
-  private finish(reason: string, replaced = false): void {
+  private finish(reason: string, replaced = false, permanent = false): void {
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = null
@@ -152,7 +158,7 @@ export class WorkSignaling {
     if (this.ended) return
     this.ended = true
     const requestId = this.requestId
-    this.onEvent({ kind: 'ended', requestId, reason, replaced })
+    this.onEvent({ kind: 'ended', requestId, reason, replaced, permanent })
   }
 
   dispose(): void {

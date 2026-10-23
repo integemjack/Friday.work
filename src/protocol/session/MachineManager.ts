@@ -35,7 +35,14 @@ export interface MachineConnectionHost {
   workSignalingHost(): WorkSignalingHost | null
   /** work 通道：给渲染进程发消息（MessagePort 数据面） */
   workPortSend(message: WorkPortMessage): void
+  /** 从拨号到 DataChannel 打开最多等多久（默认 45 秒；单测调短） */
+  workConnectTimeoutMs?: number
 }
+
+/** 拨号 → 机器人接受 → offer/answer/ICE → DataChannel 打开，整段的上限。
+ *  原来只有「30 秒内没被接受」这一道超时：接受之后 ICE 一直连不通（NAT 穿透失败）、或者接受那一帧
+ *  在渲染进程重载时丢了，状态就永远停在「正在呼叫机器人（WebRTC）…」不动、也不重拨 */
+const WORK_CONNECT_TIMEOUT_MS = 45_000
 
 export class MachineConnection {
   readonly id: string
@@ -80,6 +87,7 @@ export class MachineConnection {
   private reconnectTimer: NodeJS.Timeout | null = null
   private backoffIndex = 0
   private connecting = false
+  private connectWatchdog: NodeJS.Timeout | null = null
   private readonly subscriptions = new Set<string>()
 
   constructor(id: string, name: string, target: ParsedTarget, private readonly host: MachineConnectionHost) {
@@ -136,6 +144,7 @@ export class MachineConnection {
       this.detail = '正在呼叫机器人（WebRTC）…'
       this.host.onStateChange(this)
       this.workSignaling.dial(this.target.botUserID ?? 0)
+      this.armConnectWatchdog()
     } catch (error) {
       this.connecting = false
       this.state = 'failed'
@@ -191,6 +200,25 @@ export class MachineConnection {
   // MARK: work 通道（渲染进程 ⇆ 协议进程）
 
   private onWorkEvent(event: WorkSignalEvent): void {
+    if (event.kind === 'accepted') {
+      // 状态文案跟着走，不然从拨号到连上一直显示「正在呼叫」，看不出卡在哪一步
+      this.detail = '机器人已接听，正在建立 WebRTC 通道…'
+      this.host.onStateChange(this)
+    }
+    // 自己 teardown 时的挂断回调（workSignaling 已经先置空）：不是对端的事件，忽略——
+    // 不然它会重入 onTransportDown，用「已断开」盖掉真正的失败原因（超时 / 被拒…）
+    if (event.kind === 'ended' && !this.workSignaling) return
+    if (event.kind === 'ended' && event.permanent) {
+      // 重拨也没用的拒绝（不是好友 / 不是主人）：停止自动重拨，原因写明；用户处理后在机器菜单里点它手动重连
+      this.wanted = false
+      this.clearReconnect()
+      this.teardown()
+      this.state = 'failed'
+      this.detail = event.reason
+      this.connecting = false
+      this.host.onStateChange(this)
+      return
+    }
     if (event.kind === 'ended') {
       // 被同一账号的另一台设备顶掉（旧版服务端的「新拨顶旧」）：不重拨——
       // 重拨会把对方顶掉、来回互踢；等服务端升到 2.44+（多端并存）或用户手动重连
@@ -215,8 +243,28 @@ export class MachineConnection {
   handleWorkOpen(): void {
     const transport = this.transport instanceof WorkTransport ? this.transport : null
     if (!transport) return
+    // 通道通了：建通道的看门狗收掉，接下来是 hello（自带 30 秒超时）
+    this.clearConnectWatchdog()
+    this.detail = '通道已建立，正在握手…'
     transport.handleOpen()
     void this.sendHello()
+  }
+
+  private armConnectWatchdog(): void {
+    this.clearConnectWatchdog()
+    const timeout = this.host.workConnectTimeoutMs ?? WORK_CONNECT_TIMEOUT_MS
+    this.connectWatchdog = setTimeout(() => {
+      this.connectWatchdog = null
+      if (this.state === 'ready' || !this.workSignaling) return
+      this.onTransportDown(`${Math.round(timeout / 1000)} 秒没建好 WebRTC 通道（网络 / NAT 穿透不通？）`)
+    }, timeout)
+  }
+
+  private clearConnectWatchdog(): void {
+    if (this.connectWatchdog) {
+      clearTimeout(this.connectWatchdog)
+      this.connectWatchdog = null
+    }
   }
 
   /** 渲染进程：DataChannel 收到一条完整 JSON */
@@ -382,6 +430,7 @@ export class MachineConnection {
   }
 
   private teardown(): void {
+    this.clearConnectWatchdog()
     this.rpc?.failAll(new Error('连接已断开'))
     // 先取快照、先置空再挂断：hangup() 可能同步触发信令回调重入 teardown()，
     // 重入时看到 null 跳过；外层拿着局部变量走完，不会对 null 调 dispose（连接被顶掉时崩过）
