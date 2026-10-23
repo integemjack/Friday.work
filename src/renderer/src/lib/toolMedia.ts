@@ -110,21 +110,24 @@ export function useToolMedia(
     const cap = CAP_BYTES[kind]!
     const parts: Uint8Array[] = []
     let offset = 0
+    let total = 0
     while (true) {
       const result = (await rpc(machine, 'fs.read', { path, offset, length: chunk })) as FsReadResult
       if (token !== loadToken) return
       if (!result || typeof result.data !== 'string') throw new Error('fs.read 回执不对')
       const bytes = b64ToBytes(result.data)
       parts.push(bytes)
-      if (result.size > cap) {
+      total += bytes.length
+      // size 缺失/失真（正在写入的文件等）时靠累计字节数兜底：退出的路只剩 eof，
+      // 不然几 GB 会整个攒进 parts[] 撑爆渲染进程
+      if (result.size > cap || total > cap) {
         state.value = 'skipped'
-        note.value = `文件太大（${(result.size / 1024 / 1024).toFixed(0)} MB），不在卡片里内嵌`
+        note.value = `文件太大（${(Math.max(result.size, total) / 1024 / 1024).toFixed(0)} MB），不在卡片里内嵌`
         return
       }
       offset += bytes.length
       if (result.eof || bytes.length === 0) break
     }
-    const total = parts.reduce((sum, part) => sum + part.length, 0)
     const merged = new Uint8Array(total)
     let at = 0
     for (const part of parts) {

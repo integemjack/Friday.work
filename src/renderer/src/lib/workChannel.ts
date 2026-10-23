@@ -30,6 +30,9 @@ class WorkChannel {
   private pc: RTCPeerConnection | null = null
   private dc: RTCDataChannel | null = null
   private readonly framer = new WorkFramer()
+  /** accept 的代数：await iceServers 期间又来一次 accept（重拨）时，旧的那次作废——
+   *  不然两条并行各建一个 PC，先建的泄漏还照常打洞 */
+  private acceptGen = 0
   requestId = ''
 
   constructor(
@@ -52,7 +55,13 @@ class WorkChannel {
     this.log(`accept req=${requestId}`)
     this.teardownPeer()
     this.requestId = requestId
+    const gen = ++this.acceptGen
     const iceServers = await this.callbacks.iceServers()
+    if (gen !== this.acceptGen) {
+      // 期间又有一次更新的 accept：这次建的 PC 丢弃不登记，直接关掉
+      this.log('accept 过期（有更新的拨号），丢弃')
+      return
+    }
     const pc = new RTCPeerConnection({ iceServers, bundlePolicy: 'max-bundle' })
     this.pc = pc
     // 数据通道：有序、可靠（JSON-RPC 语义），先建再出 offer（SDP 里才有 m=application）

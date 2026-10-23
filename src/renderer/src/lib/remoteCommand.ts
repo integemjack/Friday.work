@@ -30,7 +30,11 @@ export async function runRemoteCommand(
     const deadline = Date.now() + timeoutMs
     for (;;) {
       const info = backgroundTerminalInfo(id)
-      if (info && !info.running) return { exitCode: info.exitCode, output }
+      if (info && !info.running) {
+        // 流式解码收尾（不 flush 的话末尾多字节 UTF-8 序列被截成 U+FFFD）
+        output = (output + decoder.decode()).slice(-8000)
+        return { exitCode: info.exitCode, output }
+      }
       if (Date.now() > deadline) throw new Error('服务端命令超时没结束')
       await new Promise((resolve) => setTimeout(resolve, 200))
     }

@@ -169,7 +169,9 @@ export class SpeechInput {
    *  「在听」状态（onPhase('listening')）等麦克风真正收到第一帧才发：
    *  红灯早亮会让人抢在麦克风启动前开口，正好漏首字（getUserMedia 起设备要几百毫秒） */
   async start(options: SpeechInputOptions, hold: boolean): Promise<void> {
-    if (this.active) return
+    // context 在下面同步赋值：连它一起判，才拦得住 await getUserMedia 窗口期的重入
+    // （两次 start 各建一套 AudioContext + 麦克风流，先到的那套永久泄漏）
+    if (this.active || this.context) return
     this.options = options
     this.stopping = false
     this.pendingStop = false

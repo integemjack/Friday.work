@@ -21,7 +21,15 @@ let timer = 0
 
 function frame(now: number): void {
   raf = 0
-  for (const subscriber of subscribers) subscriber.tick(now)
+  for (const subscriber of subscribers) {
+    // 一个订阅者抛错不能把整条帧链打死（星野、波形全冻结，且 schedule 再也不会排）：
+    // 吞掉记一笔，下一帧照常
+    try {
+      subscriber.tick(now)
+    } catch (error) {
+      console.error('[frameTicker] 订阅者抛错', error)
+    }
+  }
   schedule()
 }
 

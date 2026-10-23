@@ -59,19 +59,28 @@ export class VoiceMedia {
   private leftover: Float32Array = new Float32Array(0)
   private playHead = 0
   private playing = 0
+  /** 已调度还没放完的播放节点：打断时要真的 stop 掉，光清计数拦不住已进队列的声音 */
+  private readonly activeSources = new Set<AudioBufferSourceNode>()
 
   /** 起麦克风；onFrame 收到一帧 20 毫秒的 16k PCM16 */
   async start(onFrame: (base64: string) => void): Promise<void> {
     this.context = new AudioContext()
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
-      },
-      video: false
-    })
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        },
+        video: false
+      })
+    } catch (error) {
+      // 麦克风被拒 / 没设备：关掉刚建的 AudioContext 再抛，别泄漏
+      void this.context.close().catch(() => {})
+      this.context = null
+      throw error
+    }
     this.source = this.context.createMediaStreamSource(this.stream)
     // ScriptProcessor 已废弃但到处能用；一帧 4096 采样，攒够 20 毫秒就发
     this.processor = this.context.createScriptProcessor(4096, 1, 1)
@@ -117,15 +126,27 @@ export class VoiceMedia {
     node.start(at)
     this.playHead = at + buffer.duration
     this.playing += 1
+    this.activeSources.add(node)
     node.onended = () => {
+      this.activeSources.delete(node)
       this.playing -= 1
       onPlayed(floats.length)
     }
   }
 
-  /** 还没放完的都丢掉（打断） */
+  /** 还没放完的都丢掉（打断）：把已调度的节点真的 stop 掉——光清计数的话旧节点
+   *  照样出声（和新合成的叠音），onended 稍后还会把计数减成负数、上报丢弃的采样 */
   stopPlayback(): void {
     this.playHead = this.context?.currentTime ?? 0
+    for (const node of this.activeSources) {
+      node.onended = null
+      try {
+        node.stop()
+      } catch {
+        /* 还没 start 到 / 已停 */
+      }
+    }
+    this.activeSources.clear()
     this.playing = 0
   }
 
@@ -143,6 +164,7 @@ export class VoiceMedia {
     this.stream = null
     this.context = null
     this.leftover = new Float32Array(0)
+    this.activeSources.clear()
     this.playing = 0
   }
 }

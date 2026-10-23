@@ -132,16 +132,18 @@ async function readRemoteFile(machineID: string, path: string, kind: MediaKind):
   const cap = CAP_BYTES[kind]!
   const parts: Uint8Array[] = []
   let offset = 0
+  let total = 0
   while (true) {
     const result = (await rpc(machineID, 'fs.read', { path, offset, length: chunk })) as FsReadResult
     if (!result || typeof result.data !== 'string') return null
     const bytes = b64ToBytes(result.data)
     parts.push(bytes)
-    if (result.size > cap) return null
+    total += bytes.length
+    // size 缺失/失真时靠累计字节数兜底（同 toolMedia.loadLocal）
+    if (result.size > cap || total > cap) return null
     offset += bytes.length
     if (result.eof || bytes.length === 0) break
   }
-  const total = parts.reduce((sum, part) => sum + part.length, 0)
   const merged = new Uint8Array(total)
   let at = 0
   for (const part of parts) {
