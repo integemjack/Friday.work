@@ -80,6 +80,7 @@ export function postJson(url: string, payload: unknown, options: PostOptions = {
       return
     }
 
+    const expected = normalizeFingerprint(options.fingerprint)
     const requestOptions: RequestOptions = {
       hostname: target.hostname,
       port: target.port || 443,
@@ -87,12 +88,13 @@ export function postJson(url: string, payload: unknown, options: PostOptions = {
       method: 'POST',
       headers,
       timeout: options.timeoutMs ?? 8000,
-      rejectUnauthorized: false
+      rejectUnauthorized: false,
+      // 不复用连接：指纹检查挂在 secureConnect 上，复用的 TLS socket 不会再触发它
+      agent: false
     }
     const req = request(requestOptions, (res) => {
       const socket = res.socket as TLSSocket
       const fingerprint = socketFingerprint(socket) ?? ''
-      const expected = normalizeFingerprint(options.fingerprint)
       if (expected && fingerprint && fingerprint !== expected) {
         res.destroy()
         reject(new Error(`服务器证书指纹变了（收到 ${fingerprint.slice(0, 12)}…，记着的是 ${expected.slice(0, 12)}…）`))
@@ -107,7 +109,23 @@ export function postJson(url: string, payload: unknown, options: PostOptions = {
     })
     req.on('timeout', () => req.destroy(new Error('请求超时')))
     req.on('error', (error) => reject(error))
-    req.end(body)
+    // 指纹不符时请求体不能发出去：挂在响应回调里比对此前为时已晚——TLS 握手已完成、
+    // 请求体（refreshToken / X-Server-Passssword / Bearer）已经交到对端手上。
+    // 改在 secureConnect 里先比对证书，通过后才允许发送
+    req.on('socket', (socket) => {
+      socket.once('secureConnect', () => {
+        const fingerprint = socketFingerprint(socket as TLSSocket)
+        if (expected && (!fingerprint || fingerprint !== expected)) {
+          req.destroy(
+            new Error(
+              `服务器证书指纹变了（收到 ${fingerprint ? `${fingerprint.slice(0, 12)}…` : '空'}，记着的是 ${expected.slice(0, 12)}…）`
+            )
+          )
+          return
+        }
+        req.end(body)
+      })
+    })
   })
 }
 
@@ -120,6 +138,7 @@ export function getJson(url: string, options: PostOptions = {}): Promise<HttpRes
     if (options.token) headers.Authorization = `Bearer ${options.token}`
     if (options.serverPassword) headers['X-Server-Password'] = options.serverPassword
     const send = (fn: typeof request | typeof import('node:http').request): void => {
+      const expected = normalizeFingerprint(options.fingerprint)
       const req = fn(
         {
           hostname: target.hostname,
@@ -128,7 +147,8 @@ export function getJson(url: string, options: PostOptions = {}): Promise<HttpRes
           method: 'GET',
           headers,
           timeout: options.timeoutMs ?? 8000,
-          ...(secure ? { rejectUnauthorized: false } : {})
+          // 同 postJson：不复用连接 + secureConnect 先过指纹再发（GET 也带 Authorization 头）
+          ...(secure ? { rejectUnauthorized: false, agent: false } : {})
         } as RequestOptions,
         (res) => {
           const fingerprint = secure ? socketFingerprint(res.socket as TLSSocket) : ''
@@ -148,7 +168,20 @@ export function getJson(url: string, options: PostOptions = {}): Promise<HttpRes
       )
       req.on('timeout', () => req.destroy(new Error('请求超时')))
       req.on('error', (error) => reject(error))
-      req.end()
+      if (!secure) {
+        req.end()
+        return
+      }
+      req.on('socket', (socket) => {
+        socket.once('secureConnect', () => {
+          const fingerprint = socketFingerprint(socket as TLSSocket)
+          if (expected && (!fingerprint || fingerprint !== expected)) {
+            req.destroy(new Error('服务器证书指纹变了'))
+            return
+          }
+          req.end()
+        })
+      })
     }
     if (secure) send(request)
     else void import('node:http').then(({ request: httpRequest }) => send(httpRequest as typeof request))

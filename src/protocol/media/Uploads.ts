@@ -33,6 +33,7 @@ export class Uploads {
       }
       let offset = 0
       let result: { path: string } | undefined
+      let lastSent = false
       const buffer = Buffer.alloc(CHUNK)
       while (offset < size) {
         const { bytesRead } = await fh.read(buffer, 0, CHUNK, offset)
@@ -45,8 +46,12 @@ export class Uploads {
           data: buffer.subarray(0, bytesRead).toString('base64'),
           last
         })) as { path: string }
+        lastSent = last
         offset += bytesRead
       }
+      // 读到的比 stat 时短（读的途中文件被截短）：最后一块没带 last=true，
+      // 服务端这份上传收不了尾——不能把中途回执当成功返回
+      if (!lastSent) throw new Error('文件在读取途中变短了，上传没有传完整，请重试')
       if (!result) throw new Error('文件是空的')
       return result
     } finally {

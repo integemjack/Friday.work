@@ -94,7 +94,13 @@ export class SchatClient {
             this.setState('online')
             resolve()
           })
-          .catch((error: unknown) => reject(error instanceof Error ? error : new Error(String(error))))
+          .catch((error: unknown) => {
+            // hello 失败（凭据被降级成 guest / ack 超时）要把连接关掉再拒绝：
+            // 不关的话这条 socket 变成幽灵连接，事件照收、上层重连后新旧两条并存
+            this.closedByUs = true
+            socket.close()
+            reject(error instanceof Error ? error : new Error(String(error)))
+          })
       })
 
       socket.on('message', (raw) => this.onFrame(raw.toString()))

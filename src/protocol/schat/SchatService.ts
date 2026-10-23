@@ -113,6 +113,11 @@ export class SchatService {
   private wantedOnline = false
   private wsRetryTimer: NodeJS.Timeout | null = null
   private wsRetryIndex = 0
+  /** connectWs 串行队列：重连定时器、扫码批准、启动恢复可能并发各来一次，
+   *  不排队的话两条都跑完会留下两条并存的连接（this.client 只记后写的，先连上的没人关） */
+  private connectQueue: Promise<void> = Promise.resolve()
+  /** 乐观更新用的负数占位 id（递减计数器；-Date.now() 同一毫秒连发两条会撞 id） */
+  private nextPlaceholderID = -1
 
   constructor(
     private readonly backend: CredentialBackend,
@@ -269,8 +274,14 @@ export class SchatService {
     await this.connectWs()
   }
 
-  /** 有凭据就直连（每次连接前先刷一次 refreshToken，rotation 后写回） */
-  private async connectWs(): Promise<void> {
+  /** 有凭据就直连（每次连接前先刷一次 refreshToken，rotation 后写回）。并发调用排队串行执行 */
+  private connectWs(): Promise<void> {
+    const job = this.connectQueue.catch(() => {}).then(() => this.doConnectWs())
+    this.connectQueue = job
+    return job
+  }
+
+  private async doConnectWs(): Promise<void> {
     if (!this.session) return
     this.clearWsRetry()
     // 先摘下旧连接再关：close() 会同步触发 offline 回调，回调里
@@ -492,6 +503,9 @@ export class SchatService {
       for (const list of Object.values(this.state.messages)) {
         const target = list.find((item) => item.id === data.messageId)
         if (target) {
+          // done 之后的迟到 delta 不追加：往终稿上粘垃圾，还会把 streaming 永久置回
+          // true（不会再有 done 来收尾），气泡一直转圈
+          if (!target.streaming) return
           target.content += data.delta
           target.streaming = true
           this.patch({ messages: { ...this.state.messages } })
@@ -539,7 +553,7 @@ export class SchatService {
   async send(botID: number, text: string): Promise<void> {
     if (!this.client || this.client.state !== 'online') throw new Error('还没连上聊天服务器')
     const clientMsgId = randomUUID()
-    const placeholder = -Date.now()
+    const placeholder = this.nextPlaceholderID--
     // 乐观更新：先画出自己的这句
     this.upsertMessage(botID, {
       id: placeholder,

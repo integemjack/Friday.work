@@ -73,6 +73,8 @@ const REPLACED_REASONS = ['新的连接来了', 'replaced']
 
 export class CallService {
   state: CallState = emptyState()
+  /** 主叫振铃超时（和发给服务端的 expiresAt 同 30s）：服务端回执丢了别把状态卡死在 outgoing */
+  private ringTimer: NodeJS.Timeout | null = null
 
   constructor(private readonly host: CallHost) {}
 
@@ -102,7 +104,26 @@ export class CallService {
       timestamp: now,
       expiresAt: now + 30_000
     })
+    this.armRingTimeout(requestId)
     return this.state
+  }
+
+  /** 到点还在 outgoing（对方没回执、服务端回执丢了）就本地收尾，
+   *  否则 dial() 永远抱「已经有一通电话在进行」，来电也会被回 busy */
+  private armRingTimeout(requestId: string): void {
+    this.clearRingTimeout()
+    this.ringTimer = setTimeout(() => {
+      this.ringTimer = null
+      if (this.state.requestId !== requestId || this.state.phase !== 'outgoing') return
+      this.end('没有接听', 'timeout')
+    }, 30_000)
+  }
+
+  private clearRingTimeout(): void {
+    if (this.ringTimer) {
+      clearTimeout(this.ringTimer)
+      this.ringTimer = null
+    }
   }
 
   /** 发一帧信令给对端（渲染进程建好 PC 后用它送 offer / answer / ice） */
@@ -292,6 +313,7 @@ export class CallService {
   }
 
   private end(reason: string, code = ''): void {
+    this.clearRingTimeout()
     this.setState({
       ...this.state,
       phase: 'ended',
