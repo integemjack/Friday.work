@@ -6,11 +6,16 @@
 // 每次采样还把快照发布到 %ProgramData%\Friday\sysstats.json——别的电脑连这台机器当
 // 服务器时，渲染层用协议 fs.read 读它（协议没有系统采样方法，这是纯客户端侧的跨机器桥）。
 // 结果缓存 2.5 秒：HUD 每 3 秒问一次刚好逐轮刷新，多个窗口同问也不会重复开子进程。
+// 「服务器是不是本机」不靠 hostname 判（同镜像装出来的机器常重名、老服务端不报 hostname）：
+// 主进程在 %ProgramData%\Friday 下放一个随机名的探针文件，渲染层用协议 fs.read 去服务器上读同一路径，
+// 读得到 = 服务器就是这台（selfProbePath）。
 
 import { exec, execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { unlinkSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import os from 'node:os'
 import type { SysStats } from '../../shared/api.js'
 
@@ -88,7 +93,8 @@ let inFlight: Promise<SysStats> | null = null
 // 协议没有系统采样方法，别的电脑连这台 Windows 机器当服务器时，渲染层只能用 fs.read
 // 读这份文件（由这台机器上跑着的 Friday Work 每次采样顺手写）。Linux 服务器不需要
 //（fs.read 直接读 /proc+/sys）。写失败静默：尽力而为，不影响本机 HUD。
-const SNAPSHOT_PATH = join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Friday', 'sysstats.json')
+const FRIDAY_DATA_DIR = join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Friday')
+const SNAPSHOT_PATH = join(FRIDAY_DATA_DIR, 'sysstats.json')
 
 async function publishSnapshot(stats: SysStats): Promise<void> {
   if (process.platform !== 'win32') return
@@ -127,6 +133,38 @@ export function systemStats(): Promise<SysStats> {
   return inFlight
 }
 
+// ---- 本机探针：每个进程一个随机名文件（同机多开各用各的，互不覆盖），退出时删掉 ----
+// 只在 Windows 上做（服务器在 Linux/mac 上时本机 IPC 采的是客户端自己，本来就不该用）；
+// 建不出来（权限）返回 null，渲染层就一律当「不是本机」走 json 桥。
+let probePath: Promise<string | null> | null = null
+
+async function createSelfProbe(): Promise<string | null> {
+  if (process.platform !== 'win32') return null
+  const file = join(FRIDAY_DATA_DIR, `self-${randomBytes(16).toString('hex')}.probe`)
+  try {
+    await mkdir(FRIDAY_DATA_DIR, { recursive: true })
+    await writeFile(file, 'friday-work self probe\n', 'utf8')
+  } catch {
+    return null
+  }
+  app.once('will-quit', () => {
+    try {
+      unlinkSync(file)
+    } catch {
+      // 删不掉就留着（几十字节，不影响判定：别的机器读不到这一路径）
+    }
+  })
+  // fs.read 走的是服务器的路径语法：用正斜杠，和 sysstats.json 的读法一致
+  return file.replace(/\\/g, '/')
+}
+
+/** IPC 'sys:self-probe'：本机探针文件路径（进程内只建一次）；null = 本机不提供探针 */
+export function selfProbePath(): Promise<string | null> {
+  probePath ??= createSelfProbe()
+  return probePath
+}
+
 export function registerSysStatsIpc(): void {
   ipcMain.handle('sys:stats', (): Promise<SysStats> => systemStats())
+  ipcMain.handle('sys:self-probe', (): Promise<string | null> => selfProbePath())
 }

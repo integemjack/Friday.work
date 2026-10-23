@@ -137,6 +137,8 @@ contextBridge.exposeInMainWorld('fridayBridge', {
   listStackMedia: (): Promise<string[]> => ipcRenderer.invoke('media-stack:list'),
   /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
   systemStats: (): Promise<SysStats> => ipcRenderer.invoke('sys:stats'),
+  /** 本机探针文件路径（服务器上 fs.read 读得到 = 服务器就是本机）；null = 本机不提供探针 */
+  selfProbePath: (): Promise<string | null> => ipcRenderer.invoke('sys:self-probe'),
   /** 文件管理器下载到本地：begin 弹保存 / 选文件夹对话框（取消返回 null），之后按会话 id 分块写；
    *  rel 是会话内的相对路径（单个文件模式不用），越界的主进程拒绝 */
   downloadBegin: (mode: 'file' | 'dir', suggestedName: string, count: number): Promise<{ id: string; target: string } | null> =>

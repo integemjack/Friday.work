@@ -87,6 +87,8 @@ declare global {
       listStackMedia(): Promise<string[]>
       /** 本机系统资源（贾维斯 HUD 的远程遥测：当前连接的服务器就是本机时的 CPU/RAM/GPU/显存/进程数实测） */
       systemStats(): Promise<SysStats>
+      /** 本机探针文件路径（服务器上 fs.read 读得到 = 服务器就是本机）；null = 本机不提供探针 */
+      selfProbePath(): Promise<string | null>
       /** 拖进文件管理器的文件 / 文件夹：展开成清单，每个文件一个上传句柄（相对路径以拖进来的名字开头），空目录单列 */
       registerDropTree(
         file: File

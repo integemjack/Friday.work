@@ -63,7 +63,7 @@ export interface PickedFile {
 
 /** 本机系统资源快照（贾维斯 HUD 的远程遥测用；null = 这台测不了，显示 N/A） */
 export interface SysStats {
-  /** 本机主机名——渲染层用它核对「当前连接的服务器是否就是本机」，对不上不用这份本机数据 */
+  /** 采样那台的主机名（只作标识；「服务器是否就是本机」改用探针文件判，重名机器很常见） */
   hostname: string
   cpuPct: number | null
   ramPct: number | null
@@ -74,8 +74,8 @@ export interface SysStats {
   procs: number | null
 }
 
-/** sysstats.json 的格式（SysStats + 写入时刻）：别的电脑 fs.read 读它看这台的资源，
- *  at 距今太远说明那台服务器上的 Friday Work 没在写（没跑/刚断），不采信 */
+/** sysstats.json 的格式（SysStats + 写入时刻）：别的电脑 fs.read 读它看这台的资源。
+ *  at 是写入方的时钟，读的一方只看它变没变（两台的钟不比），超过 10 秒没变说明那台没在写（没跑/刚断），不采信 */
 export interface SysStatsSnapshot extends SysStats {
   at: number
 }

@@ -37,11 +37,13 @@ function tick(): void {
 //   Linux   —— 协议 fs.read 读那台的 /proc（CPU 差值 / RAM / loadavg 进程数），
 //              GPU/显存再试 /sys/class/drm/card*/device（AMD/Intel 暴露 sysfs，NVIDIA 与虚拟机没有 → N/A）；
 //   Windows —— 两级：①「服务器就是本机」时走 fridayBridge.systemStats IPC（主进程 os.cpus 差值
-//              + nvidia-smi + tasklist），返回 hostname 与 serverInfo.hostname 对得上才用；
-//              ②从别的电脑连这台时（①的 hostname 对不上），协议 fs.read 读服务器上
-//              %ProgramData%\Friday\sysstats.json——那份文件由服务器机器上跑着的 Friday Work
-//              主进程每次采样写入（协议没有系统采样方法，这是纯客户端仓库内的跨机器桥）；
-//              文件读不到 / 超过 10 秒没更新（那台没跑 Friday Work）→ N/A。
+//              + nvidia-smi + tasklist）。是不是本机不看 hostname（同镜像装的机器常重名、老服务端
+//              不报 hostname，原来会把客户端自己的资源当成服务器的显示）：主进程在本机放一个随机名
+//              探针文件，fs.read 去服务器上读同一路径，读得到才算本机；
+//              ②其余情况协议 fs.read 读服务器上 %ProgramData%\Friday\sysstats.json——那份文件由
+//              服务器机器上的 Friday Work 主进程或 FridaySysStats.exe 每 3 秒写入（协议没有系统采样方法，
+//              这是纯客户端仓库内的跨机器桥）；新鲜度只看 at 变没变（at 是服务器的钟，不和本机的钟比：
+//              两台差十几秒很常见，原来钟快的客户端永远判过期）；读不到 / 超过 10 秒没变 → N/A。
 // 没连机器：五项显示 NO LINK（一眼知道是没连上，不是取不到）。
 // 某一轮没取到（通道卡死、fs.read 报错、某个文件读不到）：每个指标各自沿用 12 秒内的
 // 上次好值，过期才落 N/A，并把下一轮退避到 10 秒——不再因为一次失败就永久停轮询
@@ -53,12 +55,18 @@ const gpuText = ref('…')
 const vramText = ref('…')
 const procText = ref('…')
 let remoteTimer = 0
+let disposed = false // 组件已卸载：不再排下一轮
 let polling = false // 上一轮还挂着就不并发发第二轮（通道慢时避免请求堆积）
 let roundOk = false // 这一轮至少取到了一项：决定下一轮 3 秒还是退避 10 秒
 let prevCpu: { idle: number; total: number } | null = null
 let polledMachine = ''
 let gpuCard: string | null = null // Linux 那台探到的 DRM 卡名（/sys/class/drm/card0…）；'' = 探过、没有
 let gpuTries = 0 // GPU sysfs 连续读不到的轮数，够几轮就判定这台没有可用接口
+let selfCheck: '' | 'self' | 'other' = '' // Windows 服务器是不是本机；'' = 还没定（探针读超时，下轮再探）
+// sysstats.json 新鲜度（全用本机时钟计时，不碰服务器的 at 值本身）
+let snapAt: number | null = null // 上次读到的 at
+let snapChangedAt = 0 // 本机时钟：上次看到 at 变化（或第一次看到它）的时刻
+let snapLive = false // 见过 at 变化 = 确认那台有人在写；第一眼看到的可能是早没人写的旧文件
 
 function pct(n: number): string {
   return `${Math.max(0, Math.min(100, Math.round(n)))}%`
@@ -125,6 +133,18 @@ function clearHolds(): void {
   roundOk = false
 }
 
+/** 换机器 / 断开：服务器相关的判定全部重来 */
+function resetServerState(): void {
+  clearHolds()
+  prevCpu = null
+  gpuCard = null
+  gpuTries = 0
+  selfCheck = ''
+  snapAt = null
+  snapChangedAt = 0
+  snapLive = false
+}
+
 /** 把一份 SysStats 上屏（IPC 与 json 桥共用；字段缺失按这轮没取到处理） */
 function applyStats(s: Partial<SysStatsSnapshot>): void {
   // 服务器刚起的第一轮没有 CPU 差值：显示 …，下一轮才有数
@@ -150,8 +170,10 @@ async function readRemote(machineID: string, path: string, length: number): Prom
 }
 
 /** Windows 服务器·第二级：服务器不是本机（从别的电脑连它）——协议 fs.read 读
- *  服务器上跑着的 Friday Work 写的 %ProgramData%\Friday\sysstats.json。
- *  读不到 / JSON 坏了 / 超过 10 秒没更新（那台没跑 Friday Work 或刚断）→ 按这轮没取到处理。 */
+ *  服务器上 Friday Work / FridaySysStats.exe 写的 %ProgramData%\Friday\sysstats.json。
+ *  新鲜度只看 at 变没变、用本机时钟计时：写入方每 3 秒换一次 at，10 秒没变就是那台没在写了。
+ *  第一眼看到的 at 还不能信（可能是早没人写的旧文件），显示 … 等它变一次；
+ *  读不到 / JSON 坏了 / 10 秒没变 → 按这轮没取到处理。 */
 const REMOTE_STATS_PATH = 'C:/ProgramData/Friday/sysstats.json'
 const REMOTE_STATS_FRESH_MS = 10_000
 
@@ -163,25 +185,66 @@ async function pollWindowsViaFile(machineID: string): Promise<void> {
   } catch {
     s = null
   }
-  if (!s || typeof s.at !== 'number' || Date.now() - s.at > REMOTE_STATS_FRESH_MS) {
+  if (!s || typeof s.at !== 'number') {
     missedRound()
+    return
+  }
+  const now = Date.now()
+  if (s.at !== snapAt) {
+    if (snapAt !== null) snapLive = true
+    snapAt = s.at
+    snapChangedAt = now
+  }
+  if (now - snapChangedAt > REMOTE_STATS_FRESH_MS) {
+    // 10 秒没变：那台没在写（没跑采集 / 刚断），等它再变才重新采信
+    snapLive = false
+    missedRound()
+    return
+  }
+  if (!snapLive) {
+    // 还没见过它变：先显示 …（读是通的，下一轮照常 3 秒）
+    for (const key of Object.keys(metricRefs) as MetricKey[]) if (!holds.has(key)) setMetric(key, '…')
+    roundOk = true
     return
   }
   applyStats(s)
 }
 
-/** Windows 服务器：先试本机 IPC（服务器就是这台机器时最快最准），
- *  hostname 对不上（= 从别的电脑连这台服务器）就落到 fs.read 读 json 桥。 */
-async function pollLocalServer(machineID: string, serverHostname: string | undefined): Promise<void> {
+/** 服务器是不是本机：fs.read 去服务器上读本机主进程放的随机名探针文件。
+ *  读到 = 本机；服务器回错误码（没这个文件 / 不让读）= 不是；
+ *  超时或本地传输层报错（没有错误码）不下结论，回 ''，下轮再探。 */
+async function checkSelf(machineID: string): Promise<'' | 'self' | 'other'> {
   const bridge = window.fridayBridge
-  if (bridge?.systemStats) {
+  let path: string | null = null
+  try {
+    path = bridge?.selfProbePath ? await bridge.selfProbePath() : null
+  } catch {
+    path = null
+  }
+  if (!path) return 'other'
+  try {
+    const r = await Promise.race([
+      rpc(machineID, 'fs.read', { path, offset: 0, length: 64 }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 4000))
+    ])
+    return r ? 'self' : ''
+  } catch (error) {
+    return typeof (error as { code?: unknown }).code === 'number' ? 'other' : ''
+  }
+}
+
+/** Windows 服务器：探针确认是本机才用本机 IPC（最快最准），其余都走 fs.read 读 json 桥。 */
+async function pollWindowsServer(machineID: string): Promise<void> {
+  if (!selfCheck) {
+    const result = await checkSelf(machineID)
+    // 探的过程中换了机器 / 断了：结果作废
+    if (polledMachine === machineID) selfCheck = result
+  }
+  const bridge = window.fridayBridge
+  if (selfCheck === 'self' && bridge?.systemStats) {
     try {
-      const s = await bridge.systemStats()
-      // hostname 对不上 = 连的是别的 Windows 机器：本机数据不作数，落到 json 桥
-      if (s && (!serverHostname || s.hostname.toLowerCase() === serverHostname.toLowerCase())) {
-        applyStats(s)
-        return
-      }
+      applyStats(await bridge.systemStats())
+      return
     } catch {
       // IPC 出错也落到 json 桥再试
     }
@@ -268,18 +331,18 @@ async function pollLinuxGpu(machineID: string): Promise<void> {
 
 async function pollRemote(): Promise<void> {
   // 先排下一次再干活：断线 / 没连时也能在恢复后自动接上
+  // 卸载时这一轮可能还挂在 await 上：clearTimeout 清不到它待会儿排的下一轮，靠 disposed 拦住，
+  // 不然卸掉的 HUD（切主题、热更新）会在后台一直轮询下去
   const next = (delay: number): void => {
+    if (disposed) return
     remoteTimer = window.setTimeout(() => void pollRemote(), delay)
   }
   const machineID = store.currentMachine
   const info = store.currentMachineInfo
   if (!machineID || info?.state !== 'ready') {
     hostName.value = 'N/A'
-    clearHolds()
+    resetServerState()
     resetRemote('NO LINK')
-    prevCpu = null
-    gpuCard = null
-    gpuTries = 0
     polledMachine = machineID
     next(3000)
     return
@@ -287,10 +350,7 @@ async function pollRemote(): Promise<void> {
   if (machineID !== polledMachine) {
     // 换了台机器：重新起测
     polledMachine = machineID
-    clearHolds()
-    prevCpu = null
-    gpuCard = null
-    gpuTries = 0
+    resetServerState()
     resetRemote('…')
   }
   if (polling) {
@@ -304,7 +364,7 @@ async function pollRemote(): Promise<void> {
   const platform = info.serverInfo?.platform
   try {
     if (platform === 'windows') {
-      await pollLocalServer(machineID, info.serverInfo?.hostname)
+      await pollWindowsServer(machineID)
     } else if (platform === 'linux') {
       await pollLinuxServer(machineID)
     } else {
@@ -376,6 +436,7 @@ onMounted(() => {
   void pollRemote()
 })
 onBeforeUnmount(() => {
+  disposed = true
   window.clearInterval(timer)
   window.clearTimeout(remoteTimer)
 })
