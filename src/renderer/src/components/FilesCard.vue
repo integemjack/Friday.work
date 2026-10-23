@@ -107,14 +107,22 @@ function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }
 
+/** 列目录的代数：快速连点两个目录 / 换机器时，慢回执不能覆盖新目录（还会把错误路径压进后退栈） */
+let listSeq = 0
+
 async function list(path?: string, options: { history?: boolean } = {}): Promise<void> {
   if (!store.currentMachine) return
+  const machine = store.currentMachine
+  const seq = ++listSeq
+  const fromPath = currentPath.value
   loading.value = true
   error.value = ''
   try {
-    const result = (await rpc(store.currentMachine, 'fs.list', { path, files: true })) as FsListResult
-    if (options.history !== false && currentPath.value && result.path !== currentPath.value) {
-      backStack.value.push(currentPath.value)
+    const result = (await rpc(machine, 'fs.list', { path, files: true })) as FsListResult
+    // 期间又点了别的目录 / 换了机器：这笔整笔作废（loading 也不动，新一轮自己在管）
+    if (seq !== listSeq || machine !== store.currentMachine) return
+    if (options.history !== false && fromPath && result.path !== fromPath) {
+      backStack.value.push(fromPath)
       if (backStack.value.length > 100) backStack.value.shift()
       forwardStack.value = []
     }
@@ -482,9 +490,12 @@ watch(
 const thumbs = ref<Record<string, string>>({})
 const thumbLoading = new Set<string>()
 const THUMB_MAX_BYTES = 2 * 1024 * 1024
+/** 缩略图批次的代数：切目录 / 卸载后旧循环终止，不再为旧目录建 blob URL（没人 revoke，白占内存） */
+let thumbSeq = 0
 
 async function loadThumbs(): Promise<void> {
   if (viewMode.value !== 'icons' || !store.currentMachine) return
+  const seq = ++thumbSeq
   const targets = shownEntries.value
     .filter((entry) => categoryOf(entry) === 'image' && (entry.size ?? Infinity) <= THUMB_MAX_BYTES && mimeOf(entry.name) !== 'application/octet-stream')
     .filter((entry) => !thumbs.value[entry.path] && !thumbLoading.has(entry.path))
@@ -493,6 +504,7 @@ async function loadThumbs(): Promise<void> {
     thumbLoading.add(entry.path)
     try {
       const { bytes } = await readRange(entry.path, THUMB_MAX_BYTES)
+      if (seq !== thumbSeq) return
       thumbs.value = { ...thumbs.value, [entry.path]: URL.createObjectURL(new Blob([bytes as BlobPart], { type: mimeOf(entry.name) })) }
     } catch {
       // 拉不到就用图标
@@ -1061,8 +1073,10 @@ function showChanges(): void {
 function revealChange(change: FsChange): void {
   // 在文件区里定位改动的文件：进它所在的目录并选中
   const full = /^([A-Za-z]:|\/)/.test(change.path) ? change.path : joinPath(workdir.value, change.path)
-  const dir = full.replace(/[\\/][^\\/]+$/, '')
-  void list(dir).then(() => {
+  let dir = full.replace(/[\\/][^\\/]+$/, '')
+  // 文件直接在文件系统根下（如 /a.txt）剥不出目录：从根定位，别拿空 path 去 fs.list
+  if (!dir) dir = /^[A-Za-z]:/.test(full) ? full.slice(0, 2) : full.startsWith('/') ? '/' : ''
+  void list(dir || undefined).then(() => {
     const hit = entries.value.find((entry) => samePath(entry.path, full))
     if (hit) selectOnly(hit)
   })
@@ -1086,11 +1100,22 @@ onBeforeUnmount(() => {
   window.clearTimeout(previewTimer)
   window.clearTimeout(noticeTimer)
   window.clearTimeout(typeAheadTimer)
+  listSeq++ // 在途的列目录回执作废
+  thumbSeq++ // 在途的缩略图循环终止（里面的 blob URL 也就不会建出来）
   revokePreview()
   clearThumbs()
 })
 
-watch(() => store.detail?.conversationID, () => void loadChanges())
+// 换会话：上一段会话的 diff 预览和「确定？」武装状态不能留着——
+// 同工作目录的会话改动列表常含同名路径，残留的确认态会用新会话的 id 去撤旧路径
+function resetChangesUI(): void {
+  diff.value = null
+  confirmingRevert.value = ''
+}
+watch(() => store.detail?.conversationID, () => {
+  resetChangesUI()
+  void loadChanges()
+})
 watch(home, () => void probePlaces())
 // 换机器：回到新机器的主目录、清掉历史
 watch(
@@ -1100,6 +1125,7 @@ watch(
     forwardStack.value = []
     currentPath.value = ''
     extraPlaces.value = []
+    resetChangesUI()
     void list(undefined, { history: false })
   }
 )

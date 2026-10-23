@@ -399,6 +399,21 @@ function resize() {
   el.closest('.input-zone')?.classList.toggle('multi-line', el.scrollHeight > oneLine + 1)
 }
 
+// 行数不只随内容变：拖窗口 / 加减附件 chips 改变文本域宽度也会变行数，但那不经过 @input。
+// 用 ResizeObserver 盯着宽度变化也调 resize()，不然 multi-line 类卡死在旧行数，
+// 按钮组的「单行居中/多行顶对齐」就错了
+let textareaResizeObserver: ResizeObserver | null = null
+onMounted(() => {
+  const el = textarea.value
+  if (!el) return
+  textareaResizeObserver = new ResizeObserver(() => resize())
+  textareaResizeObserver.observe(el)
+})
+onBeforeUnmount(() => {
+  textareaResizeObserver?.disconnect()
+  textareaResizeObserver = null
+})
+
 async function handleAttachments(picked: PickedFile[]) {
   for (const file of picked) {
     attachments.value.push(file)
@@ -415,11 +430,17 @@ function onDrop(event: DragEvent) {
   if (files.length === 0) return
   event.preventDefault()
   for (const file of files) {
+    // 登记是异步的：落地前用户把消息发了（send 清空附件并 bump 代数）的话，
+    // 这份附件不能塞进下一条消息的输入框凭空多出来
+    const seq = sendSeq
     void window.fridayBridge.registerDrop(file).then((picked) => {
-      if (picked) attachments.value.push(picked)
+      if (picked && seq === sendSeq) attachments.value.push(picked)
     })
   }
 }
+
+/** 发送代数：send 清空附件时 bump，作废还在途的拖放登记 */
+let sendSeq = 0
 
 async function send() {
   const value = text.value.trim()
@@ -429,6 +450,7 @@ async function send() {
   // 这段在工作就排进它的队列，做完当前这一步就交给它（REMOTE.md；qt ComposerView「补充给智能体」）
   busy.value = true
   uploadError.value = ''
+  sendSeq++ // 在途的拖放登记作废：稍后落地的不属于已发出的这条消息
   try {
     const uploaded: Array<{ path: string; name: string }> = []
     for (const attachment of attachments.value) {
@@ -918,6 +940,8 @@ function onWindowKeydown(event: KeyboardEvent): void {
    按字节累计，字节倒退 = 换了下一个文件，把上一个记进累计、速度窗重开 */
 const modelDl = ref<{ label: string; percent: number; received: number; total: number; speed: number } | null>(null)
 let dlAcc = { received: 0, total: 0, lastReceived: 0, lastTotal: 0, at: 0, speed: 0 }
+/** 上一事件的阶段：从别的阶段重新进入 downloading = 新一轮下载，要把累计清零 */
+let lastDlPhase: VoiceModelProgress['phase'] | 'none' = 'none'
 type VoiceModelProgress = {
   phase: 'downloading' | 'loading' | 'ready'
   percent?: number
@@ -928,6 +952,12 @@ type VoiceModelProgress = {
 function onModelProgress(state: VoiceModelProgress): void {
   if (state.phase === 'downloading') {
     modelPrep.value = ''
+    // 新一轮下载（上一轮已随 loading/ready 收尾）：累计清零。不清的话首个事件的 received
+    // 必然小于残留的 lastReceived，被判成「换了文件」把上一轮的字节累计进来，进度虚高
+    if (lastDlPhase !== 'downloading') {
+      dlAcc = { received: 0, total: 0, lastReceived: 0, lastTotal: 0, at: 0, speed: 0 }
+      modelDl.value = null
+    }
     if (typeof state.received === 'number') {
       const now = Date.now()
       if (state.received < dlAcc.lastReceived) {
@@ -966,6 +996,7 @@ function onModelProgress(state: VoiceModelProgress): void {
     modelDl.value = null
     modelPrep.value = ''
   }
+  lastDlPhase = state.phase
 }
 function fmtBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
