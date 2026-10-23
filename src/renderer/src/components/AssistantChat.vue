@@ -209,6 +209,11 @@ watch(
 // 自己在当前会话发言时打断。getter 产出完成态快照 + text 块长度串：长度串必须真读
 // 块内容——applyPatch 是原地改块、保留对象引用，不读内容的话流式片根本不触发回调
 //（正是「只播最后一次集合」的根因），读了之后块一长快照就变、回调就来播增量。
+// 快照里还带一个「会话清单」项（Object.keys(store.details)，空会话也算）：
+// 新会话进入监听那帧就登记进 seenConversations，当帧已有内容当历史。此前按「会话
+// 第一次出现消息项」判定，空会话没被登记，第一条回复的第一片那帧才被当新会话豁免
+// ——开头一句直接丢；会话被订阅上限淘汰/关掉重开后 seenConversations 残留，重订阅
+// 帧不豁免，快照里已完成的历史消息从 0 全量重播（念旧账）（2026-12 修）。
 const seenConversations = new Set<string>()
 const seenMessageFinish = new Map<string, string | undefined>()
 /** 块游标：conv:msgID:blockID → { 增量游标, 已播到的文本长度 } */
@@ -225,7 +230,10 @@ watch(
       error?: string
       notice?: string
       lens?: string
+      convs?: string[]
     }> = []
+    // 会话清单项：本帧监听范围内有哪些会话（含没有任何消息的），豁免判定的单位
+    snapshot.push({ key: '__convs__', convs: Object.keys(store.details) })
     for (const conv of Object.keys(store.details)) {
       const current = conv === conversationID.value
       for (const { message } of store.details[conv]?.messages ?? []) {
@@ -255,14 +263,16 @@ watch(
   },
   (list, prev) => {
     const initial = prev === undefined
-    // 先统一登记本帧新出现的会话：其中已有的内容全部当历史不播。
+    // 先统一登记本帧新出现的会话（以会话清单项为准，空会话也算）：其中已有的内容全部
+    // 当历史不播。被淘汰/关掉后重订阅的会话重新出现在清单里，也按新会话豁免一次。
     // （不能在遍历中边遇边登记——那样只有新会话的第一条享受到豁免，后面的照播）
     const freshConvs = new Set<string>()
-    for (const item of list) {
-      if (item.conv !== undefined && !seenConversations.has(item.conv)) freshConvs.add(item.conv)
+    for (const conv of list.find((item) => item.key === '__convs__')?.convs ?? []) {
+      if (!seenConversations.has(conv)) freshConvs.add(conv)
     }
     for (const conv of freshConvs) seenConversations.add(conv)
     for (const item of list) {
+      if (item.key === '__convs__') continue
       if (item.user) {
         // 只登记已见（快照每帧重跑，靠它跳过重复处理）；自己发言不断播报——
         // 正在念的继续，新回复的句子 append 到队尾接着播（2026-12 改）
@@ -284,7 +294,10 @@ watch(
         const key = `${item.conv}:${item.msgID}:${block.id}`
         let stream = blockStreams.get(key)
         if (!stream) {
-          stream = { inc: createSpeechIncrement(), len: historical ? full.length : 0 }
+          // 完结消息里「新出现的块」= 服务端重推历史换了块 id（noteAssistantStream 同款
+          // 场景：新一轮活动把已见过的消息按新块 id 重弹）：内容念过了，游标直接对齐、
+          // 不重播；未完成消息的新块才是流式新段，从头播
+          stream = { inc: createSpeechIncrement(), len: historical || done ? full.length : 0 }
           blockStreams.set(key, stream)
         }
         // 新进监听 / 首帧的已有文本当历史；之后流式长出来的增量（=气泡正在显示的新
