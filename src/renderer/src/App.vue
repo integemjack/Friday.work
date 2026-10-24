@@ -26,6 +26,7 @@ import SessionList from './components/SessionList.vue'
 import AssistantChat from './components/AssistantChat.vue'
 import GhostSessions from './components/GhostSessions.vue'
 import Composer from './components/Composer.vue'
+import ComposerContext from './components/ComposerContext.vue'
 import DesktopBubbles from './components/DesktopBubbles.vue'
 import DesktopOps from './components/DesktopOps.vue'
 import DesktopMediaStacks from './components/DesktopMediaStacks.vue'
@@ -279,6 +280,10 @@ const calling = computed(() => store.calling)
         <VoiceHud />
         <DesktopMediaStacks />
         <div class="composer-dock" ref="composerDockEl">
+          <!-- 选中会话的上下文背景条：标题/状态 + 任务目标、步骤、在跑子 Agent + 模型、目录等详细配置，
+               贴在输入台上方（无壳半透明水印；没选会话或「和助手说」时不出现）。高出来的部分由
+               composerDockEl 的 ResizeObserver 记进 --friday-composer-h，设备浮坞自动跟着上移 -->
+          <ComposerContext />
           <Composer :conversation-id="conversationID" @submit="onComposerSubmit" />
         </div>
       </section>
