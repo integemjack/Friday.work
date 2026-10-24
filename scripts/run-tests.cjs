@@ -35,6 +35,7 @@ run('npx', ['esbuild', 'src/renderer/src/lib/remoteDownload.ts', '--bundle', '--
 run('npx', ['esbuild', 'src/main/ipc/Downloads.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--outfile=.tmp/downloads-main.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/remoteUpload.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/remoteupload.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/builtinCommands.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/builtincommands.cjs'])
+run('npx', ['esbuild', 'src/renderer/src/lib/contextWindow.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/contextwindow.cjs'])
 run('npx', ['esbuild', 'src/protocol/rpc/RpcClient.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/rpcclient.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/devices/rfc2217.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/rfc2217.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/devices/serialSession.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/serialsession.cjs'])
