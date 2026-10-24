@@ -47,7 +47,13 @@ function sampleCpuPct(): number | null {
 }
 
 // ---- GPU / 显存：nvidia-smi（一次查询拿利用率与显存用/总量；没有 nvidia-smi 就没有 GPU 数据） ----
+// 结果缓存 15 秒：主进程常驻快照循环（见下）每 3 秒采一轮，nvidia-smi 单次要几百 ms，
+// 不能让它 3 秒一跑——GPU 数值 15 秒一跳完全够用（进程数也是 15 秒一采）
+const GPU_CACHE_MS = 15_000
+let gpuCache: { at: number; gpu: Pick<SysStats, 'gpuPct' | 'vramUsedMiB' | 'vramTotalMiB'> } | null = null
+
 async function sampleGpu(): Promise<Pick<SysStats, 'gpuPct' | 'vramUsedMiB' | 'vramTotalMiB'>> {
+  if (gpuCache && Date.now() - gpuCache.at < GPU_CACHE_MS) return gpuCache.gpu
   const out = await run('nvidia-smi', [
     '--query-gpu=utilization.gpu,memory.used,memory.total',
     '--format=csv,noheader,nounits'
@@ -56,10 +62,12 @@ async function sampleGpu(): Promise<Pick<SysStats, 'gpuPct' | 'vramUsedMiB' | 'v
   // 切进同一列，Number 出 NaN 被当成「没有 GPU」
   const nums = out?.trim().split(/\r?\n/)[0]?.split(/\s*,\s*/).map(Number)
   // " 34, 3416, 6144"（第一块卡）；列缺失或非数字视为没有
-  if (!nums || nums.length < 3 || nums.slice(0, 3).some((n) => !Number.isFinite(n))) {
-    return { gpuPct: null, vramUsedMiB: null, vramTotalMiB: null }
-  }
-  return { gpuPct: nums[0]!, vramUsedMiB: nums[1]!, vramTotalMiB: nums[2]! }
+  const gpu: Pick<SysStats, 'gpuPct' | 'vramUsedMiB' | 'vramTotalMiB'> =
+    !nums || nums.length < 3 || nums.slice(0, 3).some((n) => !Number.isFinite(n))
+      ? { gpuPct: null, vramUsedMiB: null, vramTotalMiB: null }
+      : { gpuPct: nums[0]!, vramUsedMiB: nums[1]!, vramTotalMiB: nums[2]! }
+  gpuCache = { at: Date.now(), gpu }
+  return gpu
 }
 
 // ---- 进程数：Windows tasklist 数行 / 类 Unix ps 数行 ----
@@ -93,8 +101,10 @@ let inFlight: Promise<SysStats> | null = null
 
 // ---- 跨机器桥：把快照发布到 %ProgramData%\Friday\sysstats.json ----
 // 协议没有系统采样方法，别的电脑连这台 Windows 机器当服务器时，渲染层只能用 fs.read
-// 读这份文件（由这台机器上跑着的 Friday Work 每次采样顺手写）。Linux 服务器不需要
-//（fs.read 直接读 /proc+/sys）。写失败静默：尽力而为，不影响本机 HUD。
+// 读这份文件。Linux 服务器不需要（fs.read 直接读 /proc+/sys）。写失败静默：尽力而为，不影响本机 HUD。
+// tmp 名带 PID：这台机器可能有多个写者（本进程、另一 Friday Work 实例、FridaySysStats.exe），
+// 大家都用固定名 .tmp 会互踩（Collector 日志里「文件正由另一进程使用」十几次，全部丢轮）——
+// rename 的目标（sysstats.json）原子替换，最后写者赢，内容都是这台机器的新鲜快照，谁赢都一样。
 const FRIDAY_DATA_DIR = join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Friday')
 const SNAPSHOT_PATH = join(FRIDAY_DATA_DIR, 'sysstats.json')
 
@@ -102,9 +112,10 @@ async function publishSnapshot(stats: SysStats): Promise<void> {
   if (process.platform !== 'win32') return
   try {
     const payload = JSON.stringify({ ...stats, at: Date.now() })
+    const tmpPath = `${SNAPSHOT_PATH}.${process.pid}.tmp`
     await mkdir(dirname(SNAPSHOT_PATH), { recursive: true })
-    await writeFile(SNAPSHOT_PATH + '.tmp', payload, 'utf8')
-    await rename(SNAPSHOT_PATH + '.tmp', SNAPSHOT_PATH)
+    await writeFile(tmpPath, payload, 'utf8')
+    await rename(tmpPath, SNAPSHOT_PATH)
   } catch {
     // 权限/磁盘问题：跳过这次，下轮采样再试
   }
@@ -166,7 +177,24 @@ export function selfProbePath(): Promise<string | null> {
   return probePath
 }
 
+// ---- 常驻快照循环（Windows）：只要 Friday Work 在跑，sysstats.json 就一直新鲜 ----
+// 原来采样只在「有人开着贾维斯 HUD」时被 sys:stats IPC 拖着跑——HUD 一切走（v-if 卸载）
+// 快照就停更，别的电脑连这台读到的 at 超 10 秒不变，资源全部 N/A。现在主进程自己每 3 秒
+// 采一轮：CPU/RAM 是纯内存计算，GPU 和进程数各带 15 秒缓存，常驻开销可忽略。目标机上
+// 没开 Friday Work 的场景仍由独立采集器 FridaySysStats.exe 覆盖（两者写法兼容：同一路径、
+// 各自的 PID tmp，最后写者赢）。
+let snapshotTimer: NodeJS.Timeout | null = null
+
+function startSnapshotLoop(): void {
+  if (process.platform !== 'win32' || snapshotTimer) return
+  snapshotTimer = setInterval(() => {
+    void systemStats().catch(() => {})
+  }, 3000)
+  snapshotTimer.unref?.() // 不因这个定时器拖住退出
+}
+
 export function registerSysStatsIpc(): void {
   ipcMain.handle('sys:stats', (): Promise<SysStats> => systemStats())
   ipcMain.handle('sys:self-probe', (): Promise<string | null> => selfProbePath())
+  startSnapshotLoop()
 }
