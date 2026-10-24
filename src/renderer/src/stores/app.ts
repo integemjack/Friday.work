@@ -273,7 +273,7 @@ interface SavedLayout {
   nextZ?: number
   cascade?: number
   windows?: SavedWindow[]
-  /** 沉浸模式（左右两栏收起，左上角背景式显示在跑会话）；存着重启后保持收起 */
+  /** 沉浸模式（左右两栏收起，左上角背景式显示在跑会话、右上角显示最近完成的会话，行可点选中）；存着重启后保持收起 */
   panelsHidden?: boolean
   /** 媒体叠（没清空的重启后自动加载回来；2026-10 媒体叠本地缓存） */
   stackMedia?: SavedStackItem[]
@@ -392,7 +392,8 @@ export const useAppStore = defineStore('app', {
     /** 窗口级联计数（新窗口错开摆放） */
     cascade: 0,
     /** 沉浸模式：用户主动收起左栏会话列表和右栏聊天栏（标题栏开关切换）。
-     *  收起时左上角以背景形式显示在跑会话（GhostSessions）；通话中右栏照常让出（挂断/静音唯一入口） */
+     *  收起时左上角以背景形式显示在跑会话、右上角显示最近完成的会话（GhostSessions，行可点选中并恢复两栏）；
+     *  通话中右栏照常让出（挂断/静音唯一入口） */
     panelsHidden: false,
     /** 正在连一台机器（work 通道） */
     connectingWork: false,

@@ -135,11 +135,11 @@ const bridge = window.fridayBridge
     </nav>
 
     <!-- 沉浸开关：收起左栏会话列表和右栏聊天栏（通话面板除外），
-         收起后左上角以背景形式显示在跑会话；点亮 = 沉浸中 -->
+         收起后左上角以背景形式显示在跑会话、右上角显示最近完成的会话（行可点选中并恢复两栏）；点亮 = 沉浸中 -->
     <button
       class="launch-btn view-toggle"
       :class="{ open: store.panelsHidden }"
-      :title="store.panelsHidden ? '显示会话列表与聊天栏' : '收起会话列表与聊天栏（沉浸模式，左上角背景式显示在跑会话）'"
+      :title="store.panelsHidden ? '显示会话列表与聊天栏' : '收起会话列表与聊天栏（沉浸模式，左上角背景式显示在跑会话、右上角显示最近完成的会话，点行选中）'"
       @click="store.togglePanelsHidden()"
     >
       <svg class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
