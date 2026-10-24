@@ -131,24 +131,29 @@ export async function listPhones(): Promise<PhoneInfo[]> {
 
 // MARK: 变更监听（方案-客户端设备 §5.1：手机增减 / 授权状态变化也要发 device.changed）
 
+/** 安卓清单的比对键：id+状态序列化，比对「新基线」和「上次已知的清单」 */
+export function androidKey(phones: PhoneInfo[]): string {
+  return phones.map((phone) => `${phone.id}|${phone.state}`).sort().join(',')
+}
+
 /** adb 的 host:track-devices-l 回复流：OKAY 之后每帧「4 位十六进制长度 + 整份设备列表」。
- *  第一帧是当前快照（基线，不算变化），之后 adb 只在列表变了才推——每帧都是一次变化。 */
+ *  每帧（含第一条基线）都交出去：调用方拿基线和上次已知的清单比对，
+ *  连接断了重连后也一样——「adb 起来后第一帧带着手机」正是要发现的场景。 */
 export class AdbTrackParser {
   private buffer: Buffer = Buffer.alloc(0)
   private saidHello = false
-  private frames = 0
   /** 协议不对（不是 OKAY 开头 / 长度不是十六进制）：调用方该断开重连 */
   failed = false
 
-  /** 喂一段字节，返回这段里完成的「基线之后」的变化帧数 */
-  feed(chunk: Buffer): number {
+  /** 喂一段字节，返回这段里完成的每一帧设备列表（基线在内） */
+  feed(chunk: Buffer): string[] {
     this.buffer = Buffer.concat([this.buffer, chunk])
-    let changes = 0
+    const frames: string[] = []
     if (!this.saidHello) {
-      if (this.buffer.length < 4) return 0
+      if (this.buffer.length < 4) return frames
       if (this.buffer.subarray(0, 4).toString('latin1') !== 'OKAY') {
         this.failed = true
-        return 0
+        return frames
       }
       this.saidHello = true
       this.buffer = this.buffer.subarray(4)
@@ -157,14 +162,13 @@ export class AdbTrackParser {
       const length = Number.parseInt(this.buffer.subarray(0, 4).toString('latin1'), 16)
       if (!Number.isFinite(length)) {
         this.failed = true
-        return changes
+        return frames
       }
       if (this.buffer.length < 4 + length) break
+      frames.push(this.buffer.subarray(4, 4 + length).toString('utf8'))
       this.buffer = this.buffer.subarray(4 + length)
-      this.frames++
-      if (this.frames > 1) changes++
     }
-    return changes
+    return frames
   }
 }
 
@@ -182,12 +186,16 @@ export function isUsbmuxDeviceChange(plist: string): boolean {
 }
 
 const WATCH_RETRY_MS = 30_000
+const WATCH_RETRY_FAST_MS = 5_000
 const WATCH_DEBOUNCE_MS = 250
 
-/** 盯住这台电脑上的手机增减：安卓 = adb server 的 host:track-devices-l（连接保持，列表一变推一整份），
+/** 盯住这台电脑上的手机增减：安卓 = adb server 的 host:track-devices-l（连接保持，列表一变推一整份；
+ *  断线重连后的基线和启动时已知的清单比对——「adb 后启动、第一帧带着手机」也算变化），
  *  iOS = usbmuxd 的 Listen（Attached / Detached）。连不上（没装 platform-tools / iTunes、adb server 还没起）
- *  每 30 秒重试，装好 / 起来后自动接上；短防抖把插上 + 授权到位的连推合成一次。 */
-export function watchPhones(onChange: () => void): { stop(): void } {
+ *  每 30 秒重试，装好 / 起来后自动接上；短防抖把插上 + 授权到位的连推合成一次。
+ *  initialAndroidKey：watcher 启动那次 listPhones 的安卓清单键（androidKey()，没有安卓设备就是 ''）。
+ *  usbmuxd 的 Listen 不发基线，启动时已在的手机由那次 listPhones 本身报告。 */
+export function watchPhones(onChange: () => void, initialAndroidKey = ''): { stop(): void } {
   let stopped = false
   const sockets = new Set<net.Socket>()
   const timers = new Set<NodeJS.Timeout>()
@@ -199,29 +207,41 @@ export function watchPhones(onChange: () => void): { stop(): void } {
       if (!stopped) onChange()
     }, WATCH_DEBOUNCE_MS)
   }
-  const retry = (again: () => void): void => {
+  const retry = (again: () => void, connected: () => boolean): void => {
     if (stopped) return
+    // 从没连上过（adb / usbmuxd 还没装 / 没起）用短间隔：一装好 / 一起来，几秒内就接上
     const timer = setTimeout(() => {
       timers.delete(timer)
       again()
-    }, WATCH_RETRY_MS)
+    }, connected() ? WATCH_RETRY_MS : WATCH_RETRY_FAST_MS)
     timers.add(timer)
   }
 
-  // 安卓：track-devices-l 长连接，AdbTrackParser 只数「基线之后」的帧
+  // 安卓：track-devices-l 长连接；每帧都和「上次已知的清单」比（含重连后的基线）
+  let lastAndroidKey = initialAndroidKey
   const trackAdb = (): void => {
     if (stopped) return
     const socket = net.connect({ host: '127.0.0.1', port: ADB_PORT })
     sockets.add(socket)
+    let adbUp = false
     const parser = new AdbTrackParser()
-    socket.on('connect', () => socket.write(adbRequest('host:track-devices-l')))
+    socket.on('connect', () => {
+      adbUp = true
+      socket.write(adbRequest('host:track-devices-l'))
+    })
     socket.on('data', (chunk) => {
-      if (parser.feed(chunk) > 0) changed()
+      for (const frame of parser.feed(chunk)) {
+        const key = androidKey(parseAdbDevices(frame))
+        if (key !== lastAndroidKey) {
+          lastAndroidKey = key
+          changed()
+        }
+      }
       if (parser.failed) socket.destroy()
     })
     socket.on('close', () => {
       sockets.delete(socket)
-      retry(trackAdb)
+      retry(trackAdb, () => adbUp)
     })
     socket.on('error', () => {})
   }
@@ -231,8 +251,12 @@ export function watchPhones(onChange: () => void): { stop(): void } {
     if (stopped) return
     const socket = net.connect(usbmuxEndpoint())
     sockets.add(socket)
+    let usbmuxUp = false
     let buffer: Buffer = Buffer.alloc(0)
-    socket.on('connect', () => socket.write(usbmuxMessage('Listen')))
+    socket.on('connect', () => {
+      usbmuxUp = true
+      socket.write(usbmuxMessage('Listen'))
+    })
     socket.on('data', (chunk) => {
       buffer = Buffer.concat([buffer, chunk])
       for (;;) {
@@ -244,7 +268,7 @@ export function watchPhones(onChange: () => void): { stop(): void } {
     })
     socket.on('close', () => {
       sockets.delete(socket)
-      retry(listenUsbmux)
+      retry(listenUsbmux, () => usbmuxUp)
     })
     socket.on('error', () => {})
   }

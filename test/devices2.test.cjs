@@ -5,7 +5,7 @@ const assert = require('node:assert/strict')
 const net = require('node:net')
 
 const { AdbGate, filterListing } = require('../.tmp/adbgate.cjs')
-const { parseAdbDevices, parseUsbmuxDevices, usbmuxMessage, adbRequest, AdbTrackParser, takeUsbmuxMessage, isUsbmuxDeviceChange } = require('../.tmp/phones.cjs')
+const { parseAdbDevices, parseUsbmuxDevices, usbmuxMessage, adbRequest, AdbTrackParser, androidKey, takeUsbmuxMessage, isUsbmuxDeviceChange } = require('../.tmp/phones.cjs')
 const { Tunnels, isLocalAddress } = require('../.tmp/tunnels.cjs')
 const { parseIntelHex } = require('../.tmp/intelhex.cjs')
 const { flashStk500 } = require('../.tmp/stk500.cjs')
@@ -99,24 +99,34 @@ test('手机：adb devices-l 解析出型号、状态；usbmux 的 ListDevices �
 
 // MARK: 手机变更监听（device.changed 的手机来源：adb track / usbmuxd Listen）
 
-test('手机监听：adb track 流第一帧是基线不算变化，之后的帧都是变化；跨包、半帧、坏流都对', () => {
+test('手机监听：adb track 流每帧都交出（含基线），跨包、半帧、坏流都对', () => {
   const frame = (text) => Buffer.from(text.length.toString(16).padStart(4, '0') + text, 'latin1')
   const a = 'R5CT device usb:1-1 model:Pixel_8 transport_id:3\n'
   const b = 'R5CT device usb:1-1 model:Pixel_8 transport_id:3\nXYZ unauthorized usb:2-1 transport_id:4\n'
-  // OKAY 和第一帧分三段喂（含半帧）：基线， 0 次变化
+  // OKAY 和第一帧分三段喂（含半帧）：拼齐后基线帧完整交出
   const parser = new AdbTrackParser()
-  assert.equal(parser.feed(Buffer.from('OK', 'latin1')), 0)
-  assert.equal(parser.feed(Buffer.concat([Buffer.from('AY', 'latin1'), frame(a).subarray(0, 5)])), 0)
-  assert.equal(parser.feed(frame(a).subarray(5)), 0)
-  // 列表变了（第二帧）：1 次变化；一包里连着几帧也数对
-  assert.equal(parser.feed(frame(b)), 1)
+  assert.deepEqual(parser.feed(Buffer.from('OK', 'latin1')), [])
+  assert.deepEqual(parser.feed(Buffer.concat([Buffer.from('AY', 'latin1'), frame(a).subarray(0, 5)])), [])
+  assert.deepEqual(parser.feed(frame(a).subarray(5)), [a])
+  // 一包里连着几帧也都交出
   const batch = new AdbTrackParser()
   batch.feed(Buffer.from('OKAY', 'latin1'))
-  assert.equal(batch.feed(Buffer.concat([frame(a), frame(a), frame(b)])), 2)
+  assert.deepEqual(batch.feed(Buffer.concat([frame(a), frame(a), frame(b)])), [a, a, b])
   // 不是 OKAY 开头 = 协议不对，置 failed
   const bad = new AdbTrackParser()
   bad.feed(Buffer.from('FAIL001fserver is broken     ', 'latin1'))
   assert.equal(bad.failed, true)
+})
+
+test('手机监听：清单比对键——空基线对着 adb 后启动带来的手机算变化，同清单重推、仅状态变化都分辨得出', () => {
+  const a = 'R5CT device usb:1-1 model:Pixel_8 transport_id:3\n'
+  const b = 'R5CT device usb:1-1 model:Pixel_8 transport_id:3\nXYZ unauthorized usb:2-1 transport_id:4\n'
+  const keyA = androidKey(parseAdbDevices(a))
+  assert.equal(androidKey(parseAdbDevices('')), '', '空清单的键是空串（watcher 启动时 adb 没跑）')
+  assert.notEqual(keyA, '', 'adb 后启动、基线带着手机：键变了，算变化')
+  assert.equal(keyA, androidKey(parseAdbDevices(a)), '同一清单重推（重连基线）键不变，不触发')
+  assert.notEqual(keyA, androidKey(parseAdbDevices(b)), '多了一台手机算变化')
+  assert.notEqual(keyA, androidKey(parseAdbDevices('R5CT unauthorized usb:1-1 transport_id:3\n')), '授权状态变化也算变化')
 })
 
 test('手机监听：usbmux 消息要完整一条才切出来，Attached / Detached 算变化、Listen 回执不算', () => {

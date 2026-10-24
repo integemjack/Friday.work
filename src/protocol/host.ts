@@ -14,7 +14,7 @@ import { parseTarget, targetToText, targetDisplayName } from './session/TargetPa
 import type { WorkPortMessage } from './work/WorkTransport.js'
 import { SchatService } from './schat/SchatService.js'
 import { Uploads } from './media/Uploads.js'
-import { listPhones, watchPhones } from './device/Phones.js'
+import { listPhones, watchPhones, androidKey, type PhoneInfo } from './device/Phones.js'
 import { Tunnels } from './device/Tunnels.js'
 import type { TunnelPortMessage } from '../shared/api.js'
 
@@ -189,10 +189,15 @@ export class ProtocolHost {
   }
 
   /** 手机增减监听（方案-客户端设备 §5.1 device.changed 的手机来源）。变化经数据面端口告诉渲染层，
-   *  由 DeviceBroker 发 device.changed——只有发过 device.* 请求的机器会收到 */
-  private ensurePhoneWatcher(): void {
+   *  由 DeviceBroker 发 device.changed——只有发过 device.* 请求的机器会收到。
+   *  firstListing：启动那次 listPhones 的结果，作为比对基线——之后 adb 才起来时，
+   *  track 的第一帧若与它不同（比如带着手机）就是一次变化 */
+  private ensurePhoneWatcher(firstListing: PhoneInfo[]): void {
     if (this.phoneWatch) return
-    this.phoneWatch = watchPhones(() => this.port?.postMessage({ type: 'device.phones.changed' } satisfies DevicePortMessage))
+    this.phoneWatch = watchPhones(
+      () => this.port?.postMessage({ type: 'device.phones.changed' } satisfies DevicePortMessage),
+      androidKey(firstListing)
+    )
   }
 
   private failPendingDevice(match: (pending: PendingDevice) => boolean, reason: string): void {
@@ -401,9 +406,10 @@ export class ProtocolHost {
         return { iceServers: await this.schat.iceServers() }
 
       case 'device.phones': {
-        // 顺手把手机变更监听挂上（第一次问手机时启动，之后常驻）：插拔 / 授权变化 → device.changed
-        this.ensurePhoneWatcher()
-        return { phones: await listPhones() }
+        // 先问清单再挂监听：把这次的结果当比对基线（adb 后起来、第一帧带着手机也算变化）
+        const phones = await listPhones()
+        this.ensurePhoneWatcher(phones)
+        return { phones }
       }
 
       case 'device.tunnel.open':
