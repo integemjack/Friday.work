@@ -76,8 +76,12 @@ class HostLink {
           for (const listener of this.workListeners) {
             listener(incoming as { type: string; machineID: string } & Record<string, unknown>)
           }
-        } else if (incoming.type === 'device.request' || incoming.type === 'device.cancel') {
-          // 客户端设备：服务端的 device.* 请求（DeviceBroker 接）
+        } else if (
+          incoming.type === 'device.request' ||
+          incoming.type === 'device.cancel' ||
+          incoming.type === 'device.phones.changed'
+        ) {
+          // 客户端设备：服务端的 device.* 请求 / 本机手机增减（DeviceBroker 接）
           for (const listener of this.deviceListeners) listener(incoming as unknown as DevicePortMessage)
         } else if (incoming.type === 'tunnel.data' || incoming.type === 'tunnel.closed') {
           // 客户端设备：TCP 隧道 socket 那头的字节 / 关了（DeviceBroker 的 TcpSession 接）

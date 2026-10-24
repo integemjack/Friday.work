@@ -5,7 +5,7 @@ const assert = require('node:assert/strict')
 const net = require('node:net')
 
 const { AdbGate, filterListing } = require('../.tmp/adbgate.cjs')
-const { parseAdbDevices, parseUsbmuxDevices, usbmuxMessage, adbRequest } = require('../.tmp/phones.cjs')
+const { parseAdbDevices, parseUsbmuxDevices, usbmuxMessage, adbRequest, AdbTrackParser, takeUsbmuxMessage, isUsbmuxDeviceChange } = require('../.tmp/phones.cjs')
 const { Tunnels, isLocalAddress } = require('../.tmp/tunnels.cjs')
 const { parseIntelHex } = require('../.tmp/intelhex.cjs')
 const { flashStk500 } = require('../.tmp/stk500.cjs')
@@ -95,6 +95,48 @@ test('手机：adb devices-l 解析出型号、状态；usbmux 的 ListDevices �
   assert.equal(message.readUInt32LE(8), 8)
   assert.match(message.subarray(16).toString(), /<string>ListDevices<\/string>/)
   assert.equal(Buffer.from(adbRequest('host:devices-l')).toString(), '000ehost:devices-l')
+})
+
+// MARK: 手机变更监听（device.changed 的手机来源：adb track / usbmuxd Listen）
+
+test('手机监听：adb track 流第一帧是基线不算变化，之后的帧都是变化；跨包、半帧、坏流都对', () => {
+  const frame = (text) => Buffer.from(text.length.toString(16).padStart(4, '0') + text, 'latin1')
+  const a = 'R5CT device usb:1-1 model:Pixel_8 transport_id:3\n'
+  const b = 'R5CT device usb:1-1 model:Pixel_8 transport_id:3\nXYZ unauthorized usb:2-1 transport_id:4\n'
+  // OKAY 和第一帧分三段喂（含半帧）：基线， 0 次变化
+  const parser = new AdbTrackParser()
+  assert.equal(parser.feed(Buffer.from('OK', 'latin1')), 0)
+  assert.equal(parser.feed(Buffer.concat([Buffer.from('AY', 'latin1'), frame(a).subarray(0, 5)])), 0)
+  assert.equal(parser.feed(frame(a).subarray(5)), 0)
+  // 列表变了（第二帧）：1 次变化；一包里连着几帧也数对
+  assert.equal(parser.feed(frame(b)), 1)
+  const batch = new AdbTrackParser()
+  batch.feed(Buffer.from('OKAY', 'latin1'))
+  assert.equal(batch.feed(Buffer.concat([frame(a), frame(a), frame(b)])), 2)
+  // 不是 OKAY 开头 = 协议不对，置 failed
+  const bad = new AdbTrackParser()
+  bad.feed(Buffer.from('FAIL001fserver is broken     ', 'latin1'))
+  assert.equal(bad.failed, true)
+})
+
+test('手机监听：usbmux 消息要完整一条才切出来，Attached / Detached 算变化、Listen 回执不算', () => {
+  const message = (inner) => {
+    const body = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${inner}</dict></plist>\n`)
+    const head = Buffer.alloc(16)
+    head.writeUInt32LE(16 + body.length, 0)
+    head.writeUInt32LE(8, 8)
+    head.writeUInt32LE(1, 12)
+    return Buffer.concat([head, body])
+  }
+  const result = message('<key>MessageType</key><string>Result</string><key>Result</key><string>Success</string>')
+  const attached = message('<key>MessageType</key><string>Attached</string><key>DeviceID</key><integer>7</integer>')
+  assert.equal(takeUsbmuxMessage(result.subarray(0, 20)), null, '半条不算')
+  const cut = takeUsbmuxMessage(Buffer.concat([result, attached]))
+  assert.ok(cut)
+  assert.equal(isUsbmuxDeviceChange(cut.body), false, 'Listen 的 Result 回执不算')
+  assert.equal(cut.rest.length, attached.length, '剩下的正好是下一条')
+  assert.equal(isUsbmuxDeviceChange(cut.rest.subarray(16).toString()), true, 'Attached 算变化')
+  assert.equal(isUsbmuxDeviceChange('<plist><dict><key>MessageType</key><string>Detached</string></dict></plist>'), true)
 })
 
 test('隧道：只放行本机 / 局域网地址', () => {

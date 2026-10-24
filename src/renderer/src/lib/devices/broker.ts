@@ -123,6 +123,8 @@ class DeviceBroker {
   private readonly stoppers = new Map<string, () => void>()
   /** 发过 device.* 请求的机器（设备增减时通知它们） */
   private readonly machinesSeen = new Set<string>()
+  /** 订阅本机设备清单变化的界面回调（设备窗口自动刷新用） */
+  private readonly localListeners = new Set<() => void>()
   /** TCP 隧道：会话 id → 会话（socket 在协议进程） */
   private readonly tunnels = new Map<string, { session: TcpSession; machineID: string }>()
   /** 后台跑着的工具：runId → 哪台机器要的 */
@@ -154,6 +156,7 @@ class DeviceBroker {
 
   handle(message: DevicePortMessage): void {
     if (message.type === 'device.request') void this.run(message)
+    else if (message.type === 'device.phones.changed') this.devicesChanged()
     else if (message.type === 'device.cancel') {
       const promptId = this.promptOfRequest.get(message.rid)
       if (promptId !== undefined) this.promptAnswers.get(promptId)?.('deny')
@@ -218,8 +221,15 @@ class DeviceBroker {
     host.postDevice({ type: 'device.notify', machineID, method, params })
   }
 
+  /** 界面用：这台电脑的设备清单变了（手机插拔 / 授权、串口、摄像头），订阅了就刷新 */
+  onLocalDevicesChanged(listener: () => void): () => void {
+    this.localListeners.add(listener)
+    return () => this.localListeners.delete(listener)
+  }
+
   private devicesChanged(): void {
     for (const machineID of this.machinesSeen) this.notify(machineID, 'device.changed', {})
+    for (const listener of this.localListeners) listener()
   }
 
   // MARK: 设备清单

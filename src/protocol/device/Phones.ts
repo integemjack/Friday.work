@@ -128,3 +128,135 @@ export async function listPhones(): Promise<PhoneInfo[]> {
   const [android, ios] = await Promise.all([androidPhones().catch(() => []), iosDevices().catch(() => [])])
   return [...android, ...ios]
 }
+
+// MARK: 变更监听（方案-客户端设备 §5.1：手机增减 / 授权状态变化也要发 device.changed）
+
+/** adb 的 host:track-devices-l 回复流：OKAY 之后每帧「4 位十六进制长度 + 整份设备列表」。
+ *  第一帧是当前快照（基线，不算变化），之后 adb 只在列表变了才推——每帧都是一次变化。 */
+export class AdbTrackParser {
+  private buffer: Buffer = Buffer.alloc(0)
+  private saidHello = false
+  private frames = 0
+  /** 协议不对（不是 OKAY 开头 / 长度不是十六进制）：调用方该断开重连 */
+  failed = false
+
+  /** 喂一段字节，返回这段里完成的「基线之后」的变化帧数 */
+  feed(chunk: Buffer): number {
+    this.buffer = Buffer.concat([this.buffer, chunk])
+    let changes = 0
+    if (!this.saidHello) {
+      if (this.buffer.length < 4) return 0
+      if (this.buffer.subarray(0, 4).toString('latin1') !== 'OKAY') {
+        this.failed = true
+        return 0
+      }
+      this.saidHello = true
+      this.buffer = this.buffer.subarray(4)
+    }
+    while (this.buffer.length >= 4) {
+      const length = Number.parseInt(this.buffer.subarray(0, 4).toString('latin1'), 16)
+      if (!Number.isFinite(length)) {
+        this.failed = true
+        return changes
+      }
+      if (this.buffer.length < 4 + length) break
+      this.buffer = this.buffer.subarray(4 + length)
+      this.frames++
+      if (this.frames > 1) changes++
+    }
+    return changes
+  }
+}
+
+/** 从缓冲里取出一条完整的 usbmux 消息（16 字节小端头 + plist）；不够一条返回 null */
+export function takeUsbmuxMessage(buffer: Buffer): { body: string; rest: Buffer } | null {
+  if (buffer.length < 16) return null
+  const size = buffer.readUInt32LE(0)
+  if (size < 16 || buffer.length < size) return null
+  return { body: buffer.subarray(16, size).toString('utf8'), rest: buffer.subarray(size) }
+}
+
+/** usbmuxd 推来的消息是不是设备增减（Attached / Detached）；Listen 的回执（Result）不算 */
+export function isUsbmuxDeviceChange(plist: string): boolean {
+  return /<key>MessageType<\/key>\s*<string>(?:Attached|Detached)<\/string>/.test(plist)
+}
+
+const WATCH_RETRY_MS = 30_000
+const WATCH_DEBOUNCE_MS = 250
+
+/** 盯住这台电脑上的手机增减：安卓 = adb server 的 host:track-devices-l（连接保持，列表一变推一整份），
+ *  iOS = usbmuxd 的 Listen（Attached / Detached）。连不上（没装 platform-tools / iTunes、adb server 还没起）
+ *  每 30 秒重试，装好 / 起来后自动接上；短防抖把插上 + 授权到位的连推合成一次。 */
+export function watchPhones(onChange: () => void): { stop(): void } {
+  let stopped = false
+  const sockets = new Set<net.Socket>()
+  const timers = new Set<NodeJS.Timeout>()
+  let notifyTimer: NodeJS.Timeout | null = null
+  const changed = (): void => {
+    if (notifyTimer || stopped) return
+    notifyTimer = setTimeout(() => {
+      notifyTimer = null
+      if (!stopped) onChange()
+    }, WATCH_DEBOUNCE_MS)
+  }
+  const retry = (again: () => void): void => {
+    if (stopped) return
+    const timer = setTimeout(() => {
+      timers.delete(timer)
+      again()
+    }, WATCH_RETRY_MS)
+    timers.add(timer)
+  }
+
+  // 安卓：track-devices-l 长连接，AdbTrackParser 只数「基线之后」的帧
+  const trackAdb = (): void => {
+    if (stopped) return
+    const socket = net.connect({ host: '127.0.0.1', port: ADB_PORT })
+    sockets.add(socket)
+    const parser = new AdbTrackParser()
+    socket.on('connect', () => socket.write(adbRequest('host:track-devices-l')))
+    socket.on('data', (chunk) => {
+      if (parser.feed(chunk) > 0) changed()
+      if (parser.failed) socket.destroy()
+    })
+    socket.on('close', () => {
+      sockets.delete(socket)
+      retry(trackAdb)
+    })
+    socket.on('error', () => {})
+  }
+
+  // iOS：usbmuxd 的 Listen，Attached / Detached 推送
+  const listenUsbmux = (): void => {
+    if (stopped) return
+    const socket = net.connect(usbmuxEndpoint())
+    sockets.add(socket)
+    let buffer: Buffer = Buffer.alloc(0)
+    socket.on('connect', () => socket.write(usbmuxMessage('Listen')))
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk])
+      for (;;) {
+        const message = takeUsbmuxMessage(buffer)
+        if (!message) break
+        buffer = message.rest
+        if (isUsbmuxDeviceChange(message.body)) changed()
+      }
+    })
+    socket.on('close', () => {
+      sockets.delete(socket)
+      retry(listenUsbmux)
+    })
+    socket.on('error', () => {})
+  }
+
+  trackAdb()
+  listenUsbmux()
+  return {
+    stop(): void {
+      stopped = true
+      if (notifyTimer) clearTimeout(notifyTimer)
+      for (const timer of timers) clearTimeout(timer)
+      for (const socket of sockets) socket.destroy()
+    }
+  }
+}

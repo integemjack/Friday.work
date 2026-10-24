@@ -169,3 +169,5 @@ export type DevicePortMessage =
   | { type: 'device.reply'; rid: number; ok: false; code: number; message: string }
   /** 渲染 → 协议：给这台机器的服务端发一条通知（进度 / 会话关了 / 设备变了） */
   | { type: 'device.notify'; machineID: string; method: string; params: unknown }
+  /** 协议 → 渲染：这台电脑上的手机变了（adb 的 track-devices-l / usbmuxd 的 Listen 盯着），该发 device.changed */
+  | { type: 'device.phones.changed' }

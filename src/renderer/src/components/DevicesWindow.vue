@@ -5,7 +5,7 @@
 //   使用中：同桌面上的提示条，可断开；始终允许：可撤销（同设置 › 本机设备授权）。
 // 这里只列、不动设备：真正打开设备都是远端发请求、这边问过人之后。
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { deviceBroker, deviceUi } from '../lib/devices/broker.js'
 import { CAPABILITY_LABEL, deviceGrants, revokeGrant } from '../lib/devices/grants.js'
@@ -71,7 +71,13 @@ async function refresh(): Promise<void> {
   }
 }
 
-onMounted(() => void refresh())
+// 本机设备清单变了（手机插拔、串口、摄像头）会自动刷新，不用手点
+let offLocalDevices: (() => void) | null = null
+onMounted(() => {
+  void refresh()
+  offLocalDevices = deviceBroker.onLocalDevicesChanged(() => void refresh())
+})
+onUnmounted(() => offLocalDevices?.())
 </script>
 
 <template>
@@ -86,7 +92,7 @@ onMounted(() => void refresh())
         <button class="small-btn" :disabled="loading" @click="refresh">{{ loading ? '在看…' : '刷新' }}</button>
       </div>
       <div v-if="error" class="error">{{ error }}</div>
-      <div v-if="!loading && groups.length === 0" class="empty-line">没找到设备（插上开发板 / 手机后点刷新）</div>
+      <div v-if="!loading && groups.length === 0" class="empty-line">没找到设备（插上手机会自动出现；开发板可点刷新）</div>
       <div v-for="group in groups" :key="group.kind" class="group">
         <div class="group-title">{{ KIND_TITLE[group.kind] ?? group.kind }}</div>
         <div class="group-hint">{{ KIND_HINT[group.kind] }}</div>

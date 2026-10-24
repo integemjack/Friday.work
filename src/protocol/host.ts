@@ -14,7 +14,7 @@ import { parseTarget, targetToText, targetDisplayName } from './session/TargetPa
 import type { WorkPortMessage } from './work/WorkTransport.js'
 import { SchatService } from './schat/SchatService.js'
 import { Uploads } from './media/Uploads.js'
-import { listPhones } from './device/Phones.js'
+import { listPhones, watchPhones } from './device/Phones.js'
 import { Tunnels } from './device/Tunnels.js'
 import type { TunnelPortMessage } from '../shared/api.js'
 
@@ -62,6 +62,8 @@ export class ProtocolHost {
   /** 转给渲染进程、还没回的 device.* 请求 */
   private readonly pendingDevice = new Map<number, PendingDevice>()
   private nextDeviceRid = 1
+  /** 手机增减监听（adb track-devices-l / usbmuxd Listen）：第一次有人问手机时挂上，之后常驻 */
+  private phoneWatch: { stop(): void } | null = null
 
   constructor(
     backends: MainBackends,
@@ -184,6 +186,13 @@ export class ProtocolHost {
     if (message.type === 'device.notify') {
       this.machines.get(message.machineID)?.notify(message.method, message.params)
     }
+  }
+
+  /** 手机增减监听（方案-客户端设备 §5.1 device.changed 的手机来源）。变化经数据面端口告诉渲染层，
+   *  由 DeviceBroker 发 device.changed——只有发过 device.* 请求的机器会收到 */
+  private ensurePhoneWatcher(): void {
+    if (this.phoneWatch) return
+    this.phoneWatch = watchPhones(() => this.port?.postMessage({ type: 'device.phones.changed' } satisfies DevicePortMessage))
   }
 
   private failPendingDevice(match: (pending: PendingDevice) => boolean, reason: string): void {
@@ -391,8 +400,11 @@ export class ProtocolHost {
       case 'schat.call.ice':
         return { iceServers: await this.schat.iceServers() }
 
-      case 'device.phones':
+      case 'device.phones': {
+        // 顺手把手机变更监听挂上（第一次问手机时启动，之后常驻）：插拔 / 授权变化 → device.changed
+        this.ensurePhoneWatcher()
         return { phones: await listPhones() }
+      }
 
       case 'device.tunnel.open':
         await this.tunnels.open(request.id, request.target)
