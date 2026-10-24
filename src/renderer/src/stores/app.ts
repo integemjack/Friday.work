@@ -40,6 +40,7 @@ import {
   type ConversationSummary,
   type DirectoriesState,
   type PendingApproval,
+  type PermissionMode,
   type RunnerState,
   type Runtime,
   type SessionActivity,
@@ -245,6 +246,44 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
 /** 操作卡是否已到终态（终态才计时渐隐） */
 function terminalStatus(status: DesktopOp['status']): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'denied'
+}
+
+// MARK: 新对话的「上次选的」（REMOTE.md：权限、思考档位记在客户端本机的设置里，本机和各台远程共用一份；
+// 这里存 localStorage——这台客户端 UI 的偏好，不随远程机器变。输入框的权限选择器和模型菜单改档时记下，
+// conversation.create 时带上，新会话就接着用）
+
+interface NewChatDefaults {
+  permissionMode?: PermissionMode
+  thinking?: ThinkingLevel
+  /** teamMode：有 teamModePerConversation 的服务端自己会记成新对话默认，这里这份只给没选会话时的展示 */
+  teamMode?: string
+}
+
+const NEW_CHAT_KEY = 'friday.work.newChatDefaults.v1'
+
+function loadNewChatDefaults(): NewChatDefaults {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(NEW_CHAT_KEY) ?? '{}') as Partial<NewChatDefaults>
+    return {
+      ...(parsed.permissionMode === 'auto' || parsed.permissionMode === 'plan' || parsed.permissionMode === 'full'
+        ? { permissionMode: parsed.permissionMode }
+        : {}),
+      ...(parsed.thinking === 'off' || parsed.thinking === 'low' || parsed.thinking === 'medium' || parsed.thinking === 'high' || parsed.thinking === 'ultra'
+        ? { thinking: parsed.thinking }
+        : {}),
+      ...(typeof parsed.teamMode === 'string' && parsed.teamMode ? { teamMode: parsed.teamMode } : {})
+    }
+  } catch {
+    return {} // localStorage 不可用 / 存的不足 JSON：本次会话内重新记
+  }
+}
+
+function saveNewChatDefaults(defaults: NewChatDefaults): void {
+  try {
+    localStorage.setItem(NEW_CHAT_KEY, JSON.stringify(defaults))
+  } catch {
+    // localStorage 不可用：本次会话内生效即可
+  }
 }
 
 // MARK: 窗口布局持久化（方案 §2「本地只留：…UI 偏好」；存 localStorage，重启恢复）
@@ -512,6 +551,9 @@ export const useAppStore = defineStore('app', {
     usageWanted: false,
     /** 新对话默认引擎（liveState；输入框的模型选择器在未选过时显示它） */
     defaultEngineID: '',
+    /** 新对话的「上次选的」权限 / 思考档位 / 任务模式（本机 localStorage，见 NewChatDefaults）：
+     *  没选会话时选择器显示这份，conversation.create 也带上它（REMOTE.md：客户端本机记，各台远程共用） */
+    newChatDefaults: loadNewChatDefaults(),
     /** 当前机器最近选择的工作目录（hello 快照 + directories 事件；输入框的目录选择器用）。
      *  null = 旧服务端没有 directories：菜单里不列最近、选了也不记（REMOTE.md §5 DirectoriesState） */
     recentDirectories: null as Array<{ path: string; exists: boolean }> | null,
@@ -1164,28 +1206,35 @@ export const useAppStore = defineStore('app', {
     },
 
     /** 新建会话并打开。注意：服务端会规范化 id（转大写存储），必须用回执里的 id，后续事件的 id 都以它为准。
-     *  options：新建时直接带上工作目录 / 引擎（REMOTE.md conversation.create 支持），不用建完再改一遍。
-     *  返回新会话 id（没连上/出错时 undefined） */
+     *  options：新建时直接带上工作目录 / 引擎 / 权限 / 思考档位 / 任务模式（REMOTE.md conversation.create 支持），
+     *  不用建完再改一遍；没给的项用「上次选的」（newChatDefaults，REMOTE.md：新会话带上客户端本机记的）。返回新会话 id（没连上/出错时 undefined） */
     async createConversation(options?: {
       workingDirectory?: string
       engineID?: string
       teamMode?: string
       thinking?: ThinkingLevel
+      permissionMode?: PermissionMode
     }): Promise<string | undefined> {
       if (!this.currentMachine) return
       try {
         const id = crypto.randomUUID()
+        // 明确传了的优先，没传的接本机「上次选的」（undefined 的键不覆盖）
+        const merged: NewChatDefaults & { workingDirectory?: string; engineID?: string } = {
+          ...this.newChatDefaults,
+          ...Object.fromEntries(Object.entries(options ?? {}).filter(([, value]) => value !== undefined))
+        }
         const result = (await rpc(this.currentMachine, 'conversation.create', {
           id,
-          ...(options?.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
-          ...(options?.engineID ? { engineID: options.engineID } : {}),
-          ...(options?.teamMode ? { teamMode: options.teamMode } : {}),
-          ...(options?.thinking ? { thinking: options.thinking } : {})
+          ...(merged.workingDirectory ? { workingDirectory: merged.workingDirectory } : {}),
+          ...(merged.engineID ? { engineID: merged.engineID } : {}),
+          ...(merged.teamMode ? { teamMode: merged.teamMode } : {}),
+          ...(merged.thinking ? { thinking: merged.thinking } : {}),
+          ...(merged.permissionMode ? { permissionMode: merged.permissionMode } : {})
         })) as { id: string }
         const canonicalID = result.id ?? id
-        if (options?.workingDirectory) {
+        if (merged.workingDirectory) {
           // 记进这台机器的最近目录（旧服务端不认，静默忽略）
-          rpc(this.currentMachine, 'directories.push', { path: options.workingDirectory }).catch(() => {})
+          rpc(this.currentMachine, 'directories.push', { path: merged.workingDirectory }).catch(() => {})
         }
         await this.openConversation(canonicalID)
         await this.refreshSummaries()
@@ -1850,7 +1899,7 @@ export const useAppStore = defineStore('app', {
     },
 
     /** 这段对话的任务模式（REMOTE.md runner.setTeamMode，2.9 起 feature teamModePerConversation：服务端同时记成新对话默认；
-     *  没有这个功能的旧服务端改那台的全局 settings.update teamMode） */
+     *  没有这个功能的旧服务端改那台的全局 settings.update teamMode）。客户端同时记本机「上次选的」给没选会话时的展示 */
     async setTeamMode(conversationID: string, mode: string) {
       if (!this.currentMachine) return
       const perConversation = this.currentMachineInfo?.serverInfo?.features?.includes('teamModePerConversation') ?? false
@@ -1858,9 +1907,11 @@ export const useAppStore = defineStore('app', {
       else await rpc(this.currentMachine, 'settings.update', { teamMode: mode })
       const summary = this.summaries.find((item) => item.id === conversationID)
       if (summary) summary.teamMode = mode
+      this.setNewChatDefaults({ teamMode: mode })
     },
 
-    /** 这段对话的深度思考档位（REMOTE.md runner.setThinking {conversationID, level}） */
+    /** 这段对话的深度思考档位（REMOTE.md runner.setThinking {conversationID, level}）；
+     *  同步记本机「上次选的」（REMOTE.md：客户端那边同时把它记成本机设置），新会话带上它 */
     async setThinking(conversationID: string, level: ThinkingLevel) {
       if (!this.currentMachine) return
       await rpc(this.currentMachine, 'runner.setThinking', { conversationID, level })
@@ -1868,6 +1919,26 @@ export const useAppStore = defineStore('app', {
       if (summary) summary.thinking = level
       const runtime = this.details[conversationID]?.runtime
       if (runtime) runtime.thinkingLevel = level
+      this.setNewChatDefaults({ thinking: level })
+    },
+
+    /** 这段对话的工具权限（REMOTE.md runner.setPermissionMode {conversationID, mode}：auto 自动 / plan 计划 / full 完全）。
+     *  同 setEngine：先乐观更新 summaries，服务端确认后 summaries/runtime 事件会盖回来；
+     *  同步记本机「上次选的」（REMOTE.md：客户端那边同时把它记成本机设置），新会话带上它 */
+    async setPermissionMode(conversationID: string, mode: PermissionMode) {
+      if (!this.currentMachine) return
+      await rpc(this.currentMachine, 'runner.setPermissionMode', { conversationID, mode })
+      const summary = this.summaries.find((item) => item.id === conversationID)
+      if (summary) summary.permissionMode = mode
+      const runtime = this.details[conversationID]?.runtime
+      if (runtime) runtime.permissionMode = mode
+      this.setNewChatDefaults({ permissionMode: mode })
+    },
+
+    /** 记「上次选的」（本机 localStorage；合着旧的一起存）。action 里直接调，不用 await */
+    setNewChatDefaults(patch: NewChatDefaults) {
+      this.newChatDefaults = { ...this.newChatDefaults, ...patch }
+      saveNewChatDefaults(this.newChatDefaults)
     },
 
     /** 切换这段会话的工作目录（REMOTE.md：runner.setWorkingDirectory {conversationID, path?}；path 不写 = 回默认）。

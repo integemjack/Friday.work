@@ -135,13 +135,14 @@ const contextMixRows = computed(() => {
 
 /** 所有思考档位（runtime 没给能调的档位时兜底，保证 ultra 也能翻出标题来） */
 const ALL_THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'ultra']
-/** 任务模式短名（/mode 菜单同款口径，短一点塞得进一行） */
+/** 任务模式短名（/mode 菜单同款口径，短一点塞得进一行；ultra 2026-10-23 起叫「工作流」） */
 const TEAM_MODE_SHORT: Record<string, string> = {
   solo: '不派',
   delegatesHeavy: '需要时派',
-  ultra: '极限'
+  ultra: '工作流'
 }
-const PERMISSION_SHORT: Record<string, string> = { auto: '自动', plan: '先方案', full: '全放行' }
+/** 权限短名（== Qt PermissionMode.title：自动 / 计划 / 完全，与输入框的权限选择器同一口径） */
+const PERMISSION_SHORT: Record<string, string> = { auto: '自动', plan: '计划', full: '完全' }
 
 /** 详细信息行的一项：正文 + 悬停提示 + 高亮色（占比高时警示） */
 interface MetaItem {

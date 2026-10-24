@@ -3,7 +3,7 @@
 // 输入框打「/」时菜单里总有这三项（来源「内置」）——这台一个命令文件都没有时菜单也照样弹；打「/model 」「/mode 」「/thinking 」后
 // 菜单换成能选的模型、任务模式、思考档位，选中（或发出「/命令 名字」）就换这段对话的、同时记成新对话的默认，不发给模型。
 // 这里只管认参数、列、认是哪个（纯函数，测试直接调）；真正去换的是 Composer。
-import type { CommandInfo, ThinkingLevel } from '../../../protocol/rpc/protocol.js'
+import type { CommandInfo, PermissionMode, ThinkingLevel } from '../../../protocol/rpc/protocol.js'
 
 export type BuiltinName = 'model' | 'mode' | 'thinking'
 export type BuiltinActionKind = 'setEngine' | 'setTeamMode' | 'setThinking'
@@ -32,13 +32,13 @@ const NAMES: BuiltinName[] = ['model', 'mode', 'thinking']
 
 const HINTS: Record<BuiltinName, string> = {
   model: '[模型]',
-  mode: '[不派 | 需要时派 | 极限]',
+  mode: '[不派 | 需要时派 | 工作流]',
   thinking: '[关 | 低 | 中 | 高]'
 }
 
 const DETAILS: Record<BuiltinName, string> = {
   model: '换主智能体用的模型，同时设成新对话的默认',
-  mode: '换任务模式（派不派子智能体、极限性能），同时设成新对话的默认',
+  mode: '换任务模式（派不派子智能体、工作流），同时设成新对话的默认',
   thinking: '换思考模式（深度思考的档位），同时设成新对话的默认'
 }
 
@@ -79,11 +79,12 @@ export interface TeamModeInfo {
   detail: string
 }
 
-/** 模型菜单里列的三项（不派的标题带「（默认）」） */
+/** 模型菜单里列的三项（不派的标题带「（默认）」；ultra 2026-10-23 起叫「工作流」：思考不再强制最高，
+ *  框架按依赖派子智能体并联 / 串联执行、做完验收不合格打回，== Qt 端文案） */
 export const TEAM_MODES: TeamModeInfo[] = [
   { raw: 'solo', title: '不派子智能体（默认）', detail: '主智能体自己做' },
   { raw: 'delegatesHeavy', title: '需要时派子智能体', detail: '主智能体自己做，活大、多步、能并行时派子智能体' },
-  { raw: 'ultra', title: '极限性能', detail: '最贵也最全面：思考开到最高，子智能体还能再往下派、分多层做' }
+  { raw: 'ultra', title: '工作流', detail: '先定制完整流程，子智能体并联 / 串联去做，做完验收、不合格打回重做' }
 ]
 
 /** 2.11 以前的 delegatesOnly / delegatesWhenNeeded 按 delegatesHeavy 算（== AgentTeamMode::normalized） */
@@ -106,7 +107,7 @@ export function resolveTeamMode(argument: string): string | null {
   const aliases = [
     ['solo', '不派', '不派子智能体', '自己做', '默认'],
     ['delegatesheavy', 'heavy', 'delegate', 'delegates', '派', '需要时派', '需要时派子智能体', '需要'],
-    ['ultra', '极限', '极限性能', '最强']
+    ['ultra', 'workflow', '工作流', '流程', '极限', '极限性能', '最强']
   ]
   const index = aliases.findIndex((list) => list.includes(wanted))
   if (index >= 0) return TEAM_MODES[index]!.raw
@@ -230,8 +231,7 @@ export function builtinChoices(command: BuiltinName, filter: string, context: Bu
         })
     }
   } else {
-    // 极限性能时思考固定开到最高（同模型菜单里思考模式变灰）
-    if (normalizeTeamMode(context.teamMode) === 'ultra') return []
+    // 档位只在这个模型能调的里面（== Qt；2026-10-23 起工作流模式也能调思考，不再固定最高）
     const levels = context.thinkingLevels
     const effective = effectiveThinking(context.thinkingLevel, levels)
     for (const level of levels) {
@@ -259,7 +259,27 @@ export function resolveBuiltin(command: BuiltinName, argument: string, context: 
     const mode = resolveTeamMode(argument)
     return mode ? { kind: 'setTeamMode', value: mode } : null
   }
-  if (normalizeTeamMode(context.teamMode) === 'ultra') return null
   const level = resolveThinking(argument, context.thinkingLevels)
   return level ? { kind: 'setThinking', value: level } : null
+}
+
+// MARK: 权限模式
+
+/** 会话的工具权限三档（== Qt ChatModels PermissionMode：标题、说明逐字一致；
+ *  输入框的权限选择器和设置页的默认权限模式都用这份） */
+export interface PermissionInfo {
+  raw: PermissionMode
+  title: string
+  detail: string
+}
+
+export const PERMISSION_MODES: PermissionInfo[] = [
+  { raw: 'auto', title: '自动', detail: '修改、添加、使用工具都自动执行；删除类操作先问我' },
+  { raw: 'plan', title: '计划', detail: '先给出计划，我确认后再执行；会改动系统的工具每次都要确认' },
+  { raw: 'full', title: '完全', detail: '包括删除在内全部自动执行，不再确认' }
+]
+
+/** 这档写什么（认不出的原始值原样显示） */
+export function permissionTitle(raw: PermissionMode | string | undefined): string {
+  return PERMISSION_MODES.find((mode) => mode.raw === raw)?.title ?? String(raw ?? '')
 }

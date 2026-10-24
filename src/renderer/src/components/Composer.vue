@@ -4,12 +4,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { EngineView } from '../stores/app.js'
-import type { CommandInfo, ThinkingLevel } from '../../../protocol/rpc/protocol.js'
+import type { CommandInfo, PermissionMode, ThinkingLevel } from '../../../protocol/rpc/protocol.js'
 import {
   builtinChoices,
+  effectiveThinking,
   mergeBuiltinCommands,
+  normalizeTeamMode,
   parseBuiltin,
+  PERMISSION_MODES,
   resolveBuiltin,
+  TEAM_MODES,
+  thinkingTitle,
   type BuiltinAction,
   type BuiltinChoice,
   type BuiltinContext
@@ -80,6 +85,7 @@ function toggleModelMenu() {
   modelOpen.value = !modelOpen.value
   if (modelOpen.value) {
     dirOpen.value = false
+    permOpen.value = false
     voiceMenuOpen.value = false
     switchError.value = ''
   }
@@ -228,9 +234,81 @@ async function chooseEngine(engine: EngineView) {
     // 没打开会话（空着重升新对话）：直接建一段新的，建的时候就带上引擎（REMOTE.md conversation.create engineID）
     if (!props.conversationId) {
       await store.createConversation({ engineID: engine.id })
-      return
+    } else {
+      await store.setEngine(props.conversationId, engine.id)
     }
-    await store.setEngine(props.conversationId, engine.id)
+    // 换模型同时记成新对话的默认（Qt v2.9 起同款；REMOTE.md settings.update defaultEngineID）
+    await store.setDefaultEngine(engine.id)
+  } catch (error) {
+    switchError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** 模型菜单里的任务模式 / 思考档位两节（Qt v2.9 起都在模型菜单里）：换这段对话的（runner.setTeamMode / setThinking，
+ *  工作中换的下一轮生效），没开会话时直接建一段带着它的新对话。不动输入框里打了一半的文字 */
+async function chooseTeamMode(mode: string) {
+  modelOpen.value = false
+  switchError.value = ''
+  try {
+    if (props.conversationId) await store.setTeamMode(props.conversationId, mode)
+    else await store.createConversation({ teamMode: mode })
+  } catch (error) {
+    switchError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function chooseThinking(level: ThinkingLevel) {
+  modelOpen.value = false
+  switchError.value = ''
+  try {
+    if (props.conversationId) await store.setThinking(props.conversationId, level)
+    else await store.createConversation({ thinking: level })
+  } catch (error) {
+    switchError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** 当前任务模式（打勾用；没开会话时拿本机「上次选的」） */
+const currentTeamMode = computed(() => normalizeTeamMode(builtinContext().teamMode))
+/** 思考档位两节能列的行（title + 原始值）；runtime 明确给了空数组 = 这个模型不能调 */
+const thinkingRows = computed(() => {
+  const context = builtinContext()
+  const levels = context.thinkingLevels
+  return levels.map((level) => ({
+    raw: level,
+    title: thinkingTitle(level, levels),
+    current: level === effectiveThinking(context.thinkingLevel, levels)
+  }))
+})
+const thinkingAdjustable = computed(() => builtinContext().thinkingLevels.length > 0)
+
+// MARK: 权限选择（Qt PermissionChip：这段会话的工具权限，自动 / 计划 / 完全；按会话保存在服务端）
+const permOpen = ref(false)
+const permWrap = ref<HTMLDivElement | null>(null)
+
+/** 现在的权限（summaries 永远有；没开会话时拿本机「上次选的」，新会话接着用它） */
+const currentPermission = computed<PermissionMode>(
+  () => currentSummary.value?.permissionMode ?? store.newChatDefaults.permissionMode ?? 'auto'
+)
+const currentPermissionInfo = computed(() => PERMISSION_MODES.find((mode) => mode.raw === currentPermission.value))
+
+function togglePermMenu() {
+  permOpen.value = !permOpen.value
+  if (permOpen.value) {
+    modelOpen.value = false
+    dirOpen.value = false
+    voiceMenuOpen.value = false
+  }
+}
+
+/** 换这段会话的权限（runner.setPermissionMode）；没开会话时直接建一段带着它的新对话。两种都记本机「上次选的」 */
+async function choosePermission(mode: PermissionMode) {
+  permOpen.value = false
+  switchError.value = ''
+  if (mode === currentPermission.value) return
+  try {
+    if (props.conversationId) await store.setPermissionMode(props.conversationId, mode)
+    else await store.createConversation({ permissionMode: mode })
   } catch (error) {
     switchError.value = error instanceof Error ? error.message : String(error)
   }
@@ -274,6 +352,7 @@ function toggleDirMenu() {
   dirOpen.value = !dirOpen.value
   if (dirOpen.value) {
     modelOpen.value = false
+    permOpen.value = false
     voiceMenuOpen.value = false
     dirError.value = ''
     browsing.value = false
@@ -361,6 +440,7 @@ function onDocClick(event: MouseEvent) {
   const target = event.target as Node
   if (modelOpen.value && modelWrap.value && !modelWrap.value.contains(target)) modelOpen.value = false
   if (dirOpen.value && dirWrap.value && !dirWrap.value.contains(target)) dirOpen.value = false
+  if (permOpen.value && permWrap.value && !permWrap.value.contains(target)) permOpen.value = false
   if (voiceMenuOpen.value && voiceWrap.value && !voiceWrap.value.contains(target)) voiceMenuOpen.value = false
 }
 onMounted(() => document.addEventListener('click', onDocClick))
@@ -540,15 +620,18 @@ const builtinQuery = computed(() => {
 watch([commandPrefix, () => builtinQuery.value?.argument], () => {
   commandDismissed.value = false
 })
-/** 这段对话现在的模型、任务模式、思考档位（没开会话时看新对话的默认） */
+/** 这段对话现在的模型、任务模式、思考档位（没开会话时看新对话的默认；思考档位没拿到
+ *  runtime 前先列全量——选了哪档建会话时就带上哪档，runtime 到了再收窄到这个模型能调的） */
+const ALL_THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'ultra']
 function builtinContext(): BuiltinContext {
   const runtime = props.conversationId ? store.details[props.conversationId]?.runtime : store.runtime
   return {
     engines: availableEngines.value,
     engineID: effectiveEngine.value?.id,
-    teamMode: currentSummary.value?.teamMode,
-    thinkingLevel: currentSummary.value?.thinking ?? runtime?.thinkingLevel,
-    thinkingLevels: runtime?.thinkingLevels ?? []
+    teamMode: currentSummary.value?.teamMode ?? (props.conversationId ? undefined : store.newChatDefaults.teamMode),
+    thinkingLevel:
+      currentSummary.value?.thinking ?? runtime?.thinkingLevel ?? (props.conversationId ? undefined : store.newChatDefaults.thinking),
+    thinkingLevels: runtime?.thinkingLevels ?? ALL_THINKING_LEVELS
   }
 }
 const commandItems = computed<CommandMenuItem[]>(() => {
@@ -1204,6 +1287,38 @@ onBeforeUnmount(() => {
               </span>
               <span v-if="engine.id === currentEngineID" class="model-check">✓</span>
             </button>
+            <!-- 任务模式 / 思考模式（Qt v2.9 起都在模型菜单里；换这段对话的并记成新对话的默认） -->
+            <div class="menu-sep"></div>
+            <div class="menu-section">任务模式</div>
+            <button
+              v-for="mode in TEAM_MODES"
+              :key="`team-${mode.raw}`"
+              class="model-item"
+              :class="{ current: mode.raw === currentTeamMode }"
+              @click="chooseTeamMode(mode.raw)"
+            >
+              <span class="model-item-main">
+                <span class="model-item-title">{{ mode.title }}</span>
+                <span class="model-item-detail">{{ mode.detail }}</span>
+              </span>
+              <span v-if="mode.raw === currentTeamMode" class="model-check">✓</span>
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">思考模式</div>
+            <template v-if="thinkingAdjustable">
+              <button
+                v-for="row in thinkingRows"
+                :key="`thinking-${row.raw}`"
+                class="model-item"
+                @click="chooseThinking(row.raw)"
+              >
+                <span class="model-item-main">
+                  <span class="model-item-title">{{ row.title }}</span>
+                </span>
+                <span v-if="row.current" class="model-check">✓</span>
+              </button>
+            </template>
+            <div v-else class="model-empty">这个模型不能调</div>
           </div>
         </div>
 
@@ -1316,6 +1431,49 @@ onBeforeUnmount(() => {
               </div>
               <button class="dir-pick" :disabled="!browsePath" @click="chooseWorkdir(browsePath)">选定此目录</button>
             </template>
+          </div>
+        </div>
+
+        <!-- 权限选择（Qt PermissionChip 同款：这段会话的工具权限，自动 / 计划 / 完全；改了 runner.setPermissionMode 同步到服务端。
+             没开会话时显示本机「上次选的」，选了就带着它开一段新会话；助手模式下和模型选择器一起收起） -->
+        <div v-if="!store.assistantChat" ref="permWrap" class="model-wrap perm-wrap">
+          <button
+            class="model-chip perm-chip"
+            :class="{ open: permOpen, full: currentPermission === 'full' }"
+            :title="`这段会话的工具权限：${currentPermissionInfo?.detail ?? ''}`"
+            @click="togglePermMenu"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <template v-if="currentPermission === 'full'">
+                <path d="M12 2.5l7.5 3v5.2c0 4.6-3 8.9-7.5 10.3-4.5-1.4-7.5-5.7-7.5-10.3V5.5z" />
+                <path d="M8.6 12l2.3 2.3 4.5-4.6" />
+              </template>
+              <template v-else-if="currentPermission === 'plan'">
+                <rect x="5" y="4" width="14" height="17" rx="2" />
+                <path d="M9 4.5V3.2A1.2 1.2 0 0 1 10.2 2h3.6A1.2 1.2 0 0 1 15 3.2v1.3" />
+                <path d="M8.5 10.5h7M8.5 14h5" />
+              </template>
+              <template v-else>
+                <path d="M13 2.5L5.5 13.5H11l-1 8 8-11h-5.5z" />
+              </template>
+            </svg>
+            <span class="model-name">{{ currentPermissionInfo?.title ?? '自动' }}</span>
+            <span class="model-caret">▾</span>
+          </button>
+          <div v-if="permOpen" class="model-menu perm-menu">
+            <button
+              v-for="mode in PERMISSION_MODES"
+              :key="mode.raw"
+              class="model-item"
+              :class="{ current: mode.raw === currentPermission }"
+              @click="choosePermission(mode.raw)"
+            >
+              <span class="model-item-main">
+                <span class="model-item-title">{{ mode.title }}</span>
+              </span>
+              <span v-if="mode.raw === currentPermission" class="model-check">✓</span>
+            </button>
+            <div class="perm-detail">{{ currentPermissionInfo?.detail }}</div>
           </div>
         </div>
 
@@ -1926,6 +2084,58 @@ textarea::placeholder {
 .dir-menu {
   min-width: 300px;
   max-height: 360px;
+}
+
+/* ---- 模型菜单里的任务模式 / 思考模式两节（Qt v2.9 同款；分组线 + 节标题） ---- */
+.menu-sep {
+  flex: none;
+  margin: 4px 9px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.menu-section {
+  flex: none;
+  padding: 4px 9px 2px;
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  color: var(--text-3);
+}
+
+.model-item-detail {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+  /* 两行说明不折成一长条：菜单限宽下中间截断太齐，自然换行更好读 */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* ---- 权限选择（Qt PermissionChip：full 时橙字提醒） ---- */
+.perm-chip.full {
+  color: var(--warn);
+}
+
+.perm-chip.full:hover,
+.perm-chip.full.open {
+  color: var(--warn);
+}
+
+.perm-menu {
+  min-width: 260px;
+}
+
+/* 菜单底部当前模式的说明（Qt：分隔线 + 不可点的说明文字） */
+.perm-detail {
+  flex: none;
+  margin-top: 2px;
+  padding: 7px 9px 5px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
 }
 
 .dir-sep,
@@ -2638,7 +2848,8 @@ textarea::placeholder {
 }
 
 [data-theme='jarvis'] .dir-sep,
-[data-theme='jarvis'] .dir-browse-sep {
+[data-theme='jarvis'] .dir-browse-sep,
+[data-theme='jarvis'] .menu-section {
   font-family: var(--font-hud);
   color: var(--accent-a65);
 }

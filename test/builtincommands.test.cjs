@@ -14,7 +14,9 @@ const {
   resolveTeamMode,
   resolveThinking,
   thinkingTitle,
-  isChatModel
+  isChatModel,
+  PERMISSION_MODES,
+  permissionTitle
 } = require('../.tmp/builtincommands.cjs')
 
 const engines = [
@@ -69,7 +71,7 @@ test('「/model 」列能选的：现在用的打勾，开头对上的在前', (
   assert.deepEqual(builtinChoices('model', 'k', context).map((choice) => choice.title), ['kimi-k2', 'deepseek-chat', 'deepseek-reasoner'])
 })
 
-test('「/mode 」「/thinking 」列能选的；极限性能时思考不列', () => {
+test('「/mode 」「/thinking 」列能选的；工作流模式下思考也能调（2026-10-23 起服务端不再强制最高）', () => {
   const modes = builtinChoices('mode', '', context)
   assert.equal(modes.length, 3)
   assert.equal(modes.find((choice) => choice.checked).action.value, 'solo')
@@ -77,8 +79,20 @@ test('「/mode 」「/thinking 」列能选的；极限性能时思考不列', (
   const levels = builtinChoices('thinking', '', context)
   assert.deepEqual(levels.map((choice) => choice.title), ['关闭', '低', '中', '高'])
   assert.equal(levels.find((choice) => choice.checked).action.value, 'medium')
-  assert.deepEqual(builtinChoices('thinking', '', { ...context, teamMode: 'ultra' }), [])
+  const ultra = builtinChoices('thinking', '', { ...context, teamMode: 'ultra' })
+  assert.equal(ultra.length, 4, '工作流模式下思考档位照列')
   assert.equal(thinkingTitle('high', ['off', 'high']), '开启')
+})
+
+test('权限三档（== Qt PermissionMode：标题、说明逐字一致；认不出的原始值原样显示）', () => {
+  assert.deepEqual(PERMISSION_MODES.map((mode) => [mode.raw, mode.title]), [
+    ['auto', '自动'],
+    ['plan', '计划'],
+    ['full', '完全']
+  ])
+  assert.ok(PERMISSION_MODES.every((mode) => mode.detail))
+  assert.equal(permissionTitle('full'), '完全')
+  assert.equal(permissionTitle(undefined), '')
 })
 
 test('发出去的「/命令 名字」认哪个', () => {
@@ -89,6 +103,8 @@ test('发出去的「/命令 名字」认哪个', () => {
   assert.equal(resolveModel('deepseek-', engines), null, '只是包含、对上两个的不认')
   assert.equal(resolveModel('reasoner', engines).id, 'e2')
   assert.equal(resolveTeamMode('极限'), 'ultra')
+  assert.equal(resolveTeamMode('工作流'), 'ultra', '新名字也认（2026-10-23 起 ultra 叫工作流）')
+  assert.equal(resolveTeamMode('workflow'), 'ultra')
   assert.equal(resolveTeamMode('需要时派'), 'delegatesHeavy')
   assert.equal(resolveTeamMode('1'), 'solo')
   assert.equal(resolveTeamMode('随便'), null)
@@ -97,6 +113,6 @@ test('发出去的「/命令 名字」认哪个', () => {
   assert.equal(resolveThinking('开', context.thinkingLevels), 'low')
   assert.equal(resolveThinking('超', context.thinkingLevels), null, '这个模型没有的档位不认')
   assert.deepEqual(resolveBuiltin('mode', '极限', context), { kind: 'setTeamMode', value: 'ultra' })
-  assert.equal(resolveBuiltin('thinking', '高', { ...context, teamMode: 'ultra' }), null)
+  assert.deepEqual(resolveBuiltin('thinking', '高', { ...context, teamMode: 'ultra' }), { kind: 'setThinking', value: 'high' }, '工作流模式下也能换思考档位')
   assert.equal(resolveBuiltin('model', '', context), null)
 })
