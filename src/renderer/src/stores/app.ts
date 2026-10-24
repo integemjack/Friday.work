@@ -273,6 +273,8 @@ interface SavedLayout {
   nextZ?: number
   cascade?: number
   windows?: SavedWindow[]
+  /** 沉浸模式（左右两栏收起，左上角背景式显示在跑会话）；存着重启后保持收起 */
+  panelsHidden?: boolean
   /** 媒体叠（没清空的重启后自动加载回来；2026-10 媒体叠本地缓存） */
   stackMedia?: SavedStackItem[]
 }
@@ -295,6 +297,7 @@ export function saveLayout(store: {
   currentMachine: string
   nextZ: number
   cascade: number
+  panelsHidden: boolean
   stackMedia: StackMediaItem[]
 }): void {
   try {
@@ -333,7 +336,13 @@ export function saveLayout(store: {
     })
     localStorage.setItem(
       LAYOUT_KEY,
-      JSON.stringify({ nextZ: store.nextZ, cascade: store.cascade, windows, stackMedia })
+      JSON.stringify({
+        nextZ: store.nextZ,
+        cascade: store.cascade,
+        panelsHidden: store.panelsHidden,
+        windows,
+        stackMedia
+      })
     )
   } catch {
     // 存不下就算了（隐私模式 / 超配额）
@@ -382,6 +391,9 @@ export const useAppStore = defineStore('app', {
     nextZ: 10,
     /** 窗口级联计数（新窗口错开摆放） */
     cascade: 0,
+    /** 沉浸模式：用户主动收起左栏会话列表和右栏聊天栏（标题栏开关切换）。
+     *  收起时左上角以背景形式显示在跑会话（GhostSessions）；通话中右栏照常让出（挂断/静音唯一入口） */
+    panelsHidden: false,
     /** 正在连一台机器（work 通道） */
     connectingWork: false,
     /** SChat 通道（M1.5 扫码一键连） */
@@ -668,6 +680,11 @@ export const useAppStore = defineStore('app', {
       item.z = ++this.nextZ
     },
 
+    /** 沉浸模式开关：收起/恢复左栏会话列表与右栏聊天栏（App.vue 按 .panels-hidden 收栏；持久化走 saveLayout） */
+    togglePanelsHidden(): void {
+      this.panelsHidden = !this.panelsHidden
+    },
+
     moveWindow(id: string, rect: { x: number; y: number; w: number; h: number }) {
       const item = this.windows.find((entry) => entry.id === id)
       if (!item) return
@@ -715,6 +732,7 @@ export const useAppStore = defineStore('app', {
         return false
       }
       this.restoreStackMedia(saved)
+      this.panelsHidden = saved?.panelsHidden === true
       const items = saved?.windows
       if (!Array.isArray(items) || items.length === 0) return false
       const desktopWidth = window.innerWidth

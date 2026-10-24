@@ -134,6 +134,21 @@ const bridge = window.fridayBridge
       </button>
     </nav>
 
+    <!-- 沉浸开关：收起左栏会话列表和右栏聊天栏（通话面板除外），
+         收起后左上角以背景形式显示在跑会话；点亮 = 沉浸中 -->
+    <button
+      class="launch-btn view-toggle"
+      :class="{ open: store.panelsHidden }"
+      :title="store.panelsHidden ? '显示会话列表与聊天栏' : '收起会话列表与聊天栏（沉浸模式，左上角背景式显示在跑会话）'"
+      @click="store.togglePanelsHidden()"
+    >
+      <svg class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M1.6 8C2.8 5.1 5.1 3.6 8 3.6s5.2 1.5 6.4 4.4c-1.2 2.9-3.5 4.4-6.4 4.4S2.8 10.9 1.6 8Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+        <circle cx="8" cy="8" r="1.9" stroke="currentColor" stroke-width="1.3" />
+        <path v-if="store.panelsHidden" d="M13.6 2.4 2.4 13.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+      </svg>
+    </button>
+
     <div class="machine" @click="toggleMachineMenu">
       <span class="dot" :class="stateDot" />
       <span class="machine-name">{{ store.currentMachineInfo?.name ?? (hasNoMachine ? '还没有机器' : '选一台机器') }}</span>
@@ -300,6 +315,21 @@ const bridge = window.fridayBridge
   content: '';
   position: absolute;
   right: -5px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--border);
+}
+
+/* 沉浸开关：和窗口启动器之间留一道同款细分隔（视图开关，不属于启动器组） */
+.view-toggle {
+  margin-left: 12px;
+}
+
+.view-toggle::before {
+  content: '';
+  position: absolute;
+  left: -6px;
   top: 7px;
   bottom: 7px;
   width: 1px;

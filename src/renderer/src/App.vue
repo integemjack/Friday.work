@@ -24,6 +24,7 @@ import AskOverlay from './components/AskOverlay.vue'
 import CallWidget from './components/CallWidget.vue'
 import SessionList from './components/SessionList.vue'
 import AssistantChat from './components/AssistantChat.vue'
+import GhostSessions from './components/GhostSessions.vue'
 import Composer from './components/Composer.vue'
 import DesktopBubbles from './components/DesktopBubbles.vue'
 import DesktopOps from './components/DesktopOps.vue'
@@ -107,8 +108,9 @@ const showLogin = computed(() => !store.workbenchReady || store.loginOverlay)
 let saveTimer = 0
 let lastSignature = ''
 function layoutSignature(): string {
-  // 媒体叠也在存档里：只看图不动窗口时叠的变化也要落盘（不然重启后丢叠）
-  return JSON.stringify([store.windows, store.nextZ, store.cascade, store.currentMachine, store.stackMedia])
+  // 媒体叠也在存档里：只看图不动窗口时叠的变化也要落盘（不然重启后丢叠）；
+  // 沉浸模式（panelsHidden）同样入签名，收起/恢复重启后保持
+  return JSON.stringify([store.windows, store.nextZ, store.cascade, store.currentMachine, store.stackMedia, store.panelsHidden])
 }
 function scheduleLayoutSave(): void {
   window.clearTimeout(saveTimer)
@@ -249,10 +251,14 @@ const calling = computed(() => store.calling)
     <TitleBar />
 
     <!-- 桌面：三栏（会话列表 | 留白主区 | 通话+聊天）。
-         气泡和操作卡投在主区随机位置；终端/文件/浏览器/子 Agent/设置都是用到时才开的浮动窗口 -->
-    <div class="desktop" ref="desktopEl" @mousemove="onDesktopMove">
+         气泡和操作卡投在主区随机位置；终端/文件/浏览器/子 Agent/设置都是用到时才开的浮动窗口。
+         沉浸模式（标题栏开关）：两栏收起、主区占满，左上角以背景形式显示在跑会话 -->
+    <div class="desktop" :class="{ 'panels-hidden': store.panelsHidden }" ref="desktopEl" @mousemove="onDesktopMove">
       <!-- 贾维斯深空层：漂移星野 + 流星 + 星云（最底层，面板全是玻璃能透出来） -->
       <SpaceVeil v-if="jarvis" />
+
+      <!-- 沉浸模式：左上角的背景式在跑会话列表（无壳半透明不接交互，融在桌面底纹上） -->
+      <GhostSessions v-if="store.panelsHidden" />
 
       <!-- 左栏：会话列表（常驻，就这一样） -->
       <aside class="side side-left">
@@ -487,6 +493,30 @@ const calling = computed(() => store.calling)
   .side-right.calling {
     display: flex;
   }
+}
+
+/* 沉浸模式（用户主动收栏，规则同上小屏）：两栏收起、主区占满整行；同样只藏不卸载。
+   通话中例外：右栏照常让出给通话面板，但聊天仍收着（用户藏的是栏，不是挂断入口） */
+.desktop.panels-hidden {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'main';
+}
+
+.desktop.panels-hidden .side {
+  display: none;
+}
+
+.desktop.panels-hidden:has(.side-right.calling) {
+  grid-template-columns: minmax(0, 1fr) 352px;
+  grid-template-areas: 'main right';
+}
+
+.desktop.panels-hidden:has(.side-right.calling) .side-right {
+  display: flex;
+}
+
+.desktop.panels-hidden:has(.side-right.calling) .side-chat {
+  display: none;
 }
 
 /* 没连机器时提示铺满（盖在面板上层） */
