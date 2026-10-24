@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // 选中会话的上下文背景条（2026-10）：会话列表里选中一段会话后，输入台上方以背景形式
-// （无卡片壳、半透明、pointer-events:none 的纯水印，不挡底下投层气泡的点击）显示这段会话的
+// （无卡片壳、半透明、pointer-events:none 的纯水印）显示这段会话的
 // 上下文（任务目标 / 步骤进度 / 在跑的子 Agent / 正在用的工具）和详细信息（模型、思考档位、
 // 任务模式、工作目录、权限、排队，末尾追加实时的上下文长度与占比），让「输入台里发出去的话
 // 落在哪段会话上」一眼可见。
+// 层级（2026-10-24 改）：挂在 App.vue 的 .composer-context-dock（z 35，投层气泡 40 之下）——
+// 随机投下的气泡直接盖在它上面，它只当背景不遮挡气泡；定位、宽度也由外层 dock 管。
 // 没选会话（默认态，输入即开新会话）或「和助手说」时整块不出现；Esc 取消选中后同样消失（App.vue）。
 import { computed } from 'vue'
 import { useAppStore } from '../stores/app.js'
@@ -278,12 +280,10 @@ const metaItems = computed<MetaItem[]>(() => {
 
 <style scoped>
 /* 背景形式（同 GhostSessions 的语言）：无卡片壳、半透明水印，融进桌面底纹。
-   pointer-events 全 none——纯信息展示，底下投层气泡（可点掉）照常能点 */
+   pointer-events 全 none——纯信息展示，气泡投下来盖住它，底下投层照常能点。
+   定位 / 宽度由外层 .composer-context-dock（App.vue）管，这里只管内容排版 */
 .composer-context {
-  flex: none;
   width: 100%;
-  max-width: 760px;
-  margin: 0 auto 6px;
   padding: 2px 12px 0;
   display: flex;
   flex-direction: column;

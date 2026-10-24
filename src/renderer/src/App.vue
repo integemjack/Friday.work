@@ -134,9 +134,11 @@ onBeforeUnmount(() => {
   workHub.disposeAll()
 })
 
-// 设备浮坞（串口相关浮窗 + 串口内容屏）贴在输入台上方：输入台单行/多行切换时高度会变，
-// ResizeObserver 量它的实际高度写到全局变量，浮坞的 bottom 跟着变，永远贴住不重叠
+// 设备浮坞（串口相关浮窗 + 串口内容屏）贴在输入台上方：输入台单行/多行切换、会话信息背景条
+// 出现/消失都会变高，ResizeObserver 分量两个 dock 写到两个全局变量（输入台 --friday-composer-h、
+// 背景条 --friday-composer-ctx-h），浮坞的 bottom 用两者之和，永远贴住不重叠
 const composerDockEl = ref<HTMLElement | null>(null)
+const contextDockEl = ref<HTMLElement | null>(null)
 let composerResize: ResizeObserver | null = null
 
 onMounted(() => {
@@ -144,13 +146,14 @@ onMounted(() => {
   store.restoreLayout()
   store.bindHost()
   store.startCastTicker() // 投层置顶 tick：窗口到期时抬「当前最活跃」的气泡/卡
-  if (composerDockEl.value) {
-    composerResize = new ResizeObserver(() => {
-      const h = composerDockEl.value?.offsetHeight ?? 0
-      document.documentElement.style.setProperty('--friday-composer-h', `${h}px`)
-    })
-    composerResize.observe(composerDockEl.value)
+  const syncDocks = (): void => {
+    const style = document.documentElement.style
+    style.setProperty('--friday-composer-h', `${composerDockEl.value?.offsetHeight ?? 0}px`)
+    style.setProperty('--friday-composer-ctx-h', `${contextDockEl.value?.offsetHeight ?? 0}px`)
   }
+  composerResize = new ResizeObserver(syncDocks)
+  if (composerDockEl.value) composerResize.observe(composerDockEl.value)
+  if (contextDockEl.value) composerResize.observe(contextDockEl.value)
 })
 
 // 只盯布局相关的几个字段（签名串变了才排一次保存）。不能用 store.$subscribe：它是对整个
@@ -284,11 +287,14 @@ const chatIdle = computed(() => !conversationID.value && !store.assistantChat)
         <!-- 语音 HUD：TTS 实时波形 + 静音 + 音量，顶部居中（功能件，两主题都挂，不是装饰） -->
         <VoiceHud />
         <DesktopMediaStacks />
-        <div class="composer-dock" ref="composerDockEl">
-          <!-- 选中会话的上下文背景条：标题/状态 + 任务目标、步骤、在跑子 Agent + 模型、目录等详细配置，
-               贴在输入台上方（无壳半透明水印；没选会话或「和助手说」时不出现）。高出来的部分由
-               composerDockEl 的 ResizeObserver 记进 --friday-composer-h，设备浮坞自动跟着上移 -->
+        <!-- 选中会话的上下文背景条：标题/状态 + 任务目标、步骤、在跑子 Agent + 模型、目录等详细配置，
+             贴在输入台上方（无壳半透明水印；没选会话或「和助手说」时不出现）。z 35 压在投层气泡（40）
+             之下——气泡投下来直接盖住它，它只当背景不挡气泡；高度由 ResizeObserver 记进
+             --friday-composer-ctx-h，设备浮坞自动跟着上移 -->
+        <div class="composer-context-dock" ref="contextDockEl">
           <ComposerContext />
+        </div>
+        <div class="composer-dock" ref="composerDockEl">
           <Composer :conversation-id="conversationID" @submit="onComposerSubmit" />
         </div>
       </section>
@@ -441,17 +447,31 @@ const chatIdle = computed(() => !conversationID.value && !store.assistantChat)
   pointer-events: none; /* 停在透明空白上时让点击穿过到桌面；卡片自己再开回 */
 }
 
+/* 会话信息背景条（选中会话的上下文水印）：z 35 卡在媒体叠（1）之上、投层气泡（40）之下——
+   气泡/操作卡随机投下来直接盖住它，它只当背景不挡气泡；位置贴在输入台上方 6px，
+   宽度同输入台；pointer-events 全 none 不拦点击（组件内部也是 none） */
+.composer-context-dock {
+  position: absolute;
+  left: 50%;
+  bottom: calc(14px + var(--friday-composer-h, 64px) + 6px);
+  transform: translateX(-50%);
+  width: min(720px, calc(100% - 32px));
+  z-index: 35;
+  pointer-events: none;
+}
+
 .composer-dock > :deep(.composer) {
   pointer-events: auto;
 }
 
 /* 设备浮坞：串口相关浮窗（授权卡/使用中条）+ 串口内容屏，同一竖列贴在输入台上方居中。
-   bottom 跟着输入台实际高度（--friday-composer-h，ResizeObserver 写的），长高时整列上移；
+   bottom 跟着输入台实际高度（--friday-composer-h）加会话信息背景条高度（--friday-composer-ctx-h，
+   没选会话时 0）——两个 ResizeObserver 写的，长高时整列上移；
    z 90001：授权卡是模态的，要压过一切浮动窗口 */
 .device-dock {
   position: fixed;
   left: 50%;
-  bottom: calc(14px + var(--friday-composer-h, 64px) + 10px);
+  bottom: calc(14px + var(--friday-composer-h, 64px) + var(--friday-composer-ctx-h, 0px) + 10px);
   transform: translateX(-50%);
   z-index: 90001;
   display: flex;
