@@ -2,45 +2,59 @@
 // 服务端的 stats 只给上下文 token 数（contextTokenCount），占比的分母（窗口大小）协议里没有——
 // 按模型名认常见家族的窗口：认得出的给占比，认不出的只显示长度（宁缺勿错，不给误导性的百分比）。
 // 引擎里 model 是自由文本（带 / 前缀、大小写不一），一律小写子串匹配，靠前的规则先命中；
-// 数值是 2026-10 核对各官方文档的常见值，新模型出了记得回来补。
+// 数值 2026-10-24 逐家核过官方文档，覆盖本机 Friday 设置（engines.json / serviceSeenModels）里
+// 实际出现的家族；新一代旗舰普遍 1M（GLM 5.2+/DeepSeek V4/Qwen3.5+Max/MiniMax M3/Kimi K3/Claude 5），
+// 新模型出了记得回来补。主要来源：docs.bigmodel.cn、DeepSeek 官方 model-list、platform.claude.com、
+// platform.kimi.com、minimax.io、火山引擎、Qwen 官方、llm-stats（GPT-5.2）、xAI（Grok-4）。
 
 import type { ChatMessage, MessageBlock, ToolEvent } from '../../../protocol/rpc/protocol.js'
 import { blockPayload } from '../../../protocol/rpc/protocol.js'
 
 /** 一条「模型名子串 → 窗口 tokens」规则（顺序即优先级：具体的写前面） */
 const RULES: Array<{ match: RegExp; tokens: number; note: string }> = [
-  // 智谱 GLM：4.6 / 4.7 / 5 系 200K（官方：三款共享 200K 窗口 / 128K 输出），4.5 及更早 128K
-  { match: /glm-4\.[6-9]|glm-[5-9]/, tokens: 200_000, note: 'GLM 4.6+' },
+  // 智谱 GLM：5.2 起官方 1M（5.2/5.3 文档「真正可用的 1M 上下文」）；4.6~5.1 200K；4.5 及更早 128K
+  { match: /glm[-_.]?5\.[2-9]/, tokens: 1_048_576, note: 'GLM 5.2+' },
+  { match: /glm-4\.[6-9]|glm[-_.]?5/, tokens: 200_000, note: 'GLM 4.6~5.1' },
   { match: /glm/, tokens: 128_000, note: 'GLM 4.5-' },
-  // DeepSeek V3.x / R 系：128K
-  { match: /deepseek/, tokens: 128_000, note: 'DeepSeek' },
-  // 月之暗面 Kimi K2 系：256K
-  { match: /kimi|moonshot/, tokens: 256_000, note: 'Kimi' },
-  // 通义：qwen3-max 256K；开源 Qwen3 系 256K（YaRN 拉到 1M 的不算）；qwen-max 32K；plus/turbo/2.5 系 128K
-  { match: /qwen3-max|qwen3\.5/, tokens: 256_000, note: 'Qwen3-Max' },
+  // DeepSeek：V4 系（v4/v4.1 flash/pro）官方 1M；V3.x/chat/r1 128K
+  { match: /deepseek[-_.\/]?v4/, tokens: 1_048_576, note: 'DeepSeek V4' },
+  { match: /deepseek/, tokens: 128_000, note: 'DeepSeek V3' },
+  // 月之暗面 Kimi：K3/K3.1 官方 100 万；K2 系（k2.6/k2.7-code）256K
+  { match: /kimi[-_.]?k?3/, tokens: 1_048_576, note: 'Kimi K3' },
+  { match: /kimi|moonshot/, tokens: 262_144, note: 'Kimi K2' },
+  // 通义 Qwen：3.5+ 的 Max 官方 1M（3.8-Max「1M 保持不变」）；Qwen3 系原生 262144（3.5+ 非 Max 保守按 256K）；2.5 系/plus/turbo 128K
+  { match: /qwen3\.[5-9][^/]*max/, tokens: 1_048_576, note: 'Qwen3.x-Max' },
   { match: /qwen3/, tokens: 262_144, note: 'Qwen3' },
-  { match: /qwen-max/, tokens: 32_768, note: 'Qwen-Max' },
   { match: /qwen/, tokens: 131_072, note: 'Qwen' },
-  // Anthropic Claude 3.5/3.7/4 系：200K
-  { match: /claude/, tokens: 200_000, note: 'Claude' },
-  // OpenAI：GPT-5 400K；4.1 1M；4o/4-turbo 128K；o 系推理模型 200K；其余 gpt 兜底 128K
+  // Anthropic：5 系（fable-5/opus-5/sonnet-5/haiku-5）官方 100 万；3.5/4 系 200K
+  { match: /claude[-_](fable|(opus|sonnet|haiku)[-_.]?[5-9])/, tokens: 1_048_576, note: 'Claude 5' },
+  { match: /claude/, tokens: 200_000, note: 'Claude 4' },
+  // OpenAI：gpt-5 系官方 400K（5.2 已核）；4.1 一度 1M；4o/4-turbo/gpt-oss 128K；o1/o3/o4 200K；其余 gpt 兜底 128K
   { match: /gpt-5/, tokens: 400_000, note: 'GPT-5' },
-  { match: /gpt-4\.1/, tokens: 1_000_000, note: 'GPT-4.1' },
-  { match: /gpt-4o|gpt-4-turbo|chatgpt/, tokens: 128_000, note: 'GPT-4o' },
-  { match: /\bo[134]\b/, tokens: 200_000, note: 'o 系' },
-  { match: /gpt/, tokens: 128_000, note: 'GPT' },
-  // Google Gemini 2.x 系：1M
-  { match: /gemini/, tokens: 1_000_000, note: 'Gemini' },
-  // 字节豆包 1.5/Seed 系：256K
-  { match: /doubao/, tokens: 256_000, note: 'Doubao' },
-  // MiniMax M2：204.8K
-  { match: /minimax/, tokens: 204_800, note: 'MiniMax' },
-  // xAI：grok-4 256K，更早 128K
-  { match: /grok-4/, tokens: 256_000, note: 'Grok-4' },
+  { match: /gpt-4\.1/, tokens: 1_048_576, note: 'GPT-4.1' },
+  { match: /gpt-4o|gpt-4-turbo|gpt-oss/, tokens: 131_072, note: 'GPT-4o/oss' },
+  { match: /(^|\/)o[134]([-:.]|$)/, tokens: 200_000, note: 'OpenAI o 系' },
+  { match: /gpt/, tokens: 131_072, note: 'GPT' },
+  // Google：1.5 一代 2M；2.x/3.x 官方 1M
+  { match: /gemini[-_.]?1\.5/, tokens: 2_097_152, note: 'Gemini 1.5' },
+  { match: /gemini/, tokens: 1_048_576, note: 'Gemini' },
+  // 字节：Seed-Evolving 官方 1M；Seed 2.x / Doubao 系 256K（火山引擎官方）
+  { match: /seed[-_.]?evolving/, tokens: 1_048_576, note: 'Seed-Evolving' },
+  { match: /seed|doubao/, tokens: 262_144, note: 'Doubao/Seed' },
+  // MiniMax：M3 官方 1M；M2 系 204.8K
+  { match: /minimax[-_.]?m3/, tokens: 1_048_576, note: 'MiniMax M3' },
+  { match: /minimax/, tokens: 204_800, note: 'MiniMax M2' },
+  // xAI：grok-4 官方 256K；grok-3 131K
+  { match: /grok[-_.]?[4-9]/, tokens: 262_144, note: 'Grok-4' },
   { match: /grok/, tokens: 131_072, note: 'Grok' },
-  // 开源系兜底：Llama 128K、Mistral 128K
-  { match: /llama/, tokens: 128_000, note: 'Llama' },
-  { match: /mistral|mixtral/, tokens: 128_000, note: 'Mistral' }
+  // 百度 ERNIE 4.5：128K
+  { match: /ernie/, tokens: 131_072, note: 'ERNIE' },
+  // 开源系兜底：llama-3 128K（llama2 4K）；codestral 256K；mistral 128K。
+  // 混元 hy3/hy4 没核到官方口径 → 不给占比（只显长度），核到再补
+  { match: /llama[-_.]?2/, tokens: 4_096, note: 'Llama 2' },
+  { match: /llama/, tokens: 131_072, note: 'Llama 3' },
+  { match: /codestral/, tokens: 262_144, note: 'Codestral' },
+  { match: /mistral|mixtral/, tokens: 131_072, note: 'Mistral' }
 ]
 
 /** 认模型窗口：名字里先命中谁就是谁；认不出返回 undefined（界面只显示长度不给占比） */

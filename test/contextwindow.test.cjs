@@ -5,25 +5,45 @@ const assert = require('node:assert/strict')
 
 const { contextWindowTokens, contextWindowNote, formatTokenCount, contextPercent, estimateTokens, contextMixOf } = require('../.tmp/contextwindow.cjs')
 
-test('按模型名认窗口：具体的规则先命中', () => {
+test('按模型名认窗口：具体的规则先命中（2026-10-24 核对官方口径）', () => {
   assert.equal(contextWindowTokens('glm-4.7'), 200000)
   assert.equal(contextWindowTokens('GLM-5'), 200000) // 大小写不敏感
+  assert.equal(contextWindowTokens('glm-5.1'), 200000) // 5.1 还是 200K
+  assert.equal(contextWindowTokens('glm-5.2'), 1048576) // 5.2 起官方 1M
+  assert.equal(contextWindowTokens('z-ai/glm-5.3-flash'), 1048576) // 带 / 前缀也认
   assert.equal(contextWindowTokens('glm-4.5'), 128000)
-  assert.equal(contextWindowTokens('zhipu/glm-4.6'), 200000) // 带 / 前缀也认
-  assert.equal(contextWindowTokens('deepseek-chat'), 128000)
-  assert.equal(contextWindowTokens('kimi-k2-instruct'), 256000)
-  assert.equal(contextWindowTokens('qwen3-max'), 256000) // qwen3-max 先于 qwen3
+  assert.equal(contextWindowTokens('zhipu/glm-4.6'), 200000)
+  assert.equal(contextWindowTokens('deepseek-chat'), 128000) // V3 系 128K
+  assert.equal(contextWindowTokens('deepseek-v4-pro'), 1048576) // V4 官方 1M
+  assert.equal(contextWindowTokens('deepseek/deepseek-v4.1-flash'), 1048576)
+  assert.equal(contextWindowTokens('kimi-k2-instruct'), 262144) // K2 系 256K
+  assert.equal(contextWindowTokens('kimi-k3'), 1048576) // K3 官方 100 万
+  assert.equal(contextWindowTokens('moonshotai/kimi-k2.6'), 262144) // K3 不误伤 K2.6
+  assert.equal(contextWindowTokens('qwen3-max'), 262144) // qwen3-max 是 262144（不是 3.5+ 的 Max）
+  assert.equal(contextWindowTokens('qwen3.8-max'), 1048576) // 3.5+ 的 Max 官方 1M
+  assert.equal(contextWindowTokens('qwen/qwen3.7-max'), 1048576)
+  assert.equal(contextWindowTokens('qwen3.8-flash'), 262144) // 3.5+ 非 Max 保守 256K
   assert.equal(contextWindowTokens('qwen3-coder-plus'), 262144)
   assert.equal(contextWindowTokens('qwen-plus-latest'), 131072)
-  assert.equal(contextWindowTokens('qwen-max'), 32768)
-  assert.equal(contextWindowTokens('claude-sonnet-4-5'), 200000)
+  assert.equal(contextWindowTokens('claude-sonnet-4-5'), 200000) // 4 系 200K
+  assert.equal(contextWindowTokens('claude-opus-5.5'), 1048576) // 5 系官方 100 万
+  assert.equal(contextWindowTokens('anthropic/claude-fable-5.1'), 1048576)
   assert.equal(contextWindowTokens('gpt-5.2'), 400000)
-  assert.equal(contextWindowTokens('gpt-4.1-mini'), 1000000)
-  assert.equal(contextWindowTokens('gpt-4o'), 128000)
+  assert.equal(contextWindowTokens('gpt-4.1-mini'), 1048576)
+  assert.equal(contextWindowTokens('gpt-4o'), 131072)
+  assert.equal(contextWindowTokens('gpt-oss-20b'), 131072)
   assert.equal(contextWindowTokens('o3-mini'), 200000)
-  assert.equal(contextWindowTokens('gemini-2.5-pro'), 1000000)
-  assert.equal(contextWindowTokens('minimax-m2'), 204800)
-  assert.equal(contextWindowTokens('grok-4'), 256000)
+  assert.equal(contextWindowTokens('gemini-2.5-pro'), 1048576)
+  assert.equal(contextWindowTokens('gemini-1.5-pro'), 2097152) // 1.5 一代 2M
+  assert.equal(contextWindowTokens('MiniMax-M2.7'), 204800)
+  assert.equal(contextWindowTokens('MiniMax-M3'), 1048576) // M3 官方 1M
+  assert.equal(contextWindowTokens('doubao-seed-1.6'), 262144)
+  assert.equal(contextWindowTokens('seed-2.0-lite'), 262144)
+  assert.equal(contextWindowTokens('seed-evolving'), 1048576)
+  assert.equal(contextWindowTokens('grok-4'), 262144)
+  assert.equal(contextWindowTokens('grok-3'), 131072)
+  assert.equal(contextWindowTokens('meta/llama2-70b'), 4096) // llama2 4K
+  assert.equal(contextWindowTokens('llama-3.3-70b'), 131072)
 })
 
 test('认不出的 / 空名字：undefined（界面只显示长度不给占比）', () => {
@@ -33,7 +53,8 @@ test('认不出的 / 空名字：undefined（界面只显示长度不给占比�
 })
 
 test('窗口注释（悬停提示用）：命中同一条规则', () => {
-  assert.deepEqual(contextWindowNote('glm-4.7'), { note: 'GLM 4.6+', tokens: 200000 })
+  assert.deepEqual(contextWindowNote('glm-4.7'), { note: 'GLM 4.6~5.1', tokens: 200000 })
+  assert.deepEqual(contextWindowNote('glm-5.3'), { note: 'GLM 5.2+', tokens: 1048576 })
   assert.equal(contextWindowNote('unknown-model'), undefined)
 })
 
