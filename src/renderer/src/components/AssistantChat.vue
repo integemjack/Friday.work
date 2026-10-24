@@ -345,10 +345,13 @@ watch(
         if (!stream) {
           // 完结消息里「新出现的块」= 服务端重推历史换了块 id（noteAssistantStream 同款
           // 场景：新一轮活动把已见过的消息按新块 id 重弹）：内容念过了，游标直接对齐、
-          // 不重播；未完成消息的新块才是流式新段，从头播
+          // 不重播；未完成消息的新块才是流式新段，从头播。
+          // 「首见即已完结」不能再一律当重推跳过：思考模型答案太短/渲染节流时，text 块第一次
+          // 可见就是带 finishedAt 的收尾帧（流式期间只有 thinking 块），跳过会让整轮不播——
+          // 隔条交替不播的根因。之前记录过这条消息的 finishedAt（before 为真）才是重推过完结消息
           stream = { inc: createSpeechIncrement(item.conv), len: 0 }
           blockStreams.set(key, stream)
-          if (historical || done) {
+          if (historical || (done && before)) {
             stream.inc.skip(full)
             stream.len = full.length
           }
