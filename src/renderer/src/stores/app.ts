@@ -5,6 +5,7 @@ import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
 import { isMediaTool, mediaArgSource } from '../lib/mediaTools.js'
 import { castLimitH } from '../lib/cast.js'
+import { normalizeTeamMode } from '../lib/builtinCommands.js'
 import {
   deleteStackCaches,
   ensureStackMediaCached,
@@ -554,6 +555,9 @@ export const useAppStore = defineStore('app', {
     /** 新对话的「上次选的」权限 / 思考档位 / 任务模式（本机 localStorage，见 NewChatDefaults）：
      *  没选会话时选择器显示这份，conversation.create 也带上它（REMOTE.md：客户端本机记，各台远程共用） */
     newChatDefaults: loadNewChatDefaults(),
+    /** 当前机器的全局设置（settings.get；新对话默认 teamMode 等——任务模式菜单的打勾在会话没选过时跟它）。
+     *  旧服务端没有 settings.get = null */
+    machineSettings: null as Record<string, unknown> | null,
     /** 当前机器最近选择的工作目录（hello 快照 + directories 事件；输入框的目录选择器用）。
      *  null = 旧服务端没有 directories：菜单里不列最近、选了也不记（REMOTE.md §5 DirectoriesState） */
     recentDirectories: null as Array<{ path: string; exists: boolean }> | null,
@@ -629,6 +633,13 @@ export const useAppStore = defineStore('app', {
     /** 活动会话的完整视图 */
     detail(state): ConversationDetail | null {
       return state.details[state.activeConversationID] ?? null
+    },
+    /** 那台机器的新对话默认任务模式（settings.get 的 teamMode，归一后的；没给 / 旧服务端 = undefined）。
+     *  任务模式菜单的打勾在会话没选过时跟它（== Qt runner->teamMode(id) 的解析：会话优先，没选过跟默认） */
+    machineDefaultTeamMode(state): string | undefined {
+      const raw = state.machineSettings?.teamMode
+      if (typeof raw !== 'string' || !raw) return undefined
+      return normalizeTeamMode(raw) ?? undefined
     },
     /** 当前机器的待确认总数 */
     pendingApprovalCount(state): number {
@@ -1051,6 +1062,8 @@ export const useAppStore = defineStore('app', {
     async refreshLiveState() {
       if (!this.currentMachine) return
       const machine = this.currentMachine
+      // 全局设置（新对话默认 teamMode 等）并行拉，失败静默（旧服务端没有 settings.get）
+      void this.refreshMachineSettings()
       try {
         const state = (await host.request({ type: 'state.get', machineID: machine })) as {
           terminals: { terminals: TerminalInfo[]; available: boolean; reason?: string }
@@ -1085,6 +1098,18 @@ export const useAppStore = defineStore('app', {
         this.closeTerminalWindowIfEmpty(hadTerminals)
       } catch {
         // 没连上时忽略
+      }
+    },
+
+    /** 拉当前机器的全局设置（新对话默认 teamMode：任务模式菜单的打勾在会话没选过时跟它；旧服务端 = null） */
+    async refreshMachineSettings() {
+      if (!this.currentMachine) return
+      const machine = this.currentMachine
+      try {
+        const settings = (await rpc(machine, 'settings.get', {})) as Record<string, unknown>
+        if (this.currentMachine === machine) this.machineSettings = settings
+      } catch {
+        if (this.currentMachine === machine) this.machineSettings = null
       }
     },
 

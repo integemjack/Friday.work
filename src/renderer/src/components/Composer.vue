@@ -268,8 +268,7 @@ async function chooseThinking(level: ThinkingLevel) {
   }
 }
 
-/** 当前任务模式（打勾用；没开会话时拿本机「上次选的」） */
-const currentTeamMode = computed(() => normalizeTeamMode(builtinContext().teamMode))
+// 当前任务模式（打勾用）：见 currentTeamMode（currentSummary 之后定义，要引用它）
 /** 思考档位两节能列的行（title + 原始值）；runtime 明确给了空数组 = 这个模型不能调 */
 const thinkingRows = computed(() => {
   const context = builtinContext()
@@ -334,6 +333,16 @@ function dirBasename(path: string): string {
 }
 
 const currentSummary = computed(() => store.summaries.find((summary) => summary.id === props.conversationId))
+
+/** 现在实际在用的任务模式（== Qt runner->teamMode(id) 的解析，菜单和 /mode 打勾都用它）：
+ *  会话选过的（summary.teamMode）优先；没选过跟那台机器的新对话默认（settings.get teamMode）；
+ *  没选会话时本机「上次选的」优先（createConversation 会带上它），再跟机器默认；都不给 = solo */
+const currentTeamMode = computed(() => {
+  const raw = props.conversationId
+    ? currentSummary.value?.teamMode ?? store.machineDefaultTeamMode
+    : store.newChatDefaults.teamMode ?? store.machineDefaultTeamMode
+  return normalizeTeamMode(raw) ?? 'solo'
+})
 /** 有内容后不能再改工作目录（服务端对非空会话静默忽略，选了也会被打回；
  *  Qt 端 v2.1 起同样整个不显示，WorkingDirectoryChip 的 locked） */
 const workdirLocked = computed(() => (props.conversationId ? currentSummary.value?.isEmpty === false : false))
@@ -628,7 +637,8 @@ function builtinContext(): BuiltinContext {
   return {
     engines: availableEngines.value,
     engineID: effectiveEngine.value?.id,
-    teamMode: currentSummary.value?.teamMode ?? (props.conversationId ? undefined : store.newChatDefaults.teamMode),
+    // 打勾跟「实际在用」的模式（会话选过的 → 机器默认 → solo），三项里永远有一项勾着
+    teamMode: currentTeamMode.value,
     thinkingLevel:
       currentSummary.value?.thinking ?? runtime?.thinkingLevel ?? (props.conversationId ? undefined : store.newChatDefaults.thinking),
     thinkingLevels: runtime?.thinkingLevels ?? ALL_THINKING_LEVELS
