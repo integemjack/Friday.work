@@ -33,6 +33,7 @@ import UpdateOverlay from './components/UpdateOverlay.vue'
 import DeviceOverlay from './components/DeviceOverlay.vue'
 import CenterScene from './components/CenterScene.vue'
 import VoiceHud from './components/VoiceHud.vue'
+import SerialFeed from './components/SerialFeed.vue'
 import WindowFrame from './desktop/WindowFrame.vue'
 import JarvisHUD from './desktop/JarvisHUD.vue'
 import SpaceVeil from './components/SpaceVeil.vue'
@@ -122,6 +123,7 @@ function scheduleLayoutSave(): void {
 onBeforeUnmount(() => {
   window.clearTimeout(saveTimer)
   cancelAnimationFrame(parRaf)
+  composerResize?.disconnect()
   store.stopCastTicker()
   offWork()
   offDevice()
@@ -129,11 +131,23 @@ onBeforeUnmount(() => {
   workHub.disposeAll()
 })
 
+// 设备浮坞（串口相关浮窗 + 串口内容屏）贴在输入台上方：输入台单行/多行切换时高度会变，
+// ResizeObserver 量它的实际高度写到全局变量，浮坞的 bottom 跟着变，永远贴住不重叠
+const composerDockEl = ref<HTMLElement | null>(null)
+let composerResize: ResizeObserver | null = null
+
 onMounted(() => {
   // 界面主题已在 main.ts 挂载前应用（避免首帧闪系统样式）；这里只恢复布局、接协议事件
   store.restoreLayout()
   store.bindHost()
   store.startCastTicker() // 投层置顶 tick：窗口到期时抬「当前最活跃」的气泡/卡
+  if (composerDockEl.value) {
+    composerResize = new ResizeObserver(() => {
+      const h = composerDockEl.value?.offsetHeight ?? 0
+      document.documentElement.style.setProperty('--friday-composer-h', `${h}px`)
+    })
+    composerResize.observe(composerDockEl.value)
+  }
 })
 
 // 只盯布局相关的几个字段（签名串变了才排一次保存）。不能用 store.$subscribe：它是对整个
@@ -258,7 +272,7 @@ const calling = computed(() => store.calling)
         <!-- 语音 HUD：TTS 实时波形 + 静音 + 音量，顶部居中（功能件，两主题都挂，不是装饰） -->
         <VoiceHud />
         <DesktopMediaStacks />
-        <div class="composer-dock">
+        <div class="composer-dock" ref="composerDockEl">
           <Composer :conversation-id="conversationID" @submit="onComposerSubmit" />
         </div>
       </section>
@@ -311,6 +325,13 @@ const calling = computed(() => store.calling)
       </div>
     </div>
 
+    <!-- 设备浮坞（输入台上方居中）：串口相关浮窗（授权卡/使用中条）贴在输入框上面，
+         串口内容屏（SerialFeed）再叠在浮窗上面——同一竖列，随输入台长高自动上移 -->
+    <div class="device-dock">
+      <SerialFeed />
+      <DeviceOverlay />
+    </div>
+
     <!-- 登录页：盖在桌面上（面板不卸载，终端等实例还在），连上后自己收起 -->
     <LoginView v-if="showLogin" />
 
@@ -322,7 +343,6 @@ const calling = computed(() => store.calling)
 
     <!-- 桌面更新浮层：自动更新管线把进度直接摆到桌面右下角（下载进度/倒计时/安装中） -->
     <UpdateOverlay />
-    <DeviceOverlay />
 
     <!-- 全局错误横幅 -->
     <div
@@ -406,6 +426,23 @@ const calling = computed(() => store.calling)
 
 .composer-dock > :deep(.composer) {
   pointer-events: auto;
+}
+
+/* 设备浮坞：串口相关浮窗（授权卡/使用中条）+ 串口内容屏，同一竖列贴在输入台上方居中。
+   bottom 跟着输入台实际高度（--friday-composer-h，ResizeObserver 写的），长高时整列上移；
+   z 90001：授权卡是模态的，要压过一切浮动窗口 */
+.device-dock {
+  position: fixed;
+  left: 50%;
+  bottom: calc(14px + var(--friday-composer-h, 64px) + 10px);
+  transform: translateX(-50%);
+  z-index: 90001;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, calc(100vw - 32px));
+  pointer-events: none; /* 空白处让点击穿过；有交互的子件（DeviceOverlay）自己开回 */
 }
 
 /* ---- 右栏：聊天默认占满整栏；通话时（calling）顶部 1/3 通话面板 + 底部 2/3 聊天 ---- */

@@ -25,6 +25,7 @@ import { espInfo, flashEsp } from './espFlash.js'
 import { addGrant, hasGrant, type DeviceCapability } from './grants.js'
 import { parseIntelHex } from './intelHex.js'
 import { SerialIdRegistry, describePorts, type SerialDeviceInfo } from './serialPorts.js'
+import { makeSerialLineFeeder } from './serialFeed.js'
 import { SerialSession, type ChannelLike, type PortLike } from './serialSession.js'
 import { flashStk500 } from './stk500.js'
 import { flashStm32 } from './stm32.js'
@@ -56,8 +57,21 @@ export interface DeviceActivity {
   progress?: number
 }
 
-/** 界面状态（DeviceOverlay 读；改只经下面的 answerPrompt / stopActivity） */
-export const deviceUi = reactive({ prompts: [] as DevicePrompt[], activity: [] as DeviceActivity[] })
+/** 串口内容屏的一条：开发板从串口打出的一行文本（SerialFeed 读） */
+export interface SerialFeedLine {
+  id: number
+  sessionId: string
+  deviceLabel: string
+  text: string
+  at: number
+}
+
+/** 界面状态（DeviceOverlay / SerialFeed 读；改只经下面的 answerPrompt / stopActivity） */
+export const deviceUi = reactive({ prompts: [] as DevicePrompt[], activity: [] as DeviceActivity[], serialFeed: [] as SerialFeedLine[] })
+
+/** 串口内容屏最多留这么多行（新行挤旧行，屏上只看最近的） */
+const SERIAL_FEED_MAX = 8
+let nextFeedId = 1
 
 const PROMPT_TIMEOUT_MS = 60_000
 /** 隧道在「使用中」条里的说明 */
@@ -331,14 +345,23 @@ class DeviceBroker {
       if (!config) return modeText
       return `${entry.session.suspended ? '烧录中，已暂停 · ' : ''}${config.baudRate} · ${modeText}`
     }
+    // 串口内容屏：串口读到的字节逐行投到 deviceUi.serialFeed（HUD 屏顺序显示）。
+    // 开新会话先清屏（上个会话的旧行不再接着滚），会话结束 flush 出最后半行
+    deviceUi.serialFeed.splice(0)
+    const feeder = makeSerialLineFeeder((text) => {
+      deviceUi.serialFeed.push({ id: nextFeedId++, sessionId, deviceLabel: info.label, text, at: Date.now() })
+      if (deviceUi.serialFeed.length > SERIAL_FEED_MAX) deviceUi.serialFeed.splice(0, deviceUi.serialFeed.length - SERIAL_FEED_MAX)
+    })
     const session = new SerialSession(port as unknown as PortLike, channel as unknown as ChannelLike, mode, config, {
       onClosed: (reason, byPeer) => {
+        feeder.flush()
         this.sessions.delete(sessionId)
         if (this.busy.get(port) === sessionId) this.busy.delete(port)
         this.untrack(sessionId)
         if (!byPeer) this.notify(message.machineID, 'device.serial.closed', { sessionId, reason })
       },
-      onChange: () => this.updateActivity(sessionId, { detail: detail() })
+      onChange: () => this.updateActivity(sessionId, { detail: detail() }),
+      onData: (bytes) => feeder.push(bytes)
     })
     try {
       await waitOpen(channel)

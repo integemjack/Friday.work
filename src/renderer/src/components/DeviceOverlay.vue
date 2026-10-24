@@ -3,6 +3,8 @@
 //   授权卡：远端机器第一次要用本机的串口 / 摄像头 / 烧录时问人——允许这次 / 始终允许 / 拒绝（60 秒没人理 = 拒绝）；
 //   使用中：正在被远端用着的设备常亮一条，串口会话可以一键断开，烧录显示进度。
 // 状态全在 lib/devices/broker.ts 的 deviceUi 里。
+// 挂在 App 根级的 device-dock 里（输入框上方居中，串口内容屏 SerialFeed 叠在本浮窗上面）；
+// 定位由浮坞负责，这里只撑内容。
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { deviceBroker, deviceUi } from '../lib/devices/broker.js'
@@ -60,16 +62,14 @@ function secondsLeft(expiresAt: number): number {
 </template>
 
 <style scoped>
+/* 浮坞子项：定位（底部居中、层级）都在 App.vue 的 .device-dock 上，这里只排卡片；
+   卡片有按钮要收点按，开回 pointer-events */
 .device-overlay {
-  position: fixed;
-  top: 56px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(380px, calc(100vw - 32px));
+  width: min(400px, 100%);
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 90001; /* 和更新浮层同一层级，授权卡要压过桌面窗口 */
+  pointer-events: auto;
   font-size: 12.5px;
   color: var(--text-2);
 }

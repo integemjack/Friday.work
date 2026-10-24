@@ -67,6 +67,8 @@ export interface SerialSessionEvents {
   onClosed(reason: string, byPeer: boolean): void
   /** 参数变了 / 挂起恢复了（界面刷新） */
   onChange(): void
+  /** 串口读到了一段原始字节（投桌面 HUD 的串口内容屏用；显示用途，不参与转发时序） */
+  onData?(bytes: Uint8Array): void
 }
 
 const SIGNATURE = 'Friday Work'
@@ -258,7 +260,10 @@ export class SerialSession {
         for (;;) {
           const { value, done } = await reader.read()
           if (done) break
-          if (value && value.length > 0) await this.toChannel(value)
+          if (value && value.length > 0) {
+            this.events.onData?.(value)
+            await this.toChannel(value)
+          }
         }
       } catch (error) {
         const name = error instanceof Error ? error.name : ''
