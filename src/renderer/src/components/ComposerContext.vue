@@ -10,7 +10,7 @@ import { useAppStore } from '../stores/app.js'
 import { effectiveThinking, normalizeTeamMode, thinkingTitle } from '../lib/builtinCommands.js'
 import { agentActivityLabel, agentTreesByConversation, liveAgentRows } from '../lib/agentTree.js'
 import type { AgentRow } from '../lib/agentTree.js'
-import { contextPercent, contextWindowNote, formatTokenCount } from '../lib/contextWindow.js'
+import { contextMixOf, contextPercent, contextWindowNote, formatTokenCount } from '../lib/contextWindow.js'
 import type { ThinkingLevel } from '../../../protocol/rpc/protocol.js'
 
 const store = useAppStore()
@@ -83,6 +83,51 @@ const contextStats = computed(() => {
     if (typeof count === 'number' && count > 0) return { tokens: count, live: !!stats?.live }
   }
   return undefined
+})
+
+// ---- 上下文构成：各个工具（及文本 / 思考）各占多少，按块内容估算（媒体不计入）。
+//      堆叠条 + 图例：前几个工具各自一段，其余合进「其他」；文本 / 思考用灰阶，工具用色板 ----
+
+const MIX_NON_TOOL_LABEL: Record<string, string> = { text: '文本', thinking: '思考' }
+
+/** 段的颜色：非工具类灰阶；工具按出现顺序在色板上轮转（同一次会话里同一工具尽量同色） */
+function mixColor(key: string, order: number): string {
+  if (key === 'text') return 'var(--fg-3, #9a9aa5)'
+  if (key === 'thinking') return 'var(--muted, #6f6f7a)'
+  if (key === '__other') return 'var(--border, #4a4a55)'
+  return `hsl(${(order * 53 + 190) % 360} 55% 52%)`
+}
+
+const contextMixRows = computed(() => {
+  const messages = conversationID.value ? store.details[conversationID.value]?.messages : undefined
+  if (!messages || messages.length === 0) return []
+  const mix = contextMixOf(messages)
+  const total = mix.reduce((sum, seg) => sum + seg.tokens, 0)
+  if (total <= 0) return []
+  // 降序已由 contextMixOf 给出：前 5 工具 + 文本/思考各自成段；剩下的合进「其他」
+  const kept: Array<{ key: string; label: string; color: string; percent: number }> = []
+  let other = 0
+  const otherKeys = new Set<string>()
+  let toolOrder = 0
+  for (const seg of mix) {
+    const isTool = seg.key.startsWith('tool:')
+    const label = isTool ? seg.key.slice(5) : MIX_NON_TOOL_LABEL[seg.key]
+    if (!label) continue
+    const percent = Math.round((seg.tokens / total) * 100)
+    if (percent <= 0) continue
+    const keep = !isTool || toolOrder < 5
+    if (keep) {
+      kept.push({ key: seg.key, label, color: mixColor(seg.key, toolOrder), percent })
+      if (isTool) toolOrder += 1
+    } else {
+      other += seg.tokens
+      otherKeys.add(seg.key)
+    }
+  }
+  if (other > 0) {
+    kept.push({ key: '__other', label: `其他 ${otherKeys.size}`, color: mixColor('__other', 0), percent: Math.round((other / total) * 100) })
+  }
+  return kept
 })
 
 // ---- 详细信息：模型 / 思考档位 / 任务模式 / 工作目录 / 权限 / 排队 / 上下文长度占比（末尾追加，
@@ -200,6 +245,24 @@ const metaItems = computed<MetaItem[]>(() => {
           <div v-if="droppedAgents > 0" class="ctx-agent more">⋯ 还有 {{ droppedAgents }} 个在跑</div>
         </div>
       </template>
+
+      <!-- 上下文构成：各工具（及文本/思考）按内容估算的占比，堆叠条 + 图例（媒体不计入，估算口径） -->
+      <div v-if="contextMixRows.length" class="ctx-mix">
+        <span class="ctx-mix-label">构成</span>
+        <div class="ctx-mix-bar">
+          <span
+            v-for="seg in contextMixRows"
+            :key="seg.key"
+            :style="{ flex: Math.max(seg.percent, 0.6), background: seg.color }"
+          />
+        </div>
+        <div class="ctx-mix-legend">
+          <span v-for="seg in contextMixRows" :key="seg.key" class="ctx-mix-item">
+            <span class="dot" :style="{ background: seg.color }" />
+            {{ seg.label }} {{ seg.percent }}%
+          </span>
+        </div>
+      </div>
 
       <!-- 详细信息：一行排开，每项自带悬停提示（上下文占比高时那一项转警示色） -->
       <div v-if="metaItems.length" class="ctx-meta">
@@ -435,6 +498,56 @@ const metaItems = computed<MetaItem[]>(() => {
   color: var(--muted);
   -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
   mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
+}
+
+/* 上下文构成：堆叠条 + 图例。估算口径（系统提示/缓存/媒体不计入）写在标签 title 里 */
+.ctx-mix {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--fg-2, var(--fg));
+}
+
+.ctx-mix-label {
+  color: var(--muted);
+}
+
+.ctx-mix-bar {
+  display: flex;
+  width: 100%;
+  height: 4px;
+  gap: 1px;
+  border-radius: 2px;
+  overflow: hidden;
+  opacity: 0.9;
+}
+
+.ctx-mix-bar span {
+  min-width: 2px;
+}
+
+.ctx-mix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ctx-mix-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ctx-mix-item .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
 }
 
 /* 详细信息行：最淡的一行，点开输入台前扫一眼就知道发给谁、在哪干活 */
