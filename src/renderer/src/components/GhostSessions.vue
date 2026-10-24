@@ -5,6 +5,7 @@
 // 只列「在工作的」会话（跑着 / 等确认 / 等你答），全空闲时整块不出现，桌面全净。
 import { computed } from 'vue'
 import { useAppStore } from '../stores/app.js'
+import { agentActivityLabel, agentTreesByConversation, liveAgentRows } from '../lib/agentTree.js'
 
 const store = useAppStore()
 
@@ -28,6 +29,9 @@ const busySessions = computed(() =>
     })
 )
 
+/** 每个会话的子 Agent 树（同 SessionList）：背景水印里只留还在跑的分支 */
+const agentRows = computed(() => agentTreesByConversation(store.teamRuns))
+
 const statusLabel: Record<string, string> = {
   running: '',
   approval: '等确认',
@@ -38,10 +42,22 @@ const statusLabel: Record<string, string> = {
 <template>
   <div v-if="busySessions.length" class="ghost-sessions" data-testid="ghost-sessions">
     <div class="ghost-head">在跑 {{ busySessions.length }}</div>
-    <div v-for="item in busySessions" :key="item.id" class="ghost-row">
-      <span class="dot" :class="statusOf(item.id)" />
-      <span class="ghost-title" :title="item.title">{{ item.title || '（无标题）' }}</span>
-      <span v-if="statusLabel[statusOf(item.id)]" class="ghost-status">{{ statusLabel[statusOf(item.id)] }}</span>
+    <div v-for="item in busySessions" :key="item.id" class="ghost-item">
+      <div class="ghost-row">
+        <span class="dot" :class="statusOf(item.id)" />
+        <span class="ghost-title" :title="item.title">{{ item.title || '（无标题）' }}</span>
+        <span v-if="statusLabel[statusOf(item.id)]" class="ghost-status">{{ statusLabel[statusOf(item.id)] }}</span>
+      </div>
+      <!-- 这个会话还在跑的子 Agent，同树缩进（活着的分支；背景水印要低噪音） -->
+      <div
+        v-for="agent in liveAgentRows(agentRows.get(item.id) ?? [])"
+        :key="`agent-${agent.run.id}`"
+        class="ghost-agent"
+        :style="{ '--depth': agent.depth }"
+      >
+        <span class="aname">{{ agent.run.name }}</span>
+        <span class="aact">{{ agentActivityLabel(agent.run) }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -70,6 +86,12 @@ const statusLabel: Record<string, string> = {
   opacity: 0.85;
 }
 
+/* 一个会话条目：行 + 它的子 Agent 树（竖排；外层 .ghost-sessions 的 gap 隔开各条目） */
+.ghost-item {
+  display: flex;
+  flex-direction: column;
+}
+
 .ghost-row {
   display: flex;
   align-items: center;
@@ -78,6 +100,50 @@ const statusLabel: Record<string, string> = {
   line-height: 1.35;
   color: var(--text-2);
   white-space: nowrap;
+}
+
+/* 会话还在跑的子 Agent：同树缩进，更小更淡，融进水印 */
+.ghost-agent {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 1px 0 1px 15px;
+  padding-left: calc(4px + var(--depth, 0) * 12px);
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* L 形连线：同会话列表的树线，更淡 */
+.ghost-agent::before {
+  content: '';
+  position: absolute;
+  left: calc(-8px + var(--depth, 0) * 12px);
+  top: -3px;
+  bottom: 50%;
+  width: 8px;
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-bottom-left-radius: 5px;
+  opacity: 0.7;
+}
+
+.aname {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aact {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-hud);
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 18px), transparent);
 }
 
 .ghost-title {
@@ -135,5 +201,10 @@ const statusLabel: Record<string, string> = {
 [data-theme='jarvis'] .ghost-title {
   color: var(--text-2);
   text-shadow: 0 0 12px var(--accent-a10);
+}
+
+/* 贾维斯：子 Agent 连线也换发丝青线 */
+[data-theme='jarvis'] .ghost-agent::before {
+  border-color: var(--accent-a35);
 }
 </style>

@@ -9,6 +9,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { ConversationSummary } from '../../../protocol/rpc/protocol.js'
+import { agentActivityLabel, agentTreesByConversation } from '../lib/agentTree.js'
 import AddMachineDialog from './AddMachineDialog.vue'
 
 const store = useAppStore()
@@ -49,6 +50,9 @@ const visibleSessions = computed(() =>
 )
 
 const hiddenCount = computed(() => sessions.value.length - visibleSessions.value.length)
+
+/** 每个会话的子 Agent，按 parentKey 排成树、拍平成带层级的行序：在会话行下面树状展开 */
+const agentRowsByConv = computed(() => agentTreesByConversation(store.teamRuns))
 
 function showMore(): void {
   visibleCount.value += PAGE_SIZE
@@ -141,21 +145,34 @@ onMounted(() => {
     <div class="rows">
       <template v-for="group in groups" :key="group.key">
         <div class="group-label">{{ group.label }}</div>
-        <div
-          v-for="item in group.items"
-          :key="item.id"
-          class="row"
-          :class="{ active: item.id === store.activeConversationID, idle: statusOf(item.id) === 'idle' }"
-          @click="open(item.id)"
-        >
-          <span class="dot" :class="statusOf(item.id)" />
-          <span class="title" :title="item.title">{{ item.title || '（无标题）' }}</span>
-          <span v-if="statusLabel[statusOf(item.id)]" class="status" :class="statusOf(item.id)">
-            {{ statusLabel[statusOf(item.id)] }}
-          </span>
-          <span class="time">{{ timeOf(item.updatedAt) }}</span>
-          <button class="x" title="关掉这个会话的本地订阅" @click="close($event, item.id)">✕</button>
-        </div>
+        <template v-for="item in group.items" :key="item.id">
+          <div
+            class="row"
+            :class="{ active: item.id === store.activeConversationID, idle: statusOf(item.id) === 'idle' }"
+            @click="open(item.id)"
+          >
+            <span class="dot" :class="statusOf(item.id)" />
+            <span class="title" :title="item.title">{{ item.title || '（无标题）' }}</span>
+            <span v-if="statusLabel[statusOf(item.id)]" class="status" :class="statusOf(item.id)">
+              {{ statusLabel[statusOf(item.id)] }}
+            </span>
+            <span class="time">{{ timeOf(item.updatedAt) }}</span>
+            <button class="x" title="关掉这个会话的本地订阅" @click="close($event, item.id)">✕</button>
+          </div>
+          <!-- 这个会话的子 Agent，树状缩在会话行下（点它同样切到这个会话） -->
+          <div
+            v-for="agent in agentRowsByConv.get(item.id) ?? []"
+            :key="`agent-${agent.run.id}`"
+            class="agent-row"
+            :class="{ done: !agent.run.running }"
+            :style="{ '--depth': agent.depth }"
+            :title="`子 Agent · ${agentActivityLabel(agent.run)}`"
+            @click="open(item.id)"
+          >
+            <span class="aname" :title="agent.run.name">{{ agent.run.name }}</span>
+            <span class="aact">{{ agentActivityLabel(agent.run) }}</span>
+          </div>
+        </template>
       </template>
       <div v-if="!sessions.length" class="empty">
         {{ store.connected ? '还没有会话，点上面「＋ 新建」开一段' : '先连上机器' }}
@@ -366,6 +383,65 @@ onMounted(() => {
 .x:hover {
   color: var(--fail);
   background: var(--hover);
+}
+
+/* —— 会话的子 Agent 树（行下缩进 + L 形连线，层级越深缩越多） —— */
+.agent-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px;
+  padding: 2.5px 8px 2.5px calc(18px + var(--depth, 0) * 14px);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--fg-2, var(--fg));
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* L 形连线：从上面（父）连下来拐进本行，深度即缩进层级 */
+.agent-row::before {
+  content: '';
+  position: absolute;
+  left: calc(6px + var(--depth, 0) * 14px);
+  top: -3px;
+  bottom: 50%;
+  width: 9px;
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-bottom-left-radius: 6px;
+}
+
+.agent-row:hover {
+  background: var(--hover);
+}
+
+.agent-row.done {
+  opacity: 0.55;
+}
+
+.aname {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aact {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  font-family: var(--font-hud);
+  color: var(--muted);
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 20px), transparent);
+}
+
+/* 贾维斯：连线换成发丝青线、活动短语走 HUD 等宽（报文口味） */
+[data-theme='jarvis'] .agent-row::before {
+  border-color: var(--accent-a35);
 }
 
 .empty {
