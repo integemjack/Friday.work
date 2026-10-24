@@ -2,13 +2,15 @@
 // 选中会话的上下文背景条（2026-10）：会话列表里选中一段会话后，输入台上方以背景形式
 // （无卡片壳、半透明、pointer-events:none 的纯水印，不挡底下投层气泡的点击）显示这段会话的
 // 上下文（任务目标 / 步骤进度 / 在跑的子 Agent / 正在用的工具）和详细信息（模型、思考档位、
-// 任务模式、工作目录、权限、排队），让「输入台里发出去的话落在哪段会话上」一眼可见。
+// 任务模式、工作目录、权限、排队，末尾追加实时的上下文长度与占比），让「输入台里发出去的话
+// 落在哪段会话上」一眼可见。
 // 没选会话（默认态，输入即开新会话）或「和助手说」时整块不出现；Esc 取消选中后同样消失（App.vue）。
 import { computed } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { effectiveThinking, normalizeTeamMode, thinkingTitle } from '../lib/builtinCommands.js'
 import { agentActivityLabel, agentTreesByConversation, liveAgentRows } from '../lib/agentTree.js'
 import type { AgentRow } from '../lib/agentTree.js'
+import { contextPercent, contextWindowNote, formatTokenCount } from '../lib/contextWindow.js'
 import type { ThinkingLevel } from '../../../protocol/rpc/protocol.js'
 
 const store = useAppStore()
@@ -69,7 +71,22 @@ const agentRows = computed(() =>
 const visibleAgents = computed<AgentRow[]>(() => agentRows.value.slice(0, AGENT_WINDOW))
 const droppedAgents = computed(() => agentRows.value.length - visibleAgents.value.length)
 
-// ---- 详细信息：模型 / 思考档位 / 任务模式 / 工作目录 / 权限 / 排队（一行带悬停全量提示） ----
+// ---- 实时上下文长度：当前分支上最后一条带 stats.contextTokenCount 的助手消息（生成中流式原地更新，
+//      MessagePatcher 的 fields 补丁直接写回消息节点，这里跟着实时变）；老服务端没这字段就不显示 ----
+
+const contextStats = computed(() => {
+  const messages = conversationID.value ? store.details[conversationID.value]?.messages : undefined
+  if (!messages) return undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const stats = messages[i]!.message.stats
+    const count = stats?.contextTokenCount
+    if (typeof count === 'number' && count > 0) return { tokens: count, live: !!stats?.live }
+  }
+  return undefined
+})
+
+// ---- 详细信息：模型 / 思考档位 / 任务模式 / 工作目录 / 权限 / 排队 / 上下文长度占比（末尾追加，
+//      每项带悬停提示；占比的分母按模型认窗口估算，认不出只显长度） ----
 
 /** 所有思考档位（runtime 没给能调的档位时兜底，保证 ultra 也能翻出标题来） */
 const ALL_THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'ultra']
@@ -81,32 +98,63 @@ const TEAM_MODE_SHORT: Record<string, string> = {
 }
 const PERMISSION_SHORT: Record<string, string> = { auto: '自动', plan: '先方案', full: '全放行' }
 
-const metaItems = computed<string[]>(() => {
-  const out: string[] = []
+/** 详细信息行的一项：正文 + 悬停提示 + 高亮色（占比高时警示） */
+interface MetaItem {
+  text: string
+  tip?: string
+  warn?: boolean
+}
+
+/** 这段会话实际在用的引擎（选过的，没选过跟随新对话默认；模型选择器同款口径） */
+const engineOf = computed(
+  () =>
+    store.engines.find((entry) => entry.id === summary.value?.engineID && !entry.disabled) ??
+    store.engines.find((entry) => entry.id === store.defaultEngineID && !entry.disabled)
+)
+
+const metaItems = computed<MetaItem[]>(() => {
+  const out: MetaItem[] = []
   const item = summary.value
   if (!item) return out
   // 模型：会话选过的引擎，没选过跟随新对话默认（同输入框模型选择器的口径）
-  const engine =
-    store.engines.find((entry) => entry.id === item.engineID && !entry.disabled) ??
-    store.engines.find((entry) => entry.id === store.defaultEngineID && !entry.disabled)
-  out.push(`模型 ${engine ? engine.model || engine.title : '默认'}`)
+  const engine = engineOf.value
+  out.push({ text: `模型 ${engine ? engine.model || engine.title : '默认'}` })
   // 思考档位：会话记的档位，没记看 runtime 的当前档（同 /thinking 菜单的 effective 口径）
   const level = item.thinking ?? runtime.value?.thinkingLevel
   if (level) {
     const levels = runtime.value?.thinkingLevels?.length ? runtime.value.thinkingLevels : ALL_THINKING_LEVELS
-    out.push(`思考 ${thinkingTitle(effectiveThinking(level, levels) ?? level, levels)}`)
+    out.push({ text: `思考 ${thinkingTitle(effectiveThinking(level, levels) ?? level, levels)}` })
   }
   // 任务模式：派不派子智能体（/mode 的三项）
   const modeRaw = normalizeTeamMode(item.teamMode)
-  if (modeRaw) out.push(`模式 ${TEAM_MODE_SHORT[modeRaw] ?? modeRaw}`)
+  if (modeRaw) out.push({ text: `模式 ${TEAM_MODE_SHORT[modeRaw] ?? modeRaw}` })
   // 工作目录：名字优先、路径兜底；没有的不占位
   const dir = item.workingDirectoryName || item.workingDirectory
-  if (dir) out.push(`目录 ${dir}`)
+  if (dir) out.push({ text: `目录 ${dir}`, tip: dir === item.workingDirectoryName ? item.workingDirectory : undefined })
   // 权限模式（auto/plan/full）
-  if (item.permissionMode) out.push(`权限 ${PERMISSION_SHORT[item.permissionMode] ?? item.permissionMode}`)
+  if (item.permissionMode) out.push({ text: `权限 ${PERMISSION_SHORT[item.permissionMode] ?? item.permissionMode}` })
   // 排着队的输入（生成中接着发会进队列）
   const queue = runtime.value?.queue?.length ?? 0
-  if (queue > 0) out.push(`排队 ${queue}`)
+  if (queue > 0) out.push({ text: `排队 ${queue}` })
+  // 上下文长度与占比（实时，末尾追加）：长度来自最近一次生成的 stats；占比的分母协议里没有，
+  // 按在用模型认窗口估算，认不出的只显示长度不给误导性的百分比
+  const context = contextStats.value
+  if (context) {
+    const window = contextWindowNote(engine ? engine.model || engine.title : undefined)
+    if (window) {
+      const percent = contextPercent(context.tokens, window.tokens)
+      out.push({
+        text: `上下文 ${formatTokenCount(context.tokens)} · ${percent}%`,
+        tip: `最近一次生成时模型带着 ${context.tokens.toLocaleString()} tokens 的上下文；窗口按 ${window.note}（约 ${formatTokenCount(window.tokens)}）估算`,
+        warn: percent >= 80
+      })
+    } else {
+      out.push({
+        text: `上下文 ${formatTokenCount(context.tokens)}`,
+        tip: `最近一次生成时模型带着 ${context.tokens.toLocaleString()} tokens 的上下文；这个模型的窗口大小认不出，只显示长度`
+      })
+    }
+  }
   return out
 })
 </script>
@@ -153,8 +201,13 @@ const metaItems = computed<string[]>(() => {
         </div>
       </template>
 
-      <!-- 详细信息：一行排开，悬停给不了的那部分也在 title 里 -->
-      <div v-if="metaItems.length" class="ctx-meta" :title="metaItems.join('\n')">{{ metaItems.join('  ·  ') }}</div>
+      <!-- 详细信息：一行排开，每项自带悬停提示（上下文占比高时那一项转警示色） -->
+      <div v-if="metaItems.length" class="ctx-meta">
+        <template v-for="(item, index) in metaItems" :key="index">
+          <span v-if="index > 0" class="sep"> · </span>
+          <span :class="{ warn: item.warn }" :title="item.tip">{{ item.text }}</span>
+        </template>
+      </div>
     </div>
   </Transition>
 </template>
@@ -394,5 +447,10 @@ const metaItems = computed<string[]>(() => {
   color: var(--muted);
   -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 26px), transparent);
   mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 26px), transparent);
+}
+
+/* 上下文占比 ≥80%：那一项转警示色（窗口快满的预告） */
+.ctx-meta .warn {
+  color: var(--warn);
 }
 </style>
