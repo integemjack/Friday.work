@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// 壁纸模式的置顶输入浮层（主进程 ?quick=1 小窗，Ctrl+Alt+F 呼出）：
-// 桌面背景层拿不到键盘焦点，打字都在这里——真窗口、永远可点可输入（输入法正常走）。
+// 全屏桌面模式的置顶输入浮层（主进程 ?quick=1 小窗，Ctrl+Alt+F 呼出）：
+// 全屏窗口被别的窗口盖住时也能随手输入——真窗口、永远可点可输入（输入法正常走）。
 // Enter 提交（Shift+Enter 换行）后转给主窗口走常规提交路径（会话 / 和助手说）；Esc 或失焦收起。
-// 右侧带「退出桌面模式」保底按钮：壁纸层的点击 / 快捷键都指望不上时，这里一定能点到。
+// 右侧带「退出桌面模式」保底按钮：主窗口被盖住 / 找不到时，这里一定能点到。
 import { onMounted, ref } from 'vue'
 
 const text = ref('')
@@ -38,7 +38,7 @@ onMounted(() => inputEl.value?.focus())
           <path d="M2.5 8 13.5 2.8 10.9 13.4 8.2 10.3 5.9 12.4V9z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
         </svg>
       </button>
-      <button class="exit" title="退出桌面背景模式，回到普通窗口" @click="bridge.wallpaperExit()">退出桌面</button>
+      <button class="exit" title="退出全屏桌面模式，回到普通窗口" @click="bridge.wallpaperExit()">退出桌面</button>
     </div>
   </div>
 </template>

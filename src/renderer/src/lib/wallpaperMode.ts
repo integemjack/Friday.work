@@ -1,6 +1,6 @@
-// 桌面背景层模式（本机偏好，主进程 WallpaperLayer 驱动、状态持久化在 userData/desktop-mode.json）：
-// 整个应用挂进 Windows 壁纸层（桌面图标之下）——Win+D / 显示桌面不再收走，其它窗口永远浮在
-// 它上面。壁纸层拿不到键盘焦点（系统不转发输入），打字用 Ctrl+Alt+F 呼出置顶输入浮层。
+// 全屏桌面模式（本机偏好，主进程 WallpaperLayer 驱动、状态持久化在 userData/desktop-mode.json）：
+// 整个应用无边框铺满整屏（无窗全屏），任务栏 / 桌面图标 / 其它窗口都在它上面；窗口有焦点时
+// 可正常打字，被别的窗口盖住时 Ctrl+Alt+F 呼出置顶输入浮层。此模式下标题栏不可拖拽。
 import { ref } from 'vue'
 
 const bridge = window.fridayBridge
@@ -22,7 +22,7 @@ export function initWallpaperMode(): void {
   })
 }
 
-/** 切换（设置页 / TitleBar 用）。返回是否成功——挂接失败（桌面层找不到）要提示 */
+/** 切换（设置页 / TitleBar 用）。返回是否成功——切换失败（窗口未就绪）要提示 */
 export async function setWallpaperMode(enabled: boolean): Promise<boolean> {
   return bridge.wallpaperSetEnabled(enabled)
 }

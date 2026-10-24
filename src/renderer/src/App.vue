@@ -151,10 +151,10 @@ onMounted(() => {
   store.restoreLayout()
   store.bindHost()
   store.startCastTicker() // 投层置顶 tick：窗口到期时抬「当前最活跃」的气泡/卡
-  // 桌面背景层模式状态（TitleBar 窗控 / 设置页跟着它变）
+  // 全屏桌面模式状态（TitleBar 窗控 / 标题栏拖拽禁用 / 设置页跟着它变）
   initWallpaperMode()
-  // 壁纸模式输入浮层（Ctrl+Alt+F）提交的文本：走输入台同一条路（会话 / 和助手说）。
-  // 壁纸层窗口拿不到键盘焦点，浮层是唯一打字入口
+  // 全屏桌面模式输入浮层（Ctrl+Alt+F）提交的文本：走输入台同一条路（会话 / 和助手说）。
+  // 全屏窗口被别的窗口盖住时，浮层是不切窗口的快速打字入口
   offQuickInput = window.fridayBridge.onQuickInput((text) => {
     void onComposerSubmit(text, []).catch((error: unknown) => {
       store.error = error instanceof Error ? error.message : String(error)

@@ -106,7 +106,7 @@ function persistWindowState(): void {
   const win = mainWindow
   if (!win || win.isDestroyed()) return
   if (win.isMinimized()) return // 最小化时的 bounds 不可用，别把好的覆盖掉
-  // 桌面背景模式：窗口铺满整屏挂着，这份 bounds 不是用户想要的普通窗口尺寸，别落盘
+  // 桌面背景模式：窗口铺满整屏（无窗全屏）挂着，这份 bounds 不是用户想要的普通窗口尺寸，别落盘
   // （退出模式时 restore 的原 bounds 才是）；模式自身的开关存在 desktop-mode.json 里
   if (wallpaper?.isEnabled()) return
   try {
@@ -226,7 +226,7 @@ app.whenReady().then(() => {
     }
   )
   bridge.register()
-  // 桌面背景层（混合模式）：上次开着就在窗口就绪后挂进壁纸层；IPC 给设置页 / 输入浮层
+  // 全屏桌面模式（无窗全屏）：上次开着就在窗口就绪后铺满整屏；IPC 给设置页 / 输入浮层
   wallpaper = new WallpaperLayer(() => mainWindow)
   wallpaper.registerIpc()
   wallpaper.init()

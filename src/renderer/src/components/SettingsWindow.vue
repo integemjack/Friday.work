@@ -57,12 +57,12 @@ function pickTheme(next: UITheme): void {
   setTheme(next)
 }
 
-// 桌面背景模式（主进程 WallpaperLayer，存档在主进程）：挂接失败要给一句人话
+// 全屏桌面模式（主进程 WallpaperLayer，存档在主进程）：切换失败要给一句人话
 const wallpaperError = ref('')
 async function pickWallpaper(enabled: boolean): Promise<void> {
   wallpaperError.value = ''
   const ok = await setWallpaperMode(enabled)
-  if (!ok) wallpaperError.value = '挂接桌面背景层失败（找不到桌面，稍后再试）'
+  if (!ok) wallpaperError.value = '切换全屏桌面失败（窗口未就绪，稍后再试）'
 }
 
 interface EngineView {
@@ -509,20 +509,20 @@ async function pickVoiceFiles(): Promise<void> {
       </div>
       <div class="note">贾维斯是本机界面偏好（深空黑 + 电光青全息风），与远程机器无关。</div>
       <div class="row" style="margin-top: 10px">
-        <span class="key">桌面背景模式</span>
+        <span class="key">全屏桌面</span>
         <span class="value">
           <button class="small-btn" :class="{ strong: !wallpaperMode }" @click="pickWallpaper(false)">窗口</button>
           <button
             class="small-btn"
             :class="{ strong: wallpaperMode }"
-            title="应用挂进 Windows 壁纸层：桌面图标在上面，Win+D 不再收走，其它窗口永远浮在它上面"
+            title="应用无边框铺满整屏：任务栏、桌面图标、其它窗口都在它上面，像桌面背景一样"
             @click="pickWallpaper(true)"
           >
-            桌面背景
+            无窗全屏
           </button>
         </span>
       </div>
-      <div class="note">桌面背景模式：整个应用贴到桌面最底层（图标下面），Win+D / 显示桌面不再收走它；打字按 Ctrl+Alt+F 呼出置顶输入条（壁纸层拿不到键盘）。只铺主显示器。</div>
+      <div class="note">全屏桌面：应用无边框铺满整屏（铺窗口所在的显示器），任务栏和其它窗口都在它上面；窗口有焦点时可正常打字操作，被别的窗口盖住时按 Ctrl+Alt+F 呼出置顶输入条；此模式下标题栏不可拖拽。</div>
       <div v-if="wallpaperError" class="error">{{ wallpaperError }}</div>
     </section>
 

@@ -149,8 +149,8 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('voice:tts-progress', handler)
     return () => ipcRenderer.removeListener('voice:tts-progress', handler)
   },
-  /** 桌面背景层模式（主进程 WallpaperLayer）：状态 / 开关；变化经 onWallpaperState 推送。
-   *  应用挂进 Windows 壁纸层（桌面图标下面）——Win+D 不再收走、其它窗口永远浮在它上面 */
+  /** 全屏桌面模式（主进程 WallpaperLayer）：状态 / 开关；变化经 onWallpaperState 推送。
+   *  应用无边框铺满整屏（无窗全屏）——任务栏 / 桌面图标 / 其它窗口都在它上面 */
   wallpaperGetState: (): Promise<{ enabled: boolean }> => ipcRenderer.invoke('wallpaper:get-state'),
   wallpaperSetEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('wallpaper:set-enabled', enabled),
   onWallpaperState: (listener: (enabled: boolean) => void): (() => void) => {
@@ -158,7 +158,7 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('wallpaper:state', handler)
     return () => ipcRenderer.removeListener('wallpaper:state', handler)
   },
-  /** 壁纸模式的置顶输入浮层（?quick=1 小窗）用：提交 / 关闭 / 保底退出桌面模式 */
+  /** 全屏桌面模式的置顶输入浮层（?quick=1 小窗）用：提交 / 关闭 / 保底退出全屏桌面 */
   wallpaperQuickSubmit: (text: string): void => {
     ipcRenderer.send('wallpaper:quick-submit', text)
   },

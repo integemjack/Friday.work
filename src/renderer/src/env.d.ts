@@ -126,12 +126,12 @@ declare global {
       winMinimize(): void
       winMaximizeToggle(): void
       winClose(): void
-      /** 桌面背景层模式：应用挂进 Windows 壁纸层（桌面图标下面），Win+D 不再收走；
-       *  壁纸层拿不到键盘焦点，打字用 Ctrl+Alt+F 呼出置顶输入浮层 */
+      /** 全屏桌面模式（无窗全屏）：应用无边框铺满整屏，任务栏 / 桌面图标 / 其它窗口都在它上面；
+       *  被别的窗口盖住时 Ctrl+Alt+F 呼出置顶输入浮层；此模式下标题栏不可拖拽 */
       wallpaperGetState(): Promise<{ enabled: boolean }>
       wallpaperSetEnabled(enabled: boolean): Promise<boolean>
       onWallpaperState(listener: (enabled: boolean) => void): () => void
-      /** 壁纸模式置顶输入浮层（?quick=1 小窗）用：提交 / 关闭 / 保底退出桌面模式 */
+      /** 全屏桌面模式置顶输入浮层（?quick=1 小窗）用：提交 / 关闭 / 保底退出全屏桌面 */
       wallpaperQuickSubmit(text: string): void
       wallpaperQuickClose(): void
       wallpaperExit(): void

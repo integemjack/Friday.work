@@ -97,7 +97,7 @@ async function exitWallpaper(): Promise<void> {
 </script>
 
 <template>
-  <header class="titlebar">
+  <header class="titlebar" :class="{ fullscreen: wallpaperMode }">
     <div class="brand">Friday</div>
 
     <!-- 窗口启动器：点亮=已开；点击开/置顶/还原最小化（没有任务栏后的唯一入口） -->
@@ -188,11 +188,11 @@ async function exitWallpaper(): Promise<void> {
       <span class="dot off" />
       未登录 · 扫码
     </button>
-    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区）——三个图标同 viewBox/同尺寸/同描边，大小严格一致。
-         桌面背景模式下最小化/关闭都没意义（窗口挂在壁纸层），换成一个「退出桌面」钮；
-         壁纸层点击要是被系统吃掉点不到，输入浮层（Ctrl+Alt+F）上还有保底退出 -->
+    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区，全屏桌面模式下禁拖）——三个图标
+         同 viewBox/同尺寸/同描边，大小严格一致。全屏桌面模式下最小化/关闭都没意义，
+         换成一个「退出桌面」钮；被别的窗口盖住点不到时，输入浮层（Ctrl+Alt+F）上还有保底退出 -->
     <div class="win-controls">
-      <button v-if="wallpaperMode" class="win-btn wallpaper-exit" title="退出桌面背景模式（回到普通窗口）" @click="exitWallpaper()">
+      <button v-if="wallpaperMode" class="win-btn wallpaper-exit" title="退出全屏桌面模式（回到普通窗口）" @click="exitWallpaper()">
         退出桌面
       </button>
       <template v-else>
@@ -255,6 +255,12 @@ async function exitWallpaper(): Promise<void> {
 
 .titlebar button,
 .titlebar .machine {
+  -webkit-app-region: no-drag;
+}
+
+/* 全屏桌面模式下整条标题栏禁拖：无边框铺满整屏的「桌面」被拖出一块就穿帮了，
+   退出靠窗控位置的「退出桌面」钮 / 设置页 / 输入条保底钮 */
+.titlebar.fullscreen {
   -webkit-app-region: no-drag;
 }
 
