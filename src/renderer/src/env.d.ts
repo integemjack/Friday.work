@@ -126,6 +126,17 @@ declare global {
       winMinimize(): void
       winMaximizeToggle(): void
       winClose(): void
+      /** 桌面背景层模式：应用挂进 Windows 壁纸层（桌面图标下面），Win+D 不再收走；
+       *  壁纸层拿不到键盘焦点，打字用 Ctrl+Alt+F 呼出置顶输入浮层 */
+      wallpaperGetState(): Promise<{ enabled: boolean }>
+      wallpaperSetEnabled(enabled: boolean): Promise<boolean>
+      onWallpaperState(listener: (enabled: boolean) => void): () => void
+      /** 壁纸模式置顶输入浮层（?quick=1 小窗）用：提交 / 关闭 / 保底退出桌面模式 */
+      wallpaperQuickSubmit(text: string): void
+      wallpaperQuickClose(): void
+      wallpaperExit(): void
+      /** 输入浮层提交的文本（主进程转来）：App.vue 走常规提交路径（会话 / 和助手说） */
+      onQuickInput(listener: (text: string) => void): () => void
       /** 点通知回会话 */
       onOpenConversation(listener: (conversationID: string) => void): () => void
       /** 客户端更新（设置窗口 + 桌面浮层展示；状态变化由主进程推送） */

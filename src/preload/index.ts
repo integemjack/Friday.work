@@ -149,6 +149,31 @@ contextBridge.exposeInMainWorld('fridayBridge', {
     ipcRenderer.on('voice:tts-progress', handler)
     return () => ipcRenderer.removeListener('voice:tts-progress', handler)
   },
+  /** 桌面背景层模式（主进程 WallpaperLayer）：状态 / 开关；变化经 onWallpaperState 推送。
+   *  应用挂进 Windows 壁纸层（桌面图标下面）——Win+D 不再收走、其它窗口永远浮在它上面 */
+  wallpaperGetState: (): Promise<{ enabled: boolean }> => ipcRenderer.invoke('wallpaper:get-state'),
+  wallpaperSetEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('wallpaper:set-enabled', enabled),
+  onWallpaperState: (listener: (enabled: boolean) => void): (() => void) => {
+    const handler = (_event: unknown, enabled: boolean): void => listener(enabled)
+    ipcRenderer.on('wallpaper:state', handler)
+    return () => ipcRenderer.removeListener('wallpaper:state', handler)
+  },
+  /** 壁纸模式的置顶输入浮层（?quick=1 小窗）用：提交 / 关闭 / 保底退出桌面模式 */
+  wallpaperQuickSubmit: (text: string): void => {
+    ipcRenderer.send('wallpaper:quick-submit', text)
+  },
+  wallpaperQuickClose: (): void => {
+    ipcRenderer.send('wallpaper:quick-close')
+  },
+  wallpaperExit: (): void => {
+    ipcRenderer.send('wallpaper:exit')
+  },
+  /** 输入浮层提交的文本（主进程转来）：App.vue 走常规提交路径（会话 / 和助手说） */
+  onQuickInput: (listener: (text: string) => void): (() => void) => {
+    const handler = (_event: unknown, text: string): void => listener(text)
+    ipcRenderer.on('wallpaper:quick-input', handler)
+    return () => ipcRenderer.removeListener('wallpaper:quick-input', handler)
+  },
   /** 媒体叠本地缓存：把一份媒体字节（或 http/data URL，主进程代下）落进 userData/MediaStack */
   saveStackMedia: (payload: { name: string; bytes?: ArrayBuffer; url?: string }): Promise<{ name: string } | null> =>
     ipcRenderer.invoke('media-stack:save', payload),

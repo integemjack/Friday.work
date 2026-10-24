@@ -12,6 +12,7 @@ import { ClientUpdate } from './ClientUpdate.js'
 import { CredentialStore } from './CredentialStore.js'
 import { handleMediaStackRequest } from './MediaStack.js'
 import { ProtocolHost as ProtocolProcessHost } from './protocolHost.js'
+import { WallpaperLayer } from './WallpaperLayer.js'
 import { IpcBridge } from './ipc/bridge.js'
 import { registerSerialPorts } from './ipc/SerialPorts.js'
 import { registerDeviceTools, stopDeviceTools } from './ipc/DeviceTools.js'
@@ -105,6 +106,9 @@ function persistWindowState(): void {
   const win = mainWindow
   if (!win || win.isDestroyed()) return
   if (win.isMinimized()) return // 最小化时的 bounds 不可用，别把好的覆盖掉
+  // 桌面背景模式：窗口铺满整屏挂着，这份 bounds 不是用户想要的普通窗口尺寸，别落盘
+  // （退出模式时 restore 的原 bounds 才是）；模式自身的开关存在 desktop-mode.json 里
+  if (wallpaper?.isEnabled()) return
   try {
     // 最大化时存的是还原尺寸（getNormalBounds）：重启后先按原尺寸建窗再 maximize，取消最大化后不变样
     const bounds = win.getNormalBounds()
@@ -140,6 +144,7 @@ function resolveHandle(handle: string): string | null {
 }
 
 let bridge: IpcBridge | null = null
+let wallpaper: WallpaperLayer | null = null
 
 // 客户端自动更新：状态推给渲染层（设置窗口），退出时接手静默安装（仅 Windows）
 const updater = new ClientUpdate(() => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null))
@@ -221,6 +226,10 @@ app.whenReady().then(() => {
     }
   )
   bridge.register()
+  // 桌面背景层（混合模式）：上次开着就在窗口就绪后挂进壁纸层；IPC 给设置页 / 输入浮层
+  wallpaper = new WallpaperLayer(() => mainWindow)
+  wallpaper.registerIpc()
+  wallpaper.init()
   // 语音全部走 friday-voice 引擎（GPU）：听写（实时 + 一次性）和播报（CosyVoice3，含克隆音色）
   registerDictationIpc()
   registerRealtimeDictationIpc()

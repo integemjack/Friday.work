@@ -41,6 +41,7 @@ import {
 import { resample } from '../lib/voiceMedia.js'
 import { autoCallEnabled, setAutoCall } from '../lib/autoCall.js'
 import { CAPABILITY_LABEL, deviceGrants, revokeGrant } from '../lib/devices/grants.js'
+import { setWallpaperMode, wallpaperMode } from '../lib/wallpaperMode.js'
 
 const store = useAppStore()
 const loading = ref(false)
@@ -54,6 +55,14 @@ const theme = ref<UITheme>(loadTheme())
 function pickTheme(next: UITheme): void {
   theme.value = next
   setTheme(next)
+}
+
+// 桌面背景模式（主进程 WallpaperLayer，存档在主进程）：挂接失败要给一句人话
+const wallpaperError = ref('')
+async function pickWallpaper(enabled: boolean): Promise<void> {
+  wallpaperError.value = ''
+  const ok = await setWallpaperMode(enabled)
+  if (!ok) wallpaperError.value = '挂接桌面背景层失败（找不到桌面，稍后再试）'
 }
 
 interface EngineView {
@@ -499,6 +508,22 @@ async function pickVoiceFiles(): Promise<void> {
         </button>
       </div>
       <div class="note">贾维斯是本机界面偏好（深空黑 + 电光青全息风），与远程机器无关。</div>
+      <div class="row" style="margin-top: 10px">
+        <span class="key">桌面背景模式</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: !wallpaperMode }" @click="pickWallpaper(false)">窗口</button>
+          <button
+            class="small-btn"
+            :class="{ strong: wallpaperMode }"
+            title="应用挂进 Windows 壁纸层：桌面图标在上面，Win+D 不再收走，其它窗口永远浮在它上面"
+            @click="pickWallpaper(true)"
+          >
+            桌面背景
+          </button>
+        </span>
+      </div>
+      <div class="note">桌面背景模式：整个应用贴到桌面最底层（图标下面），Win+D / 显示桌面不再收走它；打字按 Ctrl+Alt+F 呼出置顶输入条（壁纸层拿不到键盘）。只铺主显示器。</div>
+      <div v-if="wallpaperError" class="error">{{ wallpaperError }}</div>
     </section>
 
     <section>

@@ -3,6 +3,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { WindowKind } from '../stores/app.js'
 import { useAppStore } from '../stores/app.js'
+import { wallpaperMode } from '../lib/wallpaperMode.js'
 
 const store = useAppStore()
 
@@ -88,6 +89,11 @@ function kindOpen(kind: WindowKind): boolean {
 
 // 无边框窗口的窗控（preload 暴露的 IPC；模板里拿不到 window 全局，setup 里取一次）
 const bridge = window.fridayBridge
+
+/** 退出桌面背景模式（标题栏窗控在壁纸模式下换成的那个钮） */
+async function exitWallpaper(): Promise<void> {
+  await window.fridayBridge.wallpaperSetEnabled(false)
+}
 </script>
 
 <template>
@@ -182,23 +188,30 @@ const bridge = window.fridayBridge
       <span class="dot off" />
       未登录 · 扫码
     </button>
-    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区）——三个图标同 viewBox/同尺寸/同描边，大小严格一致 -->
+    <!-- 无边框窗口的窗控钮（frame:false；整个标题栏是拖拽区）——三个图标同 viewBox/同尺寸/同描边，大小严格一致。
+         桌面背景模式下最小化/关闭都没意义（窗口挂在壁纸层），换成一个「退出桌面」钮；
+         壁纸层点击要是被系统吃掉点不到，输入浮层（Ctrl+Alt+F）上还有保底退出 -->
     <div class="win-controls">
-      <button class="win-btn" title="最小化" @click="bridge.winMinimize()">
-        <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <path d="M2.2 6h7.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        </svg>
+      <button v-if="wallpaperMode" class="win-btn wallpaper-exit" title="退出桌面背景模式（回到普通窗口）" @click="exitWallpaper()">
+        退出桌面
       </button>
-      <button class="win-btn" title="最大化 / 还原" @click="bridge.winMaximizeToggle()">
-        <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <rect x="2.6" y="2.6" width="6.8" height="6.8" rx="1" stroke="currentColor" stroke-width="1.3" />
-        </svg>
-      </button>
-      <button class="win-btn close" title="关闭" @click="bridge.winClose()">
-        <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <path d="M3.1 3.1l5.8 5.8M8.9 3.1 3.1 8.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        </svg>
-      </button>
+      <template v-else>
+        <button class="win-btn" title="最小化" @click="bridge.winMinimize()">
+          <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M2.2 6h7.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+        </button>
+        <button class="win-btn" title="最大化 / 还原" @click="bridge.winMaximizeToggle()">
+          <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <rect x="2.6" y="2.6" width="6.8" height="6.8" rx="1" stroke="currentColor" stroke-width="1.3" />
+          </svg>
+        </button>
+        <button class="win-btn close" title="关闭" @click="bridge.winClose()">
+          <svg class="ico" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M3.1 3.1l5.8 5.8M8.9 3.1 3.1 8.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+        </button>
+      </template>
     </div>
 
     <teleport to="body">
@@ -359,6 +372,14 @@ const bridge = window.fridayBridge
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
+}
+
+/* 桌面背景模式下的「退出桌面」文本钮：沿用窗控高度，青色亮字提示这是回到普通窗口的出口 */
+.win-btn.wallpaper-exit {
+  width: auto;
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--accent, #7fd8ec);
 }
 
 /* 窗控图标：同一 viewBox、同一渲染尺寸、同一描边粗细——三个一样大，grid 精确居中 */

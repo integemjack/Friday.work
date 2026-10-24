@@ -9,6 +9,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { WindowKind } from './stores/app.js'
 import { saveLayout, useAppStore } from './stores/app.js'
 import { uiTheme } from './lib/theme.js'
+import { initWallpaperMode } from './lib/wallpaperMode.js'
 import { host } from './lib/host.js'
 import { WorkChannelHub, type WorkSignalIn } from './lib/workChannel.js'
 import { deviceBroker } from './lib/devices/broker.js'
@@ -131,6 +132,7 @@ onBeforeUnmount(() => {
   offWork()
   offDevice()
   offTunnel()
+  offQuickInput?.()
   workHub.disposeAll()
 })
 
@@ -141,11 +143,23 @@ const composerDockEl = ref<HTMLElement | null>(null)
 const contextDockEl = ref<HTMLElement | null>(null)
 let composerResize: ResizeObserver | null = null
 
+// 输入浮层提交的注销函数（onMounted 里注册）
+let offQuickInput: (() => void) | null = null
+
 onMounted(() => {
   // 界面主题已在 main.ts 挂载前应用（避免首帧闪系统样式）；这里只恢复布局、接协议事件
   store.restoreLayout()
   store.bindHost()
   store.startCastTicker() // 投层置顶 tick：窗口到期时抬「当前最活跃」的气泡/卡
+  // 桌面背景层模式状态（TitleBar 窗控 / 设置页跟着它变）
+  initWallpaperMode()
+  // 壁纸模式输入浮层（Ctrl+Alt+F）提交的文本：走输入台同一条路（会话 / 和助手说）。
+  // 壁纸层窗口拿不到键盘焦点，浮层是唯一打字入口
+  offQuickInput = window.fridayBridge.onQuickInput((text) => {
+    void onComposerSubmit(text, []).catch((error: unknown) => {
+      store.error = error instanceof Error ? error.message : String(error)
+    })
+  })
   const syncDocks = (): void => {
     const style = document.documentElement.style
     style.setProperty('--friday-composer-h', `${composerDockEl.value?.offsetHeight ?? 0}px`)
