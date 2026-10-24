@@ -204,7 +204,7 @@ function scheduleErrorDismiss(): void {
 watch(() => store.error, scheduleErrorDismiss)
 onBeforeUnmount(() => window.clearTimeout(errorTimer))
 
-// Esc 取消选中会话：回到默认态（聊天栏显示「新对话」，输入台发出去就开一段新的）；只取消选中，不退订——
+// Esc 取消选中会话：回到默认态（右栏聊天没有内容跟着退让收起，输入台发出去就开一段新的）；只取消选中，不退订——
 // 后台的流式气泡 / 播报照常。别的东西先吃掉这次 Esc 的（灯箱、登录页、机器菜单、命令菜单、停录音…
 // 它们都会 preventDefault）就不再取消选中；判断放到下一个任务里做，晚注册的监听也来得及标记。
 // 在输入框里按 Esc 不算，除非是输入台且里面没字（有字时取消选中会让正在写的这条发到新会话去）。
@@ -245,6 +245,11 @@ onBeforeUnmount(() => {
 
 // 通话中（来电/呼出/接通中/通话中）：右栏顶部给通话面板让出 1/3、聊天缩到 2/3；空闲时聊天占满整栏
 const calling = computed(() => store.calling)
+
+// 没选会话（默认态 / Esc 取消选中）且不在「和助手说」：右栏没有可显示的内容，退让收起、
+// 主区占满（规则同小屏/沉浸模式：只藏不卸载，订阅、草稿、播报都还在）；选中会话或切到
+// 助手模式即回来。通话例外交给 CSS（.side-right.calling 的 :has 规则，同沉浸模式）
+const chatIdle = computed(() => !conversationID.value && !store.assistantChat)
 </script>
 
 <template>
@@ -254,7 +259,7 @@ const calling = computed(() => store.calling)
     <!-- 桌面：三栏（会话列表 | 留白主区 | 通话+聊天）。
          气泡和操作卡投在主区随机位置；终端/文件/浏览器/子 Agent/设置都是用到时才开的浮动窗口。
          沉浸模式（标题栏开关）：两栏收起、主区占满，左上角以背景形式显示在跑会话 -->
-    <div class="desktop" :class="{ 'panels-hidden': store.panelsHidden }" ref="desktopEl" @mousemove="onDesktopMove">
+    <div class="desktop" :class="{ 'panels-hidden': store.panelsHidden, 'chat-idle': chatIdle }" ref="desktopEl" @mousemove="onDesktopMove">
       <!-- 贾维斯深空层：漂移星野 + 流星 + 星云（最底层，面板全是玻璃能透出来） -->
       <SpaceVeil v-if="jarvis" />
 
@@ -288,7 +293,8 @@ const calling = computed(() => store.calling)
         </div>
       </section>
 
-      <!-- 右栏：与助手聊天默认占满整栏；拨打视频/语音时（calling）顶部 1/3 通话面板 + 底部 2/3 聊天 -->
+      <!-- 右栏：与助手聊天默认占满整栏；拨打视频/语音时（calling）顶部 1/3 通话面板 + 底部 2/3 聊天。
+           没选会话且不在助手模式（chat-idle）时整栏退让收起（见下方 CSS） -->
       <aside class="side side-right" :class="{ calling }">
         <CallWidget />
         <div class="side-chat"><AssistantChat /></div>
@@ -497,6 +503,34 @@ const calling = computed(() => store.calling)
 
   .side-right.calling {
     display: flex;
+  }
+}
+
+/* 没选会话（默认态 / Esc 取消选中）且不在「和助手说」：右栏没有可显示的内容，同样退让收起、
+   主区占满整行（同上小屏：只藏不卸载，会话订阅、聊天草稿、播报都还在）。
+   只在宽屏生效（窄屏两栏本来就收）；规则放在沉浸模式前面——用户主动收栏的沉浸模式优先。
+   通话中例外：右栏的通话面板是唯一的挂断/静音入口，照常让出右栏（聊天那格仍收着） */
+@media (min-width: 1100px) {
+  .desktop.chat-idle {
+    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-areas: 'left main';
+  }
+
+  .desktop.chat-idle .side-right {
+    display: none;
+  }
+
+  .desktop.chat-idle:has(.side-right.calling) {
+    grid-template-columns: 248px minmax(0, 1fr) 352px;
+    grid-template-areas: 'left main right';
+  }
+
+  .desktop.chat-idle:has(.side-right.calling) .side-right {
+    display: flex;
+  }
+
+  .desktop.chat-idle:has(.side-right.calling) .side-chat {
+    display: none;
   }
 }
 

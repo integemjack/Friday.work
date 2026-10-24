@@ -568,9 +568,10 @@ export const useAppStore = defineStore('app', {
     connected(): boolean {
       return this.currentMachineInfo?.state === 'ready'
     },
-    /** 正在通话（来电/呼出/接通中/通话中）：右栏顶部让出 1/3 给通话面板、聊天缩到 2/3；空闲时聊天占满整栏 */
-    calling(state): boolean {
-      const phase = state.schat.call.phase
+    /** 正在通话（来电/呼出/接通中/通话中）：右栏顶部让出 1/3 给通话面板、聊天缩到 2/3；空闲时聊天占满整栏。
+     *  用 this 而不是 state 参数：单测的 pinia stub 调 getter 不传参，state 参数会是 undefined */
+    calling(): boolean {
+      const phase = this.schat.call.phase
       return phase === 'incoming' || phase === 'outgoing' || phase === 'connecting' || phase === 'active'
     },
     /** 当前机器对应的助手 bot（work:<botID>）；取不到时退回第一个 bot——自动拨号和聊天头部的手动拨打都用它 */
@@ -2161,7 +2162,15 @@ export const useAppStore = defineStore('app', {
      *  找空闲处；实在没有整块空地就退到重叠最小的点（此时仍可能后活动者盖住先前的） */
     randomSpot(width: number, height: number): { x: number; y: number } {
       const leftEdge = 250
-      const rightEdge = Math.max(leftEdge + width + 8, window.innerWidth - 400)
+      // 右侧避让按右栏实际让没让出那 352px 算（与 App.vue 的收栏规则同步）：没选会话（默认态 /
+      // 取消选中）且不在助手模式、沉浸模式、窄窗口都收着，气泡可投到更靠右；通话中例外照常让出。
+      // 之前永远按 400 让位，右栏收着时白浪费一段采样空间
+      const rightShown =
+        this.calling ||
+        (window.innerWidth >= 1100 &&
+          !this.panelsHidden &&
+          (!!this.activeConversationID || this.assistantChat))
+      const rightEdge = Math.max(leftEdge + width + 8, window.innerWidth - (rightShown ? 400 : 24))
       const topEdge = 60
       const bottomEdge = Math.max(topEdge + height + 8, window.innerHeight - 250)
       const spanX = Math.max(1, rightEdge - leftEdge - width)
