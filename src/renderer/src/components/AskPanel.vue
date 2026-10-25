@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // ask_user 的问题面板（qt/docs/ASK.md §2 的桌面版）：Friday 想问你的事就地展开成选项——
 // 单选点一下就进下一题（最后一题点了就交）、多选勾上再「确定」、也能自己写、也能跳过（按推荐的做）。
-// 用在两处：聊天面板的审批横幅（AssistantChat，橙底白字）和桌面的操作卡（DesktopOps，深色），
-// 颜色走 --ask-line / --ask-accent 两个变量，两边的父级各给一套。
+// 自己写也是一项选择：输入行前面带同款选项标记，打了字就自动选中（单选时取消其他，含预填的推荐），
+// 删光了字回到默认（单选恢复推荐预填）。用在屏幕中央的置顶提问浮层（AskOverlay），
+// 颜色走 --ask-line / --ask-accent 两个变量，父级给一套。
 import { computed, ref } from 'vue'
 import type { AskQuestion } from '../../../protocol/rpc/protocol.js'
 import { buildAskAnswer, type AskAnswer } from '../lib/askUser.js'
@@ -20,17 +21,20 @@ const picked = ref<string[][]>(
       : []
   )
 )
-/** 每题自己写的字（点过选项的题以选项为准） */
+/** 每题自己写的字（也是一项选择：打了字就选中它；单选里与选项互斥，多选里与勾选并存） */
 const own = ref<string[]>(props.questions.map(() => ''))
+const ownInput = ref<HTMLInputElement | null>(null)
 
 const question = computed(() => props.questions[index.value])
 const last = computed(() => index.value >= props.questions.length - 1)
+/** 当前题自己写的字（去空白后）是否算选中了「自己写」 */
+const ownPicked = computed(() => (own.value[index.value] ?? '').trim().length > 0)
 
 function isPicked(label: string): boolean {
   return (picked.value[index.value] ?? []).includes(label)
 }
 
-/** 单选点一下：记下这题的答案就进下一题；多选只勾选，等「确定」 */
+/** 单选点一下：记下这题的答案（自己写的字作废，以点选为准）就进下一题；多选只勾选，等「确定」 */
 function choose(label: string) {
   const at = index.value
   if (question.value?.multiple) {
@@ -38,8 +42,27 @@ function choose(label: string) {
     picked.value[at] = list.includes(label) ? list.filter((item) => item !== label) : [...list, label]
   } else {
     picked.value[at] = [label]
+    own.value[at] = ''
     advance()
   }
+}
+
+/** 自定义输入框里打了字：「自己写」选中。单选：有字就取消其他选中（含预填的推荐），删光了回到推荐预填；
+ *  多选：与勾选并存。直接读 event.target.value（不依赖 v-model 更新时机，输入法组合中也联动） */
+function onOwnInput(event: Event) {
+  const at = index.value
+  const value = (event.target as HTMLInputElement).value.trim()
+  if (question.value?.multiple) return
+  picked.value[at] = value
+    ? []
+    : question.value && question.value.recommended !== undefined && question.value.recommended >= 0
+      ? [question.value.options[question.value.recommended]?.label ?? '']
+      : []
+}
+
+/** 点输入行任意处（含前面的选项标记）聚焦输入框：prevent 免得拖焦点把输入框弄 blur */
+function focusOwn() {
+  ownInput.value?.focus()
 }
 
 /** 进下一题；最后一题（或只有一题）就交 */
@@ -79,12 +102,21 @@ function submit() {
         <span v-if="option.detail" class="ask-detail">{{ option.detail }}</span>
       </button>
     </div>
-    <div class="ask-own">
+    <div
+      class="ask-own"
+      :class="{ picked: ownPicked }"
+      @mousedown.prevent="focusOwn"
+    >
+      <span class="ask-mark">{{
+        question?.multiple ? (ownPicked ? '☑' : '☐') : ownPicked ? '●' : '○'
+      }}</span>
       <input
+        ref="ownInput"
         v-model="own[index]"
         type="text"
         :placeholder="`或者自己写一句…（回车${last ? '交' : '进下一题'}）`"
         :disabled="answered"
+        @input="onOwnInput"
         @keydown.enter="advance"
       />
     </div>
@@ -211,16 +243,36 @@ function submit() {
   white-space: nowrap;
 }
 
-.ask-own input {
-  width: 100%;
-  box-sizing: border-box;
+/* 自己写：也是一行选项（同款边框/选中态，前面的选项标记随有无字选中） */
+.ask-own {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 3px 8px;
   border: 1px solid var(--ask-line, var(--line));
   border-radius: 6px;
+  cursor: text;
+}
+
+.ask-own.picked {
+  background: var(--ask-picked, rgba(127, 127, 127, 0.18));
+  border-color: var(--ask-accent, currentColor);
+}
+
+.ask-own .ask-mark {
+  flex: none;
+  color: var(--ask-accent, inherit);
+}
+
+.ask-own input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  padding: 0;
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .ask-own input:focus {

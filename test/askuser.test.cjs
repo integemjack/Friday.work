@@ -75,7 +75,7 @@ test('解析：没写题面的丢掉；最多 3 题、每题 4 个选项；解�
   assert.equal(none[0].recommended, undefined)
 })
 
-test('组回答：多选「、」连、自己写的原样、点过选项的题以选项为准、全空 = 跳过', () => {
+test('组回答：多选「、」连、自己写的也是答案（不被点过的选项压住）、全空 = 跳过', () => {
   const answer = buildAskAnswer(
     [
       ['卡片式'], // 单选
@@ -89,6 +89,8 @@ test('组回答：多选「、」连、自己写的原样、点过选项的题�
   const skipped = buildAskAnswer([[], []], ['', ''])
   assert.deepEqual(skipped.answers, ['', ''], '全空 = 跳过（服务端按推荐的做）')
 
-  const ownOverPicked = buildAskAnswer([['A'], []], ['我自己写了', ''])
-  assert.deepEqual(ownOverPicked.answers, ['A', ''], '点过选项的题以选项为准（自己的字不算），第二题没动为空')
+  // 单选里界面保证互斥（有字就不再有选中项，见 AskPanel 的 onOwnInput），但纯逻辑上
+  // 两样都在时不能让默认选中把字压掉（曾有 bug：预填的推荐 + 自己写，交的是推荐）
+  const ownWithPicked = buildAskAnswer([['推荐项'], []], ['我自己写了', ''])
+  assert.deepEqual(ownWithPicked.answers, ['推荐项、我自己写了', ''], '选项和自己的字都在 → 并到一起，第二题没动为空')
 })

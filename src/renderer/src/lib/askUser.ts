@@ -77,13 +77,16 @@ export function parseAskQuestions(argsJson: string): AskQuestion[] {
 }
 
 /** 界面上的选择 → 协议的回答：picked 每题点了的选项名（多选多个）、own 每题自己写的字；
- *  点过选项的题以选项为准（多选「、」连起来），都没动那题为空（= 没选）。全空 = 跳过 */
+ *  自己写的字也是这题答案的一部分（单选里界面保证互斥：有字就不再有选中项），多选里与勾选并存、
+ *  一起用「、」连；都没动那题为空（= 没选）。全空 = 跳过 */
 export function buildAskAnswer(picked: string[][], own: string[]): AskAnswer {
   const length = Math.max(picked.length, own.length)
   const answers: string[] = []
   for (let i = 0; i < length; i += 1) {
     const labels = (picked[i] ?? []).filter(Boolean)
-    answers.push(labels.length ? labels.join('、') : (own[i] ?? '').trim())
+    const ownText = (own[i] ?? '').trim()
+    const parts = ownText ? [...labels, ownText] : labels
+    answers.push(parts.length ? parts.join('、') : '')
   }
   return { answers }
 }
