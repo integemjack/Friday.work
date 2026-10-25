@@ -187,3 +187,41 @@ pre {
   word-break: break-word;
 }
 
+/* MARK: 全局自绘 tooltip（lib/tooltip.ts 把所有 [title] 的原生提示换成这个浮签；
+   用户要求：无边框、圆角。颜色 / 投影走 tokens.css 的 --tip-*（三套主题各配一档，
+   无边框时层次全靠底色对比 + 投影）；收起态 visibility:hidden 保留布局，
+   方便引擎先量尺寸再定位淡入 */
+.frid-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2147483647; /* 压过一切浮层（提问浮层 / 灯箱 / 菜单） */
+  max-width: min(380px, calc(100vw - 16px));
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--tip-fg);
+  background: var(--tip-bg);
+  backdrop-filter: blur(16px) saturate(1.35);
+  -webkit-backdrop-filter: blur(16px) saturate(1.35);
+  border-radius: var(--radius);
+  box-shadow: var(--tip-shadow);
+  pointer-events: none; /* 浮签不接鼠标：不会挡住下面的元素，也不会把自己当锚点 */
+  user-select: none;
+  white-space: pre-line; /* title 里的换行照常换行 */
+  word-break: break-word;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 0.13s ease,
+    transform 0.13s ease,
+    visibility 0.13s;
+}
+
+.frid-tip.show {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+}
+

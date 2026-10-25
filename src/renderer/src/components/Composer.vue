@@ -1931,7 +1931,8 @@ textarea::placeholder {
 }
 
 /* Friday v2.37 悬停浮条（== UsageTip）：浮在胶囊上方 6px、宽 264，外观同弹出菜单（磨砂玻璃）；
-   不拦鼠标（同 Qt 的 popupType Item）——鼠标只能停在胶囊上，浮条本身不接事件 */
+   不拦鼠标（同 Qt 的 popupType Item）——鼠标只能停在胶囊上，浮条本身不接事件。
+   无边框（用户要求 tooltip 一律去边框），层次感靠投影 */
 .usage-tip {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -1941,7 +1942,6 @@ textarea::placeholder {
   background: var(--panel);
   backdrop-filter: blur(20px) saturate(1.4);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
-  border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
   z-index: 31;

@@ -4,12 +4,17 @@ import App from './App.vue'
 import QuickInput from './components/QuickInput.vue'
 import './styles/main.css'
 import { applyTheme, loadTheme } from './lib/theme.js'
+import { installTooltip } from './lib/tooltip.js'
 import { CAST_MAX_H_CSS } from './lib/cast.js'
 import { initTtsProgressListener, refreshCosyVoiceStatus } from './lib/speechOutput.js'
 
 // 壁纸模式的置顶输入浮层（主进程以 ?quick=1 打开的小窗）：只挂 QuickInput，
 // 不走 App（不连工作台、不挂桌面 HUD，进来就能打字）
 const isQuickInput = new URLSearchParams(location.search).get('quick') === '1'
+
+// 全局自绘 tooltip（两个窗口共用本入口）：接管所有 [title] 的原生提示，
+// 换成无边框圆角的 .frid-tip 浮签（lib/tooltip.ts + styles/base.css）
+installTooltip()
 
 if (!isQuickInput) {
   // 挂载前先应用主题：首帧就是贾维斯/系统样式，不闪系统默认色

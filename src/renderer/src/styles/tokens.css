@@ -32,6 +32,14 @@
   /* 滚动条（base.css 通用规则引用）*/
   --scrollbar-thumb: var(--border);
   --scrollbar-thumb-hover: var(--border);
+
+  /* 全局自绘 tooltip（base.css .frid-tip 引用）：浅色界面里用 macOS 式深色小签，
+     高对比、无边框也立得住（用户要求 tooltip 无边框圆角，层次全靠底色+投影） */
+  --tip-bg: rgba(38, 38, 44, 0.92);
+  --tip-fg: #f4f4f6;
+  --tip-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.28),
+    0 2px 6px rgba(0, 0, 0, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -62,6 +70,13 @@
 
     --scrollbar-thumb: var(--border);
     --scrollbar-thumb-hover: var(--border);
+
+    /* tooltip：比桌面底抬亮一档的实底，层次靠投影（无边框） */
+    --tip-bg: rgba(56, 57, 64, 0.94);
+    --tip-fg: var(--text);
+    --tip-shadow:
+      0 8px 28px rgba(0, 0, 0, 0.5),
+      0 2px 6px rgba(0, 0, 0, 0.35);
   }
 }
 
@@ -204,5 +219,12 @@
   /* ---- 滚动条（base.css 通用规则引用）---- */
   --scrollbar-thumb: color-mix(in srgb, var(--accent) 35%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--accent) 55%, transparent);
+
+  /* tooltip：深空玻璃实底 + 青晕投影（无边框） */
+  --tip-bg: rgba(9, 24, 43, 0.9);
+  --tip-fg: var(--text);
+  --tip-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.55),
+    0 0 16px var(--accent-a14);
 }
 
