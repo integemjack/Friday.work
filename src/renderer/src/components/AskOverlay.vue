@@ -2,7 +2,8 @@
 // ask_user 的置顶提问浮层：有待答的问题时，弹在屏幕正中间、压过桌面/窗口/投层的一切（z 8500，
 // 让位给登录页/更新/全局错误），并且整个窗口切到系统级置顶（preload setAskPinned → 主进程
 // setAlwaysOnTop）——用户在别的应用里干活也压在最前面，不会被挡住。
-// 点「稍后再说」的这个不再弹（dismissedAsks），新问题来了照常弹；聊天横幅和桌面操作卡里的面板照旧。
+// 点「稍后再说」的这个不再弹（dismissedAsks），新问题来了照常弹；这里是 ask_user 唯一的作答入口
+// （聊天审批横幅和桌面操作卡不再展开问题面板——提问只在这答，避免同屏弹多处）。
 import { onBeforeUnmount, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import AskPanel from './AskPanel.vue'
@@ -51,7 +52,11 @@ onBeforeUnmount(() => window.fridayBridge?.setAskPinned(false))
   /* 压过桌面/应用内窗口/投层气泡，让位给登录页（9000）/媒体灯箱（9500）/更新（90000）/全局错误（100000） */
   z-index: 8500;
   pointer-events: none;
-  /* 轻微暗化四角，把视线引到中间的问题上 */
+  /* 全屏背景模糊：中央问题后面的整个桌面糊掉，视线聚焦在问题上；pointer-events 仍 none，桌面照常可点。
+     与 .ask-card 同一套双写（-webkit- 前缀） */
+  -webkit-backdrop-filter: blur(12px) saturate(1.1);
+  backdrop-filter: blur(12px) saturate(1.1);
+  /* 再叠轻微暗化四角，把视线引到中间的问题上 */
   background: radial-gradient(ellipse at center, transparent 30%, rgba(0, 0, 0, 0.28) 100%);
 }
 

@@ -8,7 +8,6 @@ import { useAppStore } from '../stores/app.js'
 import type { ChatMessage } from '../../../protocol/rpc/protocol.js'
 import { blockCase, blockPayload } from '../../../protocol/rpc/protocol.js'
 import MessageItem from './MessageItem.vue'
-import AskPanel from './AskPanel.vue'
 import {
   ASSISTANT_SPEECH_SOURCE,
   createSpeechIncrement,
@@ -40,7 +39,8 @@ const messages = computed(() => {
   return all.length <= visibleCount.value ? all : all.slice(all.length - visibleCount.value)
 })
 const runtime = computed(() => detail.value?.runtime ?? null)
-const approvals = computed(() => store.approvals[conversationID.value] ?? [])
+/** 审批横幅只管要批准/拒绝的调用；ask_user 的提问不在横幅答（只在屏幕中央的置顶提问浮层 AskOverlay），这里过滤掉 */
+const approvals = computed(() => (store.approvals[conversationID.value] ?? []).filter((item) => !item.questions?.length))
 
 // MARK: 和助手说（助手模式）：面板改显所连机器的助手日志（JournalEntry → MessageItem 认的形状）
 const assistantChat = computed(() => store.assistantChat)
@@ -525,32 +525,15 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
     </div>
 
     <!-- 审批横幅 / 信息行挪到底部（消息流顶端直通视频中点、渐隐，顶部不再压文字）；
-         会话模式才有审批（助手日志里没有审批卡） -->
+         会话模式才有审批（助手日志里没有审批卡）；ask_user 的提问不在这里答——在屏幕中央的置顶提问浮层 -->
     <div v-if="!assistantChat && approvals.length > 0" class="approval-bar">
-      <div
-        v-for="approval in approvals"
-        :key="approval.eventID"
-        class="approval-item"
-        :class="{ ask: !!approval.questions?.length }"
-      >
-        <template v-if="approval.questions?.length">
-          <span class="approval-tool">{{ approval.title || '问你' }}</span>
-          <AskPanel
-            class="approval-ask"
-            :questions="approval.questions"
-            :answered="store.answeredAsks.has(approval.eventID)"
-            @answer="(payload) => store.answerQuestion(approval.eventID, payload)"
-            @skip="store.skipQuestion(approval.eventID)"
-          />
-        </template>
-        <template v-else>
-          <span class="approval-tool">{{ approval.title || approval.tool }}</span>
-          <span class="approval-summary">{{ approval.summary }}</span>
-          <div class="approval-actions">
-            <button class="abtn" @click="store.resolveApproval(approval.eventID, false)">拒绝</button>
-            <button class="abtn primary" @click="store.resolveApproval(approval.eventID, true)">批准</button>
-          </div>
-        </template>
+      <div v-for="approval in approvals" :key="approval.eventID" class="approval-item">
+        <span class="approval-tool">{{ approval.title || approval.tool }}</span>
+        <span class="approval-summary">{{ approval.summary }}</span>
+        <div class="approval-actions">
+          <button class="abtn" @click="store.resolveApproval(approval.eventID, false)">拒绝</button>
+          <button class="abtn primary" @click="store.resolveApproval(approval.eventID, true)">批准</button>
+        </div>
       </div>
     </div>
 
@@ -705,20 +688,6 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 
 .approval-item + .approval-item {
   border-top: 1px dashed color-mix(in srgb, var(--warn) 35%, transparent);
-}
-
-/* ask_user：问题面板整行展开（AskPanel 的变量在这给一套警示色） */
-.approval-item.ask {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  --ask-line: color-mix(in srgb, var(--warn) 45%, transparent);
-  --ask-accent: var(--warn);
-  --ask-picked: color-mix(in srgb, var(--warn) 18%, transparent);
-}
-
-.approval-ask {
-  width: 100%;
 }
 
 .approval-tool {
