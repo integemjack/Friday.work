@@ -19,7 +19,7 @@ import {
   type BuiltinChoice,
   type BuiltinContext
 } from '../lib/builtinCommands.js'
-import type { FsMkdirResult } from '../../../protocol/rpc/protocol.js'
+import type { FsListResult, FsMkdirResult } from '../../../protocol/rpc/protocol.js'
 import type { PickedFile } from '../lib/host.js'
 import { SpeechInput, type VoicePhase } from '../lib/speechInput.js'
 import { usageForEntry, usageKey, canQueryUsage, usageTip, type UsageLine, type UsageMeter } from '../lib/serviceUsage.js'
@@ -385,15 +385,24 @@ async function chooseWorkdir(path?: string) {
   }
 }
 
-/** 打开目录浏览（REMOTE.md fs.list：不给 path 是主目录；roots 是主目录和各盘） */
+/** 打开目录浏览（REMOTE.md fs.list：不给 path 是主目录；roots 是主目录和各盘）。
+ *  不带 path（「浏览这台机器的目录…」入口）默认定位到工作目录：会话在用的优先，
+ *  没有用这台机器的新会话默认，都没有才是主目录；定位失败（目录被删/没权限）退回主目录 */
 async function openBrowse(path?: string) {
   browsing.value = true
   browseLoading.value = true
   browseError.value = ''
   mkdirOpen.value = false // 换目录了，收起新建行
   mkdirError.value = ''
+  const start = path ?? (currentWorkdir.value || defaultWorkdir.value || undefined)
+  let result: FsListResult | undefined
   try {
-    const result = await store.browseDirectory(path)
+    try {
+      result = await store.browseDirectory(start)
+    } catch (error) {
+      if (path || !start) throw error
+      result = await store.browseDirectory() // 默认定位的目录读不了：退回主目录
+    }
     if (!result) return
     browsePath.value = result.path
     browseParent.value = result.parent
