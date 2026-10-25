@@ -103,7 +103,7 @@ function titleOf(conversationID: string): string {
         :style="{ left: `${bubble.x}px`, top: `${bubble.y}px`, zIndex: bubble.z }"
         @click="store.fadeBubble(bubble.id)"
       >
-        <span class="tag cast-head">{{ bubble.kind === 'thinking' ? '思考' : '回复' }} · {{ titleOf(bubble.conversationID) }}</span>
+        <span class="tag cast-head">{{ bubble.kind === 'thinking' ? '思考' : '回复' }} · {{ titleOf(bubble.conversationID) }}{{ bubble.agentName ? ` · ${bubble.agentName}` : '' }}</span>
         <!-- 思考/回复气泡统一 Markdown 渲染（renderMarkdown 已禁透传 HTML、breaks 保换行） -->
         <div class="text cast-scroll md" v-html="mdOf(bubble)" />
       </div>

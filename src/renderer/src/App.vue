@@ -236,6 +236,11 @@ function onGlobalKeydown(event: KeyboardEvent): void {
   window.setTimeout(() => {
     if (event.defaultPrevented) return
     if (showLogin.value || store.zoomMedia || store.assistantChat || !store.activeConversationID) return
+    // 子 Agent 视图开着：Esc 先退回会话主聊天，再按一次才取消选中会话
+    if (store.agentFocus) {
+      store.agentFocus = null
+      return
+    }
     store.activeConversationID = ''
   })
 }

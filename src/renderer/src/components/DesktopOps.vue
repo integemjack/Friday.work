@@ -41,7 +41,7 @@ function onCardClick(card: { id: string; status: string }): void {
         :style="{ left: `${card.x}px`, top: `${card.y}px`, zIndex: card.z }"
         @click="onCardClick(card)"
       >
-        <div class="from cast-head">来自 {{ titleOf(card.conversationID) }}</div>
+        <div class="from cast-head">来自 {{ titleOf(card.conversationID) }}{{ card.agentName ? ` · ${card.agentName}` : '' }}</div>
         <div class="line cmd">
           <span class="mark">{{ statusMark[card.status] ?? '·' }}</span>
           <span class="body">

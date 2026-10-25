@@ -6,7 +6,8 @@ const assert = require('node:assert/strict')
 const {
   agentTreesByConversation,
   liveAgentRows,
-  agentActivityLabel
+  agentActivityLabel,
+  findAgentEvent
 } = require('../.tmp/agenttree.cjs')
 
 let seq = 0
@@ -118,4 +119,40 @@ test('agentActivityLabel：跑着的按 activity 出短语，跑完的统一「�
   assert.equal(agentActivityLabel(run({ activity: { kind: 'waitingChildren', title: '' } })), '在等子 Agent')
   assert.equal(agentActivityLabel(run({ activity: { kind: 'waitingApproval', title: 'rm -rf' } })), '在等确认：rm -rf')
   assert.equal(agentActivityLabel(run({ activity: { kind: 'other', title: '排队' } })), '排队')
+})
+
+// findAgentEvent：会话消息里按 run.id（即工具事件 id）找子 Agent 的运行记录。
+// 块形状：{id, kind: {tool: ToolEvent}}；ToolEvent：{id, name, status, transcript?, agentName?}
+const toolEvent = (over) => ({
+  id: 'e0',
+  name: 'delegate_task',
+  status: 'running',
+  ...over
+})
+const toolBlock = (event) => ({ id: `blk-${event.id}`, kind: { tool: event } })
+
+function nodesWith(...events) {
+  return [{ id: 'm1', role: 'assistant', blocks: events.map(toolBlock), createdAt: '2026-01-01T00:00:00Z' }]
+}
+
+test('findAgentEvent：直接 delegate 的事件在消息块上（拿 transcript）', () => {
+  const direct = toolEvent({ id: 'direct-run', transcript: [{ id: 't1', kind: { text: '报告' } }] })
+  const found = findAgentEvent(nodesWith(direct), 'direct-run')
+  assert.equal(found.id, 'direct-run')
+  assert.equal(found.transcript.length, 1)
+})
+
+test('findAgentEvent：并行/后台组工具的子 Agent 在组事件 transcript 里（孙层同理递归）', () => {
+  const grandchild = toolEvent({ id: 'grand-run', agentName: '孙', transcript: [{ id: 'g1', kind: { text: '孙层输出' } }] })
+  const child = toolEvent({ id: 'child-run', agentName: '子', transcript: [toolBlock(grandchild)] })
+  const group = toolEvent({ id: 'group-run', name: 'run_parallel_tasks', agentName: '并行 ×2', transcript: [toolBlock(child)] })
+  const nodes = nodesWith(group)
+  assert.equal(findAgentEvent(nodes, 'group-run').id, 'group-run')
+  assert.equal(findAgentEvent(nodes, 'child-run').id, 'child-run')
+  assert.equal(findAgentEvent(nodes, 'grand-run').agentName, '孙')
+})
+
+test('findAgentEvent：找不到（没这个 run / 会话没消息）返回 null', () => {
+  assert.equal(findAgentEvent(nodesWith(toolEvent({ id: 'only' })), 'nope'), null)
+  assert.equal(findAgentEvent([], 'only'), null)
 })

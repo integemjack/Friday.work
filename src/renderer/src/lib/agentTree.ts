@@ -2,7 +2,8 @@
 // TeamRun.parentKey 指到同一会话里另一个 run.id 的，挂它下面（子 Agent 还能再往下派）；
 // 指不到的（会话主 Agent 直接派的——parentKey 是会话根的 key）落回会话下当第一层。
 
-import type { TeamRun } from '../../../protocol/rpc/protocol.js'
+import type { ChatMessage, MessageBlock, TeamRun, ToolEvent } from '../../../protocol/rpc/protocol.js'
+import { blockCase, blockPayload } from '../../../protocol/rpc/protocol.js'
 
 /** 树状显示用的一行：子 Agent + 第几层（0 = 会话主 Agent 直接派的） */
 export interface AgentRow {
@@ -75,6 +76,32 @@ export function liveAgentRows(rows: AgentRow[]): AgentRow[] {
     }
   }
   return rows.filter((row) => alive.has(row.run.id))
+}
+
+/**
+ * 在会话消息里找某个子 Agent 的工具事件：run.id 即工具事件 id（直接 delegate 的在消息块上），
+ * 并行/后台组工具的子 Agent 在组事件 transcript 里（孙层同理递归）。
+ * 会话列表点子 Agent 行 → 右栏显示它的运行记录时用它拿 transcript。
+ */
+export function findAgentEvent(nodes: ChatMessage[], runID: string): ToolEvent | null {
+  const search = (blocks: MessageBlock[]): ToolEvent | null => {
+    for (const block of blocks) {
+      if (blockCase(block) !== 'tool') continue
+      const event = blockPayload<ToolEvent>(block, 'tool')
+      if (!event) continue
+      if (event.id === runID) return event
+      if (event.transcript?.length) {
+        const found = search(event.transcript)
+        if (found) return found
+      }
+    }
+    return null
+  }
+  for (const node of nodes) {
+    const found = search(node.blocks ?? [])
+    if (found) return found
+  }
+  return null
 }
 
 /** 子 Agent 此刻在干嘛，一句话短语（AgentsCard 里有带运行时长的详细版） */

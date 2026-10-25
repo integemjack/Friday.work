@@ -403,6 +403,8 @@ export interface ChatMessage {
   hookBlocked?: boolean
   commandPrompt?: string
   fromAgent?: string
+  /** 显示名（客户端约定）：子 Agent 的消息/运行记录、助手日志的来源标记；服务端的正式字段是 fromAgent */
+  agentName?: string
   sentBy?: string
   checks?: string[]
   finishedAt?: Iso

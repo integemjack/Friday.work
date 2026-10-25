@@ -15,6 +15,11 @@ import AddMachineDialog from './AddMachineDialog.vue'
 const store = useAppStore()
 const addingMachine = ref(false)
 
+/** 点子 Agent 行：打开所属会话并把右栏切到它的运行记录（openConversation 的第二参） */
+function openAgent(conversationID: string, runID: string): void {
+  void store.openConversation(conversationID, runID)
+}
+
 /** 一页放几条（默认 10，点「显示更多」再放 10） */
 const PAGE_SIZE = 10
 const visibleCount = ref(PAGE_SIZE)
@@ -159,15 +164,15 @@ onMounted(() => {
             <span class="time">{{ timeOf(item.updatedAt) }}</span>
             <button class="x" title="关掉这个会话的本地订阅" @click="close($event, item.id)">✕</button>
           </div>
-          <!-- 这个会话的子 Agent，树状缩在会话行下（点它同样切到这个会话） -->
+          <!-- 这个会话的子 Agent，树状缩在会话行下（点它右栏改显这个子 Agent 的运行记录） -->
           <div
             v-for="agent in agentRowsByConv.get(item.id) ?? []"
             :key="`agent-${agent.run.id}`"
             class="agent-row"
-            :class="{ done: !agent.run.running }"
+            :class="{ done: !agent.run.running, active: store.agentFocus?.runID === agent.run.id }"
             :style="{ '--depth': agent.depth }"
-            :title="`子 Agent · ${agentActivityLabel(agent.run)}`"
-            @click="open(item.id)"
+            :title="`子 Agent · ${agentActivityLabel(agent.run)}：看它的全部聊天内容`"
+            @click="openAgent(item.id, agent.run.id)"
           >
             <span class="aname" :title="agent.run.name">{{ agent.run.name }}</span>
             <span class="aact">{{ agentActivityLabel(agent.run) }}</span>
@@ -415,6 +420,20 @@ onMounted(() => {
 
 .agent-row:hover {
   background: var(--hover);
+}
+
+/* 点中的子 Agent：右栏正显示它的运行记录（与会话行的选中态同语言：淡底 + 左缘实线） */
+.agent-row.active {
+  background: var(--accent-a10);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.agent-row.active::after {
+  content: '◈';
+  flex: none;
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.8;
 }
 
 .agent-row.done {

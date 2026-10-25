@@ -29,6 +29,7 @@ import {
   type ActivityEventParams,
   type AskQuestion,
   type AssistantEntry,
+  type MessageBlock,
   type AssistantState,
   type AssistantSubscribeResult,
   type BlocksPatch,
@@ -122,6 +123,8 @@ export interface DesktopBubble {
   id: string
   conversationID: string
   kind: 'thinking' | 'text'
+  /** 子 Agent 的输出：名字（主会话自己的气泡没有这个字段） */
+  agentName?: string
   text: string
   x: number
   y: number
@@ -137,6 +140,8 @@ export interface DesktopOp {
   /** 工具事件 id（消息块里）或审批 eventID（activity） */
   id: string
   conversationID: string
+  /** 子 Agent 的操作：名字（主会话自己的卡没有这个字段） */
+  agentName?: string
   title: string
   content: string
   result: string
@@ -247,6 +252,26 @@ const WINDOW_TITLE: Record<WindowKind, { title: string; icon: string }> = {
 /** 操作卡是否已到终态（终态才计时渐隐） */
 function terminalStatus(status: DesktopOp['status']): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'denied'
+}
+
+/** 收集一段块列表里全部工具事件 id 和子 Agent 运行记录（transcript）里的文本/思考块 id（含嵌套的孙层）。
+ *  关会话时按它清 agentEvents / agentMarks，不递归收嵌套层这些标记就清不掉 */
+function collectAgentCastIDs(
+  blocks: MessageBlock[],
+  into: { events: Set<string>; marks: Set<string> }
+): void {
+  for (const block of blocks) {
+    if (blockCase(block) !== 'tool') continue
+    const event = blockPayload<ToolEvent>(block, 'tool')
+    if (!event?.id) continue
+    into.events.add(event.id)
+    if (!event.transcript?.length) continue
+    for (const child of event.transcript) {
+      const kind = blockCase(child)
+      if (kind === 'thinking' || kind === 'text') into.marks.add(child.id)
+    }
+    collectAgentCastIDs(event.transcript, into)
+  }
 }
 
 // MARK: 新对话的「上次选的」（REMOTE.md：权限、思考档位记在客户端本机的设置里，本机和各台远程共用一份；
@@ -506,6 +531,16 @@ export const useAppStore = defineStore('app', {
     bubbles: [] as DesktopBubble[],
     /** 桌面投窗：操作极简终端卡（结果后 5 秒渐隐） */
     opCards: [] as DesktopOp[],
+    /** 会话列表里点开的子 Agent 视图（右栏聊天面板改显它的运行记录）:
+     *  runID 即 delegate_task 工具事件 id，transcript 在它上面；点普通会话行 / Esc / 切会话时清掉 */
+    agentFocus: null as { conversationID: string; runID: string } | null,
+    /** 子 Agent 运行记录（transcript）里每个思考/文本块已投过气泡的文本长度（增量从这里算，规则同 streamMarks） */
+    agentMarks: {} as Record<string, number>,
+    /** 每个子 Agent 工具事件（run）已见过的 transcript 文本/思考块 id：上一帧的块这帧全消失
+     *  = 服务端重推历史换了全套块 id（重放），只记不投（同 histbubble 的重放防护，防在事件层） */
+    agentSeen: {} as Record<string, Set<string>>,
+    /** 已见过的子 Agent 工具事件 id：首次见到的 transcript 视为存量只记不投（打开会话前就在跑的不补投） */
+    agentEvents: new Set<string>(),
     /** 流式标记：messageID → 块ID → 该块已投过气泡的文本长度（增量从这里算；按块记，多段思考/回复各自成泡） */
     streamMarks: {} as Record<string, Record<string, number>>,
     /** 历史消息：打开会话（订阅回执 / 整段快照）那一刻就已在的助手消息 id。服务端随新一轮活动重推历史时
@@ -1144,11 +1179,13 @@ export const useAppStore = defineStore('app', {
     },
 
     /** 打开一段会话：订阅拿整段并设为活动会话（右下聊天面板切到它）。不再开浮动窗口。
-     *  从「和助手说」切回会话：自动退出助手模式（聊天面板跟着回会话）。 */
-    async openConversation(conversationID: string) {
+     *  从「和助手说」切回会话：自动退出助手模式（聊天面板跟着回会话）。
+     *  agentRunID（会话列表点了子 Agent 行）：右栏切到该子 Agent 的运行记录；不传则退回主聊天 */
+    async openConversation(conversationID: string, agentRunID?: string) {
       if (this.assistantChat) await this.closeAssistantChat()
       await this.subscribeConversation(conversationID)
       this.activeConversationID = conversationID
+      this.agentFocus = agentRunID ? { conversationID, runID: agentRunID } : null
     },
 
     /** 订阅一段会话（不改活动会话）：新会话开跑时自动订阅，气泡/操作卡才能收到流式内容 */
@@ -1216,6 +1253,15 @@ export const useAppStore = defineStore('app', {
       for (const opID of this.opCards.filter((item) => item.conversationID === conversationID).map((item) => item.id)) {
         this.fadedOps.delete(opID)
       }
+      // 子 Agent 运行记录的投桌标记按会话清（事件 id + transcript 块 id，嵌套层递归收齐）
+      const castIDs = { events: new Set<string>(), marks: new Set<string>() }
+      for (const node of this.details[conversationID]?.nodes ?? []) collectAgentCastIDs(node.blocks ?? [], castIDs)
+      for (const id of castIDs.events) {
+        this.agentEvents.delete(id)
+        delete this.agentSeen[id]
+      }
+      for (const id of castIDs.marks) delete this.agentMarks[id]
+      if (this.agentFocus?.conversationID === conversationID) this.agentFocus = null
       delete this.details[conversationID]
       this.bubbles = this.bubbles.filter((item) => item.conversationID !== conversationID)
       this.opCards = this.opCards.filter((item) => item.conversationID !== conversationID)
@@ -2316,8 +2362,9 @@ export const useAppStore = defineStore('app', {
 
     /** 投一条气泡（思考/文本）：同一个内容块续在同一条气泡里（一个块一条，多段不并泡），5 秒无新内容渐隐。
      *  渐隐删除只是「看不见」，全文记在 castTexts；断流超过 5 秒后再来增量时按全文重建，
-     *  不能只投增量那截（流式间隔一大就会变成「内容只剩一小段」） */
-    pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string, blockID: string) {
+     *  不能只投增量那截（流式间隔一大就会变成「内容只剩一小段」）。
+     *  agentName：子 Agent 的输出（主会话自己的气泡不传） */
+    pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string, blockID: string, agentName?: string) {
       if (!chunk.trim()) return
       // 空白归一但保留换行：行内空白压成单个空格、连续换行压成单个换行（全压成空格会把整段思考挤成一行）。
       // 流式切片的分隔空白可能落在上一片尾部或本片开头，trim 掉再硬拼会粘连，所以不 trim——
@@ -2341,6 +2388,7 @@ export const useAppStore = defineStore('app', {
         // 全量内容不截断（气泡不限高）。内容更新只记活跃时刻（activeAt），不当场抬 z——
         // 由 castTick 在 5 秒窗口到期时抬「当前最活跃」的；窗口内更新照常续文本、刷新渐隐计时
         existing.text = full
+        if (agentName) existing.agentName = agentName
         existing.activeAt = Date.now()
         window.clearTimeout(existing.timer)
         existing.fading = false
@@ -2353,6 +2401,7 @@ export const useAppStore = defineStore('app', {
         id,
         conversationID,
         kind,
+        ...(agentName ? { agentName } : {}),
         text: full,
         x: spot.x,
         y: spot.y,
@@ -2385,6 +2434,8 @@ export const useAppStore = defineStore('app', {
     pushOp(card: {
       id: string
       conversationID: string
+      /** 子 Agent 的操作：名字（主会话自己的卡不传） */
+      agentName?: string
       title: string
       content: string
       result: string
@@ -2408,6 +2459,7 @@ export const useAppStore = defineStore('app', {
         }
         existing.activeAt = Date.now()
         if (card.title) existing.title = card.title
+        if (card.agentName) existing.agentName = card.agentName
         if (card.content) existing.content = card.content
         if (card.result) existing.result = card.result
         if (card.toolName) existing.toolName = card.toolName
@@ -2545,7 +2597,11 @@ export const useAppStore = defineStore('app', {
         const kind = blockCase(block)
         if (kind === 'tool') {
           const event = blockPayload<ToolEvent>(block, 'tool')
-          if (quietTools && event?.status !== 'awaitingApproval') continue
+          // 历史过滤的两个豁免：等审批的（要处理的事不藏）+ 子 Agent 还在跑的工具事件
+          // （带 transcript、status 还 running：后台 run 在宿主消息完结后仍在推进，它的操作
+          // 要继续投上桌面；首见时的存量由 noteAgentTranscript 只记不投）
+          const liveAgent = event?.status === 'running' && !!event.transcript?.length
+          if (quietTools && event?.status !== 'awaitingApproval' && !liveAgent) continue
           this.noteToolBlock(conversationID, event)
           continue
         }
@@ -2562,7 +2618,8 @@ export const useAppStore = defineStore('app', {
 
     /** 消息里的工具块 → 操作卡（带参数/结果/状态，比 activity 事件全）。
      *  与所有卡一套：内容不截断，限高 lib/cast.ts 内部滚动看全文。
-     *  看图/看视频到成功态：媒体同时归进桌面的图片叠/视频叠 */
+     *  看图/看视频到成功态：媒体同时归进桌面的图片叠/视频叠。
+     *  带 transcript 的（delegate_task / 并行派发）：子 Agent 的运行记录也投上桌面（noteAgentTranscript） */
     noteToolBlock(conversationID: string, event: ToolEvent | undefined) {
       if (!event?.id) return
       // ask_user 等回答：把参数里的问题解析出来（activity 事件带解析好的 questions，这条是消息补丁的路，
@@ -2581,6 +2638,70 @@ export const useAppStore = defineStore('app', {
       })
       if (event.status === 'succeeded' && isMediaTool(event.name ?? '')) {
         this.addStackMedia(conversationID, event.name ?? '', event.arguments ?? '')
+      }
+      if (event.transcript?.length) this.noteAgentTranscript(conversationID, event)
+    },
+
+    /** 子 Agent 运行记录（delegate_task 工具事件的 transcript）投桌面：与主会话同一套规则——
+     *  思考/文本成气泡、工具调用成操作卡、增量续投（agentMarks 按块记已投长度）；
+     *  首次见到的工具事件 transcript 全是存量（只记不投，打开会话前就在跑的不补投，
+     *  等审批的例外——要处理的事不能藏），之后新出现的块整块投、已有块投增量；
+     *  嵌套的孙层（子 Agent 再往下派）递归处理。名字用内层事件的 agentName（组工具里
+     *  子 Agent 各自有名），回退宿主事件的名字。 */
+    noteAgentTranscript(conversationID: string, event: ToolEvent) {
+      const first = !this.agentEvents.has(event.id)
+      this.agentEvents.add(event.id)
+      if (!event.transcript?.length) {
+        // 空 transcript（刚派出还没输出）也算见过：之后第一条输出是新活动、照投，不当存量
+        this.agentSeen[event.id] = new Set()
+        return
+      }
+      // 重放检测：上一帧见过的文本/思考块这帧全部消失 = 服务端重推历史换了全套块 id（histbubble
+      // 同源场景），只记不投；正常运行 transcript 只追加，旧块都在，检测不命中
+      const textLike = (b: MessageBlock): 'thinking' | 'text' | null => {
+        const k = blockCase(b)
+        return k === 'thinking' || k === 'text' ? k : null
+      }
+      const seen = this.agentSeen[event.id] ?? new Set<string>()
+      const aliveIDs = new Set<string>()
+      for (const b of event.transcript) if (textLike(b)) aliveIDs.add(b.id)
+      const replayed = !first && seen.size > 0 && [...seen].every((id) => !aliveIDs.has(id))
+      this.agentSeen[event.id] = aliveIDs
+      for (const block of event.transcript) {
+        const kind = blockCase(block)
+        if (kind === 'tool') {
+          const inner = blockPayload<ToolEvent>(block, 'tool')
+          if (!inner?.id) continue
+          this.noteAgentTranscript(conversationID, inner)
+          // 首见事件里的存量卡不补弹（等审批的除外）；之后的补丁/快照会重到这里续写终态
+          if (first && inner.status !== 'awaitingApproval') continue
+          const parsed = inner.name === 'ask_user' && inner.status === 'awaitingApproval' ? parseAskQuestions(inner.arguments ?? '') : []
+          this.pushOp({
+            id: inner.id,
+            conversationID,
+            agentName: inner.agentName ?? event.agentName,
+            title: inner.title || inner.name || '操作',
+            content: parsed.length ? (parsed[0]?.question ?? '') : (inner.arguments ?? ''),
+            result: inner.result || '',
+            status: inner.status ?? 'running',
+            toolName: inner.name ?? '',
+            questions: parsed.length ? parsed : undefined
+          })
+          if (inner.status === 'succeeded' && isMediaTool(inner.name ?? '')) {
+            this.addStackMedia(conversationID, inner.name ?? '', inner.arguments ?? '')
+          }
+          // 子 Agent 用终端/浏览器/文件：和主会话一样把对应面板弹开（正常形式显示在桌面）
+          this.noteToolUse(inner.name ?? '', conversationID)
+          continue
+        }
+        if (kind !== 'thinking' && kind !== 'text') continue
+        const full = String(blockPayload<string>(block, kind) ?? '')
+        const mark = this.agentMarks[block.id] ?? 0
+        // 首见事件的存量只记不投（同主会话首见：块记全长、后续只投增量尾巴）；重放帧同理只记
+        if (!first && !replayed && full.length > mark) {
+          this.pushBubble(conversationID, kind, full.slice(mark), block.id, event.agentName ?? '')
+        }
+        this.agentMarks[block.id] = full.length
       }
     },
 

@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { ChatMessage } from '../../../protocol/rpc/protocol.js'
 import { blockCase, blockPayload } from '../../../protocol/rpc/protocol.js'
+import { agentActivityLabel, findAgentEvent } from '../lib/agentTree.js'
 import MessageItem from './MessageItem.vue'
 import {
   ASSISTANT_SPEECH_SOURCE,
@@ -66,8 +67,54 @@ const assistantMessages = computed(() =>
       } as ChatMessage
     }))
 )
-/** 面板实际显示的消息流：助手模式给助手日志，否则给当前会话 */
-const shownMessages = computed(() => (assistantChat.value ? assistantMessages.value : messages.value))
+/** 面板实际显示的消息流：助手模式给助手日志，子 Agent 视图给它的运行记录，否则给当前会话 */
+const shownMessages = computed(() => {
+  if (assistantChat.value) return assistantMessages.value
+  if (agentMessage.value) return [{ message: agentMessage.value, version: 0 }]
+  return messages.value
+})
+
+// MARK: 子 Agent 视图（会话列表点子 Agent 行）：面板改显该子 Agent 的全部聊天内容。
+// 子 Agent 的运行记录实时写进 delegate_task 工具事件的 transcript（run.id 即事件 id；
+// 并行/后台派发的在组事件 transcript 里，findAgentEvent 递归找）；transcript 块
+// MessageItem 直接认，合成一条助手消息渲染，流式增量实时跟随（detail.nodes 原地改，computed 会重算）
+const agentFocus = computed(() =>
+  store.agentFocus && store.agentFocus.conversationID === conversationID.value && !assistantChat.value
+    ? store.agentFocus
+    : null
+)
+const agentRun = computed(() => (agentFocus.value ? (store.teamRuns.find((run) => run.id === agentFocus.value?.runID) ?? null) : null))
+const agentEvent = computed(() => {
+  const focus = agentFocus.value
+  if (!focus) return null
+  return findAgentEvent(detail.value?.nodes ?? [], focus.runID)
+})
+/** transcript 合成一条助手消息（带名字标记，MessageItem 渲染文本/思考/工具卡） */
+const agentMessage = computed<ChatMessage | null>(() => {
+  const focus = agentFocus.value
+  if (!focus) return null
+  const event = agentEvent.value
+  return {
+    id: focus.runID,
+    role: 'assistant',
+    createdAt: agentRun.value?.started ?? '',
+    blocks: event?.transcript ?? [],
+    agentName: agentRun.value?.name ?? event?.agentName
+  }
+})
+/** 退回会话主聊天（头部「返回」/点会话行/按 Esc 都走 openConversation） */
+function backToConversation(): void {
+  void store.openConversation(conversationID.value)
+}
+// 进出子 Agent 视图：强制贴底；transcript 流式增长走 stickToBottom 开关照常跟随
+watch(
+  agentFocus,
+  () => {
+    stickToBottom.value = true
+    void scrollToBottom(true)
+  }
+)
+watch(agentMessage, () => void scrollToBottom())
 
 // 排队 / 待插入的消息（runtime.queue）：像用户消息一样靠右、虚线描边的淡色气泡，可撤回（qt QueuedBubbles）
 const queued = computed(() => runtime.value?.queue ?? [])
@@ -444,6 +491,9 @@ const statusLine = computed(() => {
     if (store.assistantState === null) line = store.connected ? '正在拿助手日志…' : ''
     else if (store.assistantState.reacting) line = '正在回复…'
     else if (!store.assistantState.enabled) line = '助手关着：说的话只记日志、不会回'
+  } else if (agentMessage.value) {
+    // 子 Agent 视图：显示它自己的状态（跑着时是当前活动短语，结束就一句完结）
+    line = agentRun.value?.running ? agentActivityLabel(agentRun.value) : '已结束'
   } else {
     const current = runtime.value
     if (current) {
@@ -464,6 +514,14 @@ const CALL_ICONS = {
   cam: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'
 } as const
+
+/** 信息行的会话名：子 Agent 视图显示「子 Agent · 名字」，其余同原样（助手名 / 会话标题 / 新对话） */
+const headerName = computed(() => {
+  if (assistantChat.value) return assistantName.value
+  if (agentMessage.value) return `子 Agent · ${agentMessage.value.agentName ?? ''}`
+  return conversationID.value ? summary.value?.title || '（无标题）' : '新对话'
+})
+const headerTitle = computed(() => (agentMessage.value ? (agentMessage.value.agentName ?? '') : summary.value?.title))
 
 /** 与助手 bot 拨视频/语音（bot 取 store.assistantBotID，和自动拨号同一份） */
 async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
@@ -488,13 +546,13 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
     <div class="top-fade" :class="{ on: scrolledFromTop }" aria-hidden="true" />
     <div ref="scrollEl" class="message-scroll" @scroll="onScroll">
       <div ref="messagesEl" class="messages">
-        <button v-if="!assistantChat && earlierCount > 0" class="earlier" @click="loadEarlier">
+        <button v-if="!assistantChat && !agentMessage && earlierCount > 0" class="earlier" @click="loadEarlier">
           ↑ 更早的 {{ earlierCount }} 条（上滑或点这里加载）
         </button>
         <MessageItem v-for="entry in shownMessages" :key="entry.message.id" :message="entry.message" />
 
-        <!-- 排队 / 待插入的消息（qt QueuedBubbles）：靠右虚线气泡，随列表滚动，接在消息流末尾（会话模式才有） -->
-        <div v-if="!assistantChat && queued.length > 0" class="queued">
+        <!-- 排队 / 待插入的消息（qt QueuedBubbles）：靠右虚线气泡，随列表滚动，接在消息流末尾（会话主聊天才有） -->
+        <div v-if="!assistantChat && !agentMessage && queued.length > 0" class="queued">
           <div v-for="item in queued" :key="item.id" class="queued-item">
             <div v-if="item.attachments.length > 0" class="queued-atts" :title="item.attachments.join(', ')">
               📎 {{ item.attachments.map(baseName).join('、') }}
@@ -508,7 +566,7 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
           </div>
         </div>
 
-        <div v-if="assistantChat ? assistantMessages.length === 0 : !conversationID" class="hint">
+        <div v-if="assistantChat ? assistantMessages.length === 0 : agentMessage ? (agentMessage.blocks ?? []).length === 0 : !conversationID" class="hint">
           {{
             assistantChat
               ? store.assistantUnsupported
@@ -516,9 +574,11 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
                 : store.connected
                   ? '直接说话，发给这台机器上的助手'
                   : '先连上机器'
-              : store.connected
-                ? '直接说话，和助手开一段新对话'
-                : '先连上机器'
+              : agentMessage
+                ? '这个子 Agent 还没有输出'
+                : store.connected
+                  ? '直接说话，和助手开一段新对话'
+                  : '先连上机器'
           }}
         </div>
       </div>
@@ -539,10 +599,9 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
 
     <header class="head">
       <span class="head-title">助手</span>
-      <!-- 助手模式：显示助手名字；没选会话时也占位显示「新对话」：默认态就是和助手的新对话 -->
-      <span class="session-name" :title="summary?.title">{{
-        assistantChat ? assistantName : conversationID ? summary?.title || '（无标题）' : '新对话'
-      }}</span>
+      <!-- 子 Agent 视图：← 返回会话主聊天；显示「子 Agent · 名字」；其余同原样（助手名 / 会话标题 / 新对话） -->
+      <button v-if="agentMessage" class="back-btn" title="返回会话主聊天" @click="backToConversation">←</button>
+      <span class="session-name" :title="headerTitle">{{ headerName }}</span>
       <span v-if="statusLine" class="status-line">{{ statusLine }}</span>
       <span class="spacer" />
       <template v-if="store.connected && !store.calling">
@@ -595,6 +654,21 @@ async function dialAssistant(callType: 'audio' | 'video'): Promise<void> {
   letter-spacing: 3px;
   color: var(--accent);
   opacity: 0.85;
+}
+
+/* 子 Agent 视图的返回键：返回会话主聊天（与会话列表的子 Agent 行互为入口） */
+.back-btn {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+
+.back-btn:hover {
+  background: var(--accent-a10, rgba(80, 170, 255, 0.1));
 }
 
 .session-name {
