@@ -59,7 +59,8 @@ const speedText = computed(() => {
   return speed >= 100 ? speed.toFixed(0) : speed.toFixed(1)
 })
 
-// 窗口启动器：终端 / 浏览器 / 文件（会话用到时也会自己弹出，这里随时手动开）+ 子 Agent / 设置；
+// 窗口启动器：终端 / 浏览器 / 文件（会话用到时自动弹，但受设置「接受远程打开/关闭窗口」管；
+// 手动最小化的不会被远程弹回，只在这里点图标恢复）+ 子 Agent / 设置；
 // 会话列表 / 聊天 / 通话是常驻面板，不在这里
 const launchers: Array<{ kind: WindowKind; label: string }> = [
   { kind: 'terminals', label: '终端' },

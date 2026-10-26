@@ -5,6 +5,7 @@ import { defineStore } from 'pinia'
 import { host, rpc } from '../lib/host.js'
 import { isMediaTool, mediaArgSource } from '../lib/mediaTools.js'
 import { castLimitH } from '../lib/cast.js'
+import { remoteWindowControl } from '../lib/remoteWindowControl.js'
 import { normalizeTeamMode } from '../lib/builtinCommands.js'
 import {
   deleteStackCaches,
@@ -705,9 +706,19 @@ export const useAppStore = defineStore('app', {
   actions: {
     // MARK: 桌面窗口
 
-    /** 开一个窗口（同类型已在就置顶）；终端/文件/浏览器都是会话用到时才开的正常窗口，无常驻面板 */
-    openWindow(kind: WindowKind, options: { title?: string } = {}): string {
+    /** 开一个窗口（同类型已在就置顶）；终端/文件/浏览器都是会话用到时才开的正常窗口，无常驻面板。
+     *  options.remote = 远端会话触发的开窗（会话用工具 / 新终端 / 新标签）：「接受远程打开/关闭控制」
+     *  关掉时直接不开；窗口已被用户手动最小化时尊重最小化、不自动弹回（点顶部图标恢复）。
+     *  被挡下时返回 ''，调用方凭它知道这次没真弹开 */
+    openWindow(kind: WindowKind, options: { title?: string; remote?: boolean } = {}): string {
       const existing = this.windows.find((item) => item.kind === kind)
+      if (options.remote) {
+        if (!remoteWindowControl.value) return ''
+        if (existing?.minimized) {
+          if (options.title) existing.title = options.title
+          return ''
+        }
+      }
       if (existing) {
         if (options.title) existing.title = options.title
         existing.minimized = false
@@ -1518,18 +1529,19 @@ export const useAppStore = defineStore('app', {
           if (this.activeTerminalID && !this.terminals.some((terminal) => terminal.id === this.activeTerminalID)) {
             this.activeTerminalID = ''
           }
-          // Agent 用 run_in_terminal 开的新终端：一出现就选中并打开卡片（方案 §5.4）；
-          // 记下这段会话自动弹开过终端窗口（做完时收起，见 case 'finished'）
+          // Agent 用 run_in_terminal 开的新终端：一出现就选中并打开卡片（方案 §5.4）。
+          // 远程弹窗走 openWindow 的 remote 路径：设置关了 / 窗口被用户最小化时不弹，
+          // 也就不记 autoTerminals（做完时只收「真的自动弹开过」的，见 case 'finished'）
           const fresh = this.terminals.find((terminal) => !before.has(terminal.id) && terminal.command)
           if (fresh) {
             this.activeTerminalID = fresh.id
-            this.autoTerminals.add(fresh.conversationID)
-            this.openWindow('terminals')
+            if (this.openWindow('terminals', { remote: true })) this.autoTerminals.add(fresh.conversationID)
           } else if (!this.activeTerminalID && this.terminals.length > 0) {
             this.activeTerminalID = this.terminals[0]!.id
           }
-          // 终端跑完被关掉、Agent 收了终端：标签从有到无，窗口跟着收（卡片里的画面由 TerminalCard 自己清）
-          this.closeTerminalWindowIfEmpty(hadTerminals)
+          // 终端跑完被关掉、Agent 收了终端：标签从有到无，窗口跟着收（卡片里的画面由 TerminalCard 自己清）；
+          // 这是远程关窗，受「接受远程打开/关闭控制」管
+          if (remoteWindowControl.value) this.closeTerminalWindowIfEmpty(hadTerminals)
           break
         }
         case 'browser': {
@@ -1539,10 +1551,10 @@ export const useAppStore = defineStore('app', {
           this.browserTabs = state.tabs ?? []
           this.browserAvailable = state.available
           this.browserReason = state.reason ?? ''
-          // 会话开新浏览器标签 = 在用浏览器：立刻开浏览器窗口（已有就置顶）
-          if (this.browserTabs.some((tab) => !before.has(tab.id))) this.openWindow('browser')
-          // 标签全关了（用户点 × / 智能体关掉）：浏览器窗口跟着收（同终端）
-          this.closeBrowserWindowIfEmpty(hadTabs)
+          // 会话开新浏览器标签 = 在用浏览器：打开浏览器窗口（已有就置顶；remote 路径尊重远程开关与用户的最小化）
+          if (this.browserTabs.some((tab) => !before.has(tab.id))) this.openWindow('browser', { remote: true })
+          // 标签全关了（用户点 × / 智能体关掉）：浏览器窗口跟着收（同终端）；远程关的受控制设置管
+          if (remoteWindowControl.value) this.closeBrowserWindowIfEmpty(hadTabs)
           break
         }
         case 'browser.frame': {
@@ -1563,8 +1575,8 @@ export const useAppStore = defineStore('app', {
           break
         }
         case 'browser.handOver': {
-          // 智能体请用户在浏览器里做事：打开浏览器窗口并聚焦到它指名的那个标签
-          //（BrowserCard 认领后自己 watch；事件比标签快照先到时等快照里出现了再认领）
+          // 智能体请用户在浏览器里亲手做事：不走 remote 路径——即使用户最小化了浏览器窗口、
+          // 关了远程窗口控制也要弹到面前（要用户接手的事不能藏，同 ask_user 必须给卡）
           this.openWindow('browser')
           const tab = (params as { tab?: string }).tab
           if (tab) this.browserFocusTab = tab
@@ -2724,13 +2736,14 @@ export const useAppStore = defineStore('app', {
  *  这类在文件系统上干活的开文件面板；run_shell、web_search、search_memory、read_agent_log
  *  这些只是拿结果的操作不动文件系统/终端/浏览器，投操作卡即可，不弹面板 */
     noteToolUse(tool: string, conversationID?: string) {
-      // 用终端的记下这段会话（autoTerminals）：做完时把自动弹开的终端窗口收起（case 'finished'）
+      // 用终端的记下这段会话（autoTerminals）：做完时把「真的自动弹开过」的终端窗口收起（case 'finished'）。
+      // 远程弹窗走 remote 路径：设置关了 / 窗口被用户最小化时这次没弹开，就不记——
+      // 免得做完把用户自己开着的窗口收掉
       if (/terminal/i.test(tool)) {
-        if (conversationID) this.autoTerminals.add(conversationID)
-        this.openWindow('terminals')
+        if (this.openWindow('terminals', { remote: true }) && conversationID) this.autoTerminals.add(conversationID)
       }
-      if (/browse/i.test(tool)) this.openWindow('browser')
-      if (/file|directory/i.test(tool)) this.openWindow('files')
+      if (/browse/i.test(tool)) this.openWindow('browser', { remote: true })
+      if (/file|directory/i.test(tool)) this.openWindow('files', { remote: true })
     },
 
     /** 上传一个主进程背书的文件，返回服务端路径 */

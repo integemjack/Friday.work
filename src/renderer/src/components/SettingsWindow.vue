@@ -40,6 +40,7 @@ import {
 } from '../lib/speechOutput.js'
 import { resample } from '../lib/voiceMedia.js'
 import { autoCallEnabled, setAutoCall } from '../lib/autoCall.js'
+import { remoteWindowControl, setRemoteWindowControl } from '../lib/remoteWindowControl.js'
 import { CAPABILITY_LABEL, deviceGrants, revokeGrant } from '../lib/devices/grants.js'
 import { setWallpaperMode, wallpaperMode } from '../lib/wallpaperMode.js'
 
@@ -524,6 +525,14 @@ async function pickVoiceFiles(): Promise<void> {
       </div>
       <div class="note">全屏桌面：应用无边框铺满整屏（铺窗口所在的显示器），任务栏和其它窗口都在它上面；窗口有焦点时可正常打字操作，被别的窗口盖住时按 Ctrl+Alt+F 呼出置顶输入条；此模式下标题栏不可拖拽。</div>
       <div v-if="wallpaperError" class="error">{{ wallpaperError }}</div>
+      <div class="row" style="margin-top: 10px">
+        <span class="key">接受远程打开/关闭窗口</span>
+        <span class="value">
+          <button class="small-btn" :class="{ strong: remoteWindowControl }" @click="setRemoteWindowControl(true)">接受</button>
+          <button class="small-btn" :class="{ strong: !remoteWindowControl }" @click="setRemoteWindowControl(false)">拒绝</button>
+        </span>
+      </div>
+      <div class="note">默认接受：会话用到终端/浏览器/文件时自动打开对应窗口（已开就置顶），标签全关或任务做完时自动收起。拒绝后远程不再自动开/收这些窗口，只有你自己开/关。无论开关，你手动最小化的窗口都不会被远程自动弹回（点顶部图标恢复）；唯一例外是智能体请你接手浏览器操作时会弹到面前。</div>
     </section>
 
     <section>
