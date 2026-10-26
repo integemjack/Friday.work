@@ -1,6 +1,8 @@
 // 子 Agent 的运行记录（delegate_task 工具事件的 transcript）投桌面 + agentFocus 生命周期：
 // 1) 活的流式：首见事件存量只记不投（等审批的例外），之后新块整块投、已有块投增量；
 //    内层工具调用成操作卡（带 agentName），孙层（子 Agent 再往下派）递归；
+//    宿主派发卡（delegate_task / run_parallel_tasks）不投（2026-10-26 用户：主智能体
+//    派发时显示的派发气泡不要）；
 // 2) 历史豁免：宿主消息已完结但事件还 running（后台 run）时不被历史过滤拦住；
 // 3) openConversation(conv, runID) 设 agentFocus，普通打开 / 关会话时清掉。
 // 基建同 histbubble.test.cjs：esbuild 打包 store + pinia stub（worktree 没有 node_modules，
@@ -112,9 +114,9 @@ test('活的流式：首见 transcript 存量只记不投；之后新块整块�
     transcript: [block('t1', 'thinking', '先查资料'), toolBlock({ id: 'inner-1', name: 'web_search', status: 'running' })]
   })
   const m1 = message('m1', [toolBlock(event)])
-  store.noteAssistantStream('conv-a', m1) // 首见：存量只记（宿主 delegate 卡照投，内层全部只记）
+  store.noteAssistantStream('conv-a', m1) // 首见：存量只记（宿主派发卡不投，内层全部只记）
   assert.equal(store.bubbles.length, 0)
-  assert.equal(store.opCards.length, 1) // 只有宿主 delegate_task 卡
+  assert.equal(store.opCards.length, 0) // 宿主 delegate_task 派发卡不投
   assert.equal(opCard(store, 'inner-1'), undefined)
 
   // transcript 增长：已有块续写 + 新文本块 + 内层工具有了结果
@@ -126,6 +128,7 @@ test('活的流式：首见 transcript 存量只记不投；之后新块整块�
   assert.equal(bubbleText(store, 't1'), '，再整理') // 存量只记，只投增量尾巴（同主会话首见规则）
   assert.equal(bubbleText(store, 't2'), '初步结论') // 新块整块投
   assert.ok(store.bubbles.every((b) => b.agentName === '研究员'))
+  assert.equal(store.opCards.length, 1) // 只有内层工具卡
   const card = opCard(store, 'inner-1')
   assert.ok(card)
   assert.equal(card.agentName, '研究员')
@@ -146,8 +149,8 @@ test('孙层递归：组工具（并行派发）的子 Agent 各自投卡/气泡
     transcript: [toolBlock(grand), toolBlock(childB)]
   }
   const m1 = message('m1', [toolBlock(group)])
-  store.noteAssistantStream('conv-a', m1) // 首见：只记（宿主组卡照投）
-  assert.equal(store.opCards.length, 1)
+  store.noteAssistantStream('conv-a', m1) // 首见：只记（宿主组派发卡不投）
+  assert.equal(store.opCards.length, 0)
   assert.equal(store.bubbles.length, 0)
   // 第二帧：孙层开始输出（新块），子乙的卡照投（续写终态）
   grand.transcript = [block('g1', 'text', '孙层输出')]
@@ -168,6 +171,7 @@ test('首见的存量里等审批的调用例外：卡照弹（要处理的事�
     ]
   })
   store.noteAssistantStream('conv-a', message('m1', [toolBlock(event)]))
+  assert.equal(opCard(store, 'run-1'), undefined) // 宿主派发卡不投
   assert.ok(opCard(store, 'wait-ok'))
   assert.equal(opCard(store, 'wait-ok').status, 'awaitingApproval')
   assert.equal(opCard(store, 'wait-ok').agentName, '研究员')
@@ -182,6 +186,7 @@ test('历史豁免：宿主消息已完结但 run 还在跑（后台子 Agent）
   store.historyMessages['m1'] = true
   store.noteAssistantStream('conv-a', m1)
   assert.equal(store.bubbles.length, 0) // 首见存量不投
+  assert.equal(store.opCards.length, 0) // 宿主派发卡不投
   assert.ok(store.agentMarks['t1'] === '后台进度一'.length) // 但标记已记：后续增量照投
 
   // 后台 run 继续：transcript 增长 → 消息补丁重推 → 增量上桌面（同主会话首见规则：存量只记、只投增量尾巴）
@@ -204,6 +209,7 @@ test('历史豁免：宿主消息已完结但 run 还在跑（后台子 Agent）
   event.status = 'succeeded'
   store.noteAssistantStream('conv-a', m1)
   assert.equal(store.bubbles.length, 2)
+  assert.equal(store.opCards.length, 0)
 })
 
 test('agentFocus：openConversation(conv, runID) 设上；普通打开 / 关会话时清掉', async () => {

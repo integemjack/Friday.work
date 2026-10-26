@@ -254,6 +254,13 @@ function terminalStatus(status: DesktopOp['status']): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'denied'
 }
 
+/** 派发子智能体的工具（delegate_task / run_parallel_tasks）：派发这个动作不在桌面占一张卡
+ *  （2026-10-26 用户：主智能体派发时显示的那张派发气泡不要）——桌面直接看子 Agent 自己的
+ *  气泡/操作卡；等审批的除外（要处理的事不能藏） */
+function isDispatchTool(name: string): boolean {
+  return name === 'delegate_task' || name === 'run_parallel_tasks'
+}
+
 /** 收集一段块列表里全部工具事件 id 和子 Agent 运行记录（transcript）里的文本/思考块 id（含嵌套的孙层）。
  *  关会话时按它清 agentEvents / agentMarks，不递归收嵌套层这些标记就清不掉 */
 function collectAgentCastIDs(
@@ -1402,7 +1409,8 @@ export const useAppStore = defineStore('app', {
                 next.currentTool = { tool: tool.tool ?? '', title: tool.title ?? '', summary: tool.summary ?? '' }
                 // 会话用到终端/浏览器/文件：对应面板立刻展开（订阅不上时这里也能投出操作卡）
                 this.noteToolUse(tool.tool ?? '', evt.conversationID)
-                if (!this.details[evt.conversationID]) {
+                // 派发子智能体不投卡（同 noteToolBlock：主智能体派发的显示气泡不要）
+                if (!this.details[evt.conversationID] && !isDispatchTool(tool.tool ?? '')) {
                   this.pushOp({
                     id: `act:${evt.conversationID}:${tool.tool ?? ''}`,
                     conversationID: evt.conversationID,
@@ -2625,19 +2633,24 @@ export const useAppStore = defineStore('app', {
       // ask_user 等回答：把参数里的问题解析出来（activity 事件带解析好的 questions，这条是消息补丁的路，
       // 两条路同一个 id 会并到同一张卡）；卡上展开成选项点选，不再是批准/拒绝
       const parsed = event.name === 'ask_user' && event.status === 'awaitingApproval' ? parseAskQuestions(event.arguments ?? '') : []
-      this.pushOp({
-        id: event.id,
-        conversationID,
-        title: event.title || event.name || '操作',
-        // ask_user 的卡不展示原始 JSON：题面就在下面的面板里，这里只留一句题面摘要
-        content: parsed.length ? (parsed[0]?.question ?? '') : (event.arguments ?? ''),
-        result: event.result || '',
-        status: event.status ?? 'running',
-        toolName: event.name ?? '',
-        questions: parsed.length ? parsed : undefined
-      })
-      if (event.status === 'succeeded' && isMediaTool(event.name ?? '')) {
-        this.addStackMedia(conversationID, event.name ?? '', event.arguments ?? '')
+      // 派发子智能体（delegate_task / run_parallel_tasks）不投宿主卡（2026-10-26 用户：主智能体
+      // 派发时显示的派发气泡不要）——桌面直接看子 Agent 自己的输出（noteAgentTranscript 照走）；
+      // 等审批的例外（要处理的事不能藏）
+      if (!isDispatchTool(event.name ?? '') || event.status === 'awaitingApproval') {
+        this.pushOp({
+          id: event.id,
+          conversationID,
+          title: event.title || event.name || '操作',
+          // ask_user 的卡不展示原始 JSON：题面就在下面的面板里，这里只留一句题面摘要
+          content: parsed.length ? (parsed[0]?.question ?? '') : (event.arguments ?? ''),
+          result: event.result || '',
+          status: event.status ?? 'running',
+          toolName: event.name ?? '',
+          questions: parsed.length ? parsed : undefined
+        })
+        if (event.status === 'succeeded' && isMediaTool(event.name ?? '')) {
+          this.addStackMedia(conversationID, event.name ?? '', event.arguments ?? '')
+        }
       }
       if (event.transcript?.length) this.noteAgentTranscript(conversationID, event)
     },
