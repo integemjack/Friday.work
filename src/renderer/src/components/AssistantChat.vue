@@ -6,19 +6,23 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import type { ChatMessage } from '../../../protocol/rpc/protocol.js'
-import { blockCase, blockPayload } from '../../../protocol/rpc/protocol.js'
 import { agentActivityLabel, findAgentEvent } from '../lib/agentTree.js'
 import MessageItem from './MessageItem.vue'
 import {
+  conversationSpeechSnapshot,
+  createAssistantSpeechState,
+  createConversationSpeechState,
+  speakAssistantEntries,
+  speakConversationSnapshot
+} from '../lib/replySpeech.js'
+import {
   ASSISTANT_SPEECH_SOURCE,
-  createSpeechIncrement,
   setSpeechForeground,
   setSpeechPosition,
   setSpeechTitleResolver,
   stopSpeaking,
   ttsDetail,
-  ttsPhase,
-  type SpeechIncrement
+  ttsPhase
 } from '../lib/speechOutput.js'
 
 const store = useAppStore()
@@ -218,11 +222,19 @@ watch(queued, (next, prev) => {
 // 两种模式的信号：
 //   - 助手模式：日志条 text 增量实时播，streaming false 收尾播尾句；
 //   - 会话模式：所有会话 assistant 消息的 text 块增量实时播（后台会话也播，不只当前会话），
-//     finishedAt 出现收尾。打断的 / 出错的 / 静默的不播尾巴；首次进入监听时已有的
-//     内容一律当历史不补播（切会话/重连加载快照不念旧账）。
-const seenEntryStreaming = new Map<string, { streaming?: boolean; interrupted?: boolean; spoken?: boolean }>()
-/** 日志条游标：entryID → { 增量游标, 已播到的文本长度 }（按 entry 记，流式一断再续从游标续播） */
-const entryStreams = new Map<string, { inc: SpeechIncrement; len: number }>()
+//     finishedAt 出现收尾。首次进入监听时已有的内容一律当历史不补播（切会话/重连加载
+//     快照不念旧账）。
+//
+// 「播不播」的判据只用单调不可逆的信号（historical / stoppedByUser / interrupted / silent）。
+// 不播的那段走 skip：它推进游标、把文本永久丢掉，字段之后再翻回来也拿不回来——所以凡是
+// 会在一轮中途翻转的字段都不能当判据。error 会被重试清掉、notice 会被看图描述清掉、还会被
+// 交付检查/验证检查/额度等待累加，而服务端挂上它们之后照样继续往同一条消息里写真正做完的
+// 正文；这两个字段又只是气泡 meta 行上的一个小标签，正文照常渲染。拿它们静音就是
+// 「看得见却听不到」，也正是「有的回复不播」的根因。
+// 收尾同理：flush 是幂等的，完结期间每帧都调，不去捕捉「finishedAt 刚出现」那一次的边沿——
+// 边沿漏掉（收尾帧没触发回调、收尾后又补来文本、断线补拉）整条尾巴就永久静音。
+/** 日志条的播报游标（按 entry 记，流式一断再续从游标续播）；送播逻辑在 lib/replySpeech */
+const assistantSpeech = createAssistantSpeechState()
 // 源是每条的「id / kind / 文本长度 / 状态位」签名串：store 的 mergeAssistantEntry 用 splice
 // 原地变异 assistantEntries（同 id 更新、新条目插入都不换数组引用），只 track 数组引用的话
 // 永远等不到流式增量；签名逐条读了这几个字段，依赖就挂在它们上。不用 deep：deep 每个流式
@@ -252,173 +264,20 @@ watch(
       }
     }
     assistantSeenLength = entries.length
-    for (const entry of entries) {
-      if (entry.kind === 'user') {
-        if (entry.data?.silent) continue
-        // 只登记已见（每次签名变都整份重跑，靠它跳过重复处理）；自己发言不断播报，
-        // 新回复的句子 append 到队尾接着播
-        seenEntryStreaming.set(entry.id, {})
-        continue
-      }
-      if (entry.kind !== 'assistant') continue
-      const mark = seenEntryStreaming.get(entry.id)
-      const done = !entry.streaming
-      const speakable =
-        !entry.data?.silent && !entry.interrupted && !entry.data?.error && entry.text.trim().length > 0
-      let stream = entryStreams.get(entry.id)
-      if (!stream) {
-        stream = { inc: createSpeechIncrement(ASSISTANT_SPEECH_SOURCE), len: 0 }
-        entryStreams.set(entry.id, stream)
-      }
-      // 首帧已有的文本当历史不补播；之后流式长出来的部分实时送播（新条目直接落地也
-        // 从 0 全播——它刚出现，不算历史）。不播的那段也要过一遍游标（skip）：历史停在
-      // 代码块中间时，游标得知道后面长出来的是代码下半截
-      if (entry.text.length > stream.len) {
-        const grown = entry.text.slice(stream.len)
-        if (!initial && speakable) stream.inc.push(grown)
-        else stream.inc.skip(grown)
-      }
-      if (entry.text.length !== stream.len) stream.len = entry.text.length
-      // streaming → 完成：把还没等到句末标点的尾句播完（打断 / 出错的整条不再收尾）
-      if (!initial && done && (mark === undefined || mark.streaming) && speakable) stream.inc.flush()
-      seenEntryStreaming.set(entry.id, { streaming: entry.streaming, spoken: true })
-    }
+    speakAssistantEntries(entries, assistantSpeech, initial)
   },
   { immediate: true }
 )
 
 // 会话模式：按「回复气泡」的块级流式增量实时播——桌面气泡（noteAssistantStream）
 // 投增量的同一片数据在这里送播报（一个 text 块一个游标，多段回复各自成泡也各自播），
-// 不再等 finishedAt 才把整条集合起来播一次。所有会话都监听（后台会话也播，不只当前）；
-// 自己在当前会话发言时打断。getter 产出完成态快照 + text 块长度串：长度串必须真读
-// 块内容——applyPatch 是原地改块、保留对象引用，不读内容的话流式片根本不触发回调
-//（正是「只播最后一次集合」的根因），读了之后块一长快照就变、回调就来播增量。
-// 快照里还带一个「会话清单」项（Object.keys(store.details)，空会话也算）：
-// 新会话进入监听那帧就登记进 seenConversations，当帧已有内容当历史。此前按「会话
-// 第一次出现消息项」判定，空会话没被登记，第一条回复的第一片那帧才被当新会话豁免
-// ——开头一句直接丢；会话被订阅上限淘汰/关掉重开后 seenConversations 残留，重订阅
-// 帧不豁免，快照里已完成的历史消息从 0 全量重播（念旧账）（2026-12 修）。
-const seenConversations = new Set<string>()
-const seenMessageFinish = new Map<string, string | undefined>()
-/** 块游标：conv:msgID:blockID → { 增量游标, 已播到的文本长度 } */
-const blockStreams = new Map<string, { inc: SpeechIncrement; len: number }>()
+// 不再等 finishedAt 才把整条集合起来播一次。所有会话都监听（后台会话也播，不只当前）。
+// 快照怎么读、哪些该播、什么时候收尾，全在 lib/replySpeech（产品代码和测试跑同一份实现，
+// 不再各复刻一份 watch 各自漂移）；这里只负责把它挂成 watch。
+const conversationSpeech = createConversationSpeechState()
 watch(
-  () => {
-    const snapshot: Array<{
-      key: string
-      conv?: string
-      msgID?: string
-      history?: boolean
-      user?: boolean
-      finishedAt?: string
-      stoppedByUser?: boolean
-      error?: string
-      notice?: string
-      lens?: string
-      convs?: string[]
-    }> = []
-    // 会话清单项：本帧监听范围内有哪些会话（含没有任何消息的），豁免判定的单位
-    snapshot.push({ key: '__convs__', convs: Object.keys(store.details) })
-    for (const conv of Object.keys(store.details)) {
-      const current = conv === conversationID.value
-      for (const { message } of store.details[conv]?.messages ?? []) {
-        if (message.role === 'user') {
-          if (current) snapshot.push({ key: `u:${conv}:${message.id}`, user: true })
-          continue
-        }
-        if (message.role !== 'assistant') continue
-        const lens = (message.blocks ?? [])
-          .map((block) =>
-            blockCase(block) === 'text' ? `${block.id}:${String(blockPayload<string>(block, 'text') ?? '').length}` : ''
-          )
-          .join('|')
-        snapshot.push({
-          key: `a:${conv}:${message.id}`,
-          conv,
-          msgID: message.id,
-          history: !!store.historyMessages[message.id],
-          finishedAt: message.finishedAt,
-          stoppedByUser: message.stoppedByUser,
-          error: message.error,
-          notice: message.notice,
-          lens
-        })
-      }
-    }
-    return snapshot
-  },
-  (list, prev) => {
-    const initial = prev === undefined
-    // 先统一登记本帧新出现的会话（以会话清单项为准，空会话也算）：其中已有的内容全部
-    // 当历史不播。被淘汰/关掉后重订阅的会话重新出现在清单里，也按新会话豁免一次。
-    // （不能在遍历中边遇边登记——那样只有新会话的第一条享受到豁免，后面的照播）
-    const freshConvs = new Set<string>()
-    for (const conv of list.find((item) => item.key === '__convs__')?.convs ?? []) {
-      if (!seenConversations.has(conv)) freshConvs.add(conv)
-    }
-    for (const conv of freshConvs) seenConversations.add(conv)
-    // 消息按 conv:id 先建一遍索引（O(n)）：逐条 messages.find 是 O(n²)，每个流式增量都要扫一遍
-    const entryIndex = new Map<string, NonNullable<(typeof store.details)[string]>['messages'][number]>()
-    for (const conv of Object.keys(store.details)) {
-      for (const candidate of store.details[conv]?.messages ?? []) {
-        const key = `${conv}:${candidate.message.id}`
-        if (!entryIndex.has(key)) entryIndex.set(key, candidate) // 同 id 重复时取第一条（与 find 一致）
-      }
-    }
-    for (const item of list) {
-      if (item.key === '__convs__') continue
-      if (item.user) {
-        // 只登记已见（快照每帧重跑，靠它跳过重复处理）；自己发言不断播报——
-        // 正在念的继续，新回复的句子 append 到队尾接着播（2026-12 改）
-        seenMessageFinish.set(item.key, undefined)
-        continue
-      }
-      if (item.conv === undefined || item.msgID === undefined) continue
-      const entry = entryIndex.get(`${item.conv}:${item.msgID}`)
-      if (!entry) continue
-      const before = seenMessageFinish.get(item.key)
-      const done = !!item.finishedAt
-      // 新进会话里已完成的消息是历史：不播增量也不收尾（否则切会话/重连会念旧账）
-      // 打开会话时就在的消息（store.historyMessages）同样是历史：旧会话的消息未必带 finishedAt，
-      // 服务端换块 id 重推时光看 done 拦不住，会从头把旧回复念一遍
-      const historical = initial || freshConvs.has(item.conv) || !!item.history
-      const justFinished = !initial && done && !before && !historical
-      const speakable = !item.stoppedByUser && !item.error && !item.notice
-      for (const block of entry.message.blocks ?? []) {
-        if (blockCase(block) !== 'text') continue
-        const full = String(blockPayload<string>(block, 'text') ?? '')
-        const key = `${item.conv}:${item.msgID}:${block.id}`
-        let stream = blockStreams.get(key)
-        if (!stream) {
-          // 完结消息里「新出现的块」= 服务端重推历史换了块 id（noteAssistantStream 同款
-          // 场景：新一轮活动把已见过的消息按新块 id 重弹）：内容念过了，游标直接对齐、
-          // 不重播；未完成消息的新块才是流式新段，从头播。
-          // 「首见即已完结」不能再一律当重推跳过：思考模型答案太短/渲染节流时，text 块第一次
-          // 可见就是带 finishedAt 的收尾帧（流式期间只有 thinking 块），跳过会让整轮不播——
-          // 隔条交替不播的根因。之前记录过这条消息的 finishedAt（before 为真）才是重推过完结消息
-          stream = { inc: createSpeechIncrement(item.conv), len: 0 }
-          blockStreams.set(key, stream)
-          if (historical || (done && before)) {
-            stream.inc.skip(full)
-            stream.len = full.length
-          }
-        }
-        // 新进监听 / 首帧的已有文本当历史；之后流式长出来的增量（=气泡正在显示的新
-        // 文本）实时送播；块长度回退（重发/修正，罕见）只对齐游标不重播。
-        // 不播的那段也要过一遍游标（skip）：中途起播时历史可能停在代码块 / 公式块
-        // 中间，游标不知道的话后面长出来的代码下半截会被当正文念
-        if (full.length > stream.len) {
-          const grown = full.slice(stream.len)
-          if (!historical && speakable) stream.inc.push(grown)
-          else stream.inc.skip(grown)
-        }
-        if (full.length !== stream.len) stream.len = full.length
-        // finishedAt 出现：把还没等到句末标点的尾句播完（打断/出错/带通知的整条不收尾）
-        if (justFinished && speakable) stream.inc.flush()
-      }
-      seenMessageFinish.set(item.key, item.finishedAt)
-    }
-  },
+  () => conversationSpeechSnapshot(store, conversationID.value),
+  (list, prev) => speakConversationSnapshot(list, store, conversationSpeech, prev === undefined),
   { immediate: true }
 )
 

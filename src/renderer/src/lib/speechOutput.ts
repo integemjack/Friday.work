@@ -444,6 +444,10 @@ const BACK_LOOKAHEAD = 1
 const BACKGROUND_SPEED_BOOST = 1.2
 /** 前台不出声时后台抬回的音量（下限；后台音量设成 0 的照样不出声） */
 const BACKGROUND_IDLE_GAIN = 0.7
+/** 同一会话里老回复被新回复盖过时的音量系数：老的那条压成背景音继续念完，
+ *  新的照常原声——用户注意力跟着新回复走，但老回复不被硬切（硬切会丢半句话）。
+ *  乘在该通道本来的增益上，所以后台的老回复是「后台音量 × 这个系数」，更低。 */
+const STALE_TURN_GAIN = 0.32
 /** 前台一句播完到下一句开口通常只隔几百毫秒：停顿超过这么久才把后台抬回来，免得后台忽大忽小 */
 const DUCK_RELEASE_MS = 800
 /** 占麦的后台来源空了多久才让出（流式中途等模型 / 跑工具） */
@@ -471,18 +475,45 @@ interface SynthAudio {
   sampleRate: number
 }
 
+/** 待合成的一句。tag / turn 跟着这句一路走到播放，两者用途不同：
+ *  - tag：这句属于哪条桌面气泡（气泡 id）。同一 tag 的句子全部了结（播完或被丢）时
+ *    通知气泡「念完了」，气泡才允许渐隐——否则长回复念到一半气泡就没了。
+ *  - turn：这句属于哪一轮回复（一条助手消息）。同会话来了新轮次，老轮次还在念的
+ *    句子按 STALE_TURN_GAIN 压低，注意力让给新回复。 */
+interface QueueItem {
+  text: string
+  tag?: string
+  turn?: string
+  /** 已了结（播完或被丢）：retire 幂等用，同一句被两条路径撞上只减一次计数 */
+  retired?: boolean
+}
+
+/** 已合成、待播的一句（音频 + 它自带的 tag / turn） */
+interface ReadyItem {
+  audio: SynthAudio
+  tag?: string
+  turn?: string
+  retired?: boolean
+}
+
 interface SpeechChannel {
   id: string
   /** 待合成的句子 */
-  queue: string[]
+  queue: QueueItem[]
   /** 已合成、待播 */
-  ready: SynthAudio[]
+  ready: ReadyItem[]
   /** 引擎里正在合成本通道的一句 */
   synthesizing: boolean
   /** 播放循环在跑 */
   playing: boolean
   /** 正在出声的那句 */
   current: AudioBufferSourceNode | null
+  /** 正在出声那句的队列项：停播 / 打断时要靠它把 tag 计数退干净 */
+  playingItem: ReadyItem | null
+  /** 最近入队的轮次；同会话来了新轮次，老轮次还在念的句子压低（见 mixFor） */
+  currentTurn: string | null
+  /** 正在出声那句的轮次 */
+  playingTurn: string | null
   /** 本轮指定音色（试听时非空）；空 = 每句跟当前选中的音色 */
   voice?: VoiceOption
   /** 本轮已入队总字数（含已播完的）：动态语速按整条回复长度取值，不是剩余队列——
@@ -510,6 +541,11 @@ type Spatial = { kind: 'stereo'; node: StereoPannerNode } | { kind: 'hrtf'; node
 
 const channels = new Map<string, SpeechChannel>()
 let arrivals = 0
+/** tag（气泡 id）→ 还没了结的句子数。入队 +1，播完或被丢 -1，归零就通知气泡可以收了。
+ *  全局一张表：tag 里含会话 id，跨通道不会撞。 */
+const tagPending = new Map<string, number>()
+/** tag → 等它念完的监听（气泡渐隐在等）；通知时整组摘掉，一次性 */
+const tagDrained = new Map<string, Set<() => void>>()
 /** 前台来源（AssistantChat 按当前模式 / 会话设置）；DEFAULT_SOURCE 也恒为前台 */
 let foregroundSource = DEFAULT_SOURCE
 /** 占着后台麦的来源 */
@@ -518,8 +554,10 @@ let holderTimer: ReturnType<typeof setTimeout> | null = null
 /** 闪避中：前台在出声，或刚停下还不到 DUCK_RELEASE_MS */
 let ducking = false
 let duckTimer: ReturnType<typeof setTimeout> | null = null
-/** 引擎里正在合成的那句属于哪个通道；全部停止时换代，迟到的结果直接丢 */
-let inFlight: { channel: string; gen: number } | null = null
+/** 引擎里正在合成的那句属于哪个通道；全部停止时换代，迟到的结果直接丢。
+ *  带着 item：停播时不等 cancel 返回就能把它的 tag 计数退干净（主进程不回的话
+ *  气泡会永远等不到「念完了」、留在桌面上不收）。 */
+let inFlight: { channel: string; gen: number; item: QueueItem } | null = null
 let engineGen = 0
 /** 最近一次合成失败、之后还没有新句子入队：空闲时状态行停在「出错」 */
 let failed = false
@@ -530,6 +568,78 @@ let titleOfSource: (source: string) => string = () => ''
 /** 注册来源名字的查法（会话标题 / 「助手」） */
 export function setSpeechTitleResolver(resolve: (source: string) => string): void {
   titleOfSource = resolve
+}
+
+// MARK: 气泡 ↔ 播报的收尾联动（tag = 桌面气泡 id）
+
+/** 这句还有没有念完（含在队列里排着、正在合成、正在出声）。
+ *  从没入过队（播报关着 / 引擎不可用 / 文本被 cleanForSpeech 清空）返回 false——
+ *  气泡照常按自己的计时收，不会干等一个永远不来的通知。 */
+export function isSpeechTagPending(tag: string): boolean {
+  return (tagPending.get(tag) ?? 0) > 0
+}
+
+/** 等这个 tag 念完（一次性：通知后自动摘掉）。返回取消监听的函数。
+ *  注册时就已经念完了的话立即回调——气泡到点那一刻可能刚好播完，不能错过。 */
+export function onSpeechTagDrained(tag: string, callback: () => void): () => void {
+  if (!isSpeechTagPending(tag)) {
+    callback()
+    return () => {}
+  }
+  let listeners = tagDrained.get(tag)
+  if (!listeners) {
+    listeners = new Set()
+    tagDrained.set(tag, listeners)
+  }
+  listeners.add(callback)
+  return () => {
+    const set = tagDrained.get(tag)
+    if (!set) return
+    set.delete(callback)
+    if (!set.size) tagDrained.delete(tag)
+  }
+}
+
+/** 一句离开了队列系统（播完 / 被丢 / 被停）：tag 计数减一，归零就通知等它的气泡。
+ *  所有丢弃路径都必须走这里，否则气泡会永远等一个不会来的通知、留在桌面上不收。
+ *  幂等：同一句可能被「停播」和「播放循环收尾」两条路径先后撞上，只算一次。 */
+function retire(item: { tag?: string; retired?: boolean } | null | undefined): void {
+  if (!item || item.retired) return
+  item.retired = true
+  const tag = item.tag
+  if (!tag) return
+  const left = (tagPending.get(tag) ?? 0) - 1
+  if (left > 0) {
+    tagPending.set(tag, left)
+    return
+  }
+  tagPending.delete(tag)
+  const listeners = tagDrained.get(tag)
+  if (!listeners) return
+  tagDrained.delete(tag)
+  for (const callback of listeners) {
+    try {
+      callback()
+    } catch {
+      // 监听器自己出错不能把播报泵带崩
+    }
+  }
+}
+
+/** 一批句子一起作废（清队列 / 压缩成提示 / 停播） */
+function retireAll(items: ReadonlyArray<{ tag?: string; retired?: boolean }>): void {
+  for (const item of items) retire(item)
+}
+
+/** 丢掉一个通道里所有还没了结的句子，并把 tag 计数退干净 */
+function discardChannelAudio(ch: SpeechChannel): void {
+  retireAll(ch.queue)
+  retireAll(ch.ready)
+  retire(ch.playingItem)
+  ch.queue = []
+  ch.ready = []
+  ch.playingItem = null
+  ch.playingTurn = null
 }
 
 /** 某一路的桌面气泡位置（归一化 -1..1，x 左负右正、y 上负下正）。只更新不清除：
@@ -573,11 +683,12 @@ export function stopSpeaking(source?: string): void {
   const targets = all ? [...channels.values()] : [channels.get(source)].filter((ch): ch is SpeechChannel => !!ch)
   for (const ch of targets) {
     ch.token += 1
-    ch.queue = []
-    ch.ready = []
+    // 清队列的同时把每句的 tag 计数退干净：等这些句子的气泡才能收到「念完了」的通知去渐隐
+    discardChannelAudio(ch)
     ch.synthesizing = false
     ch.playing = false
     ch.collapsed = false
+    ch.currentTurn = null
     if (ch.current) {
       try {
         ch.current.stop()
@@ -588,6 +699,9 @@ export function stopSpeaking(source?: string): void {
     }
   }
   if (inFlight && (all || inFlight.channel === source)) {
+    // 这句确定不会再播了：当场退计数，不依赖 cancelCosyVoice 的回执
+    // （done 回调里还会 retire 一次，幂等不会减两次）
+    retire(inFlight.item)
     void window.fridayBridge.cancelCosyVoice?.().catch(() => {})
     // 全停：换代后立刻放出合成名额（被 cancel 的那句迟到的结果按代作废）；
     // 只停一个：等它回 cancelled 再放，别让下一句和被取消的那句在引擎里叠着
@@ -605,6 +719,9 @@ export function stopSpeaking(source?: string): void {
       staleTimer = null
     }
   }
+  // 清掉了 playingTurn / currentTurn：把增益推回该有的值，别让「老回复压低」的衰减
+  // 留在节点上（下一次开口虽然会重算，但切前台 / 改音量这些路径会先读到旧值）
+  applyMix()
   onAudibleChange()
   kick()
 }
@@ -621,8 +738,7 @@ export function setSpeechForeground(source: string): void {
     front.collapsed = false
     if (!front.playing && !front.synthesizing) {
       front.token += 1
-      front.queue = []
-      front.ready = []
+      discardChannelAudio(front)
     }
   }
   onAudibleChange()
@@ -640,6 +756,9 @@ function channelFor(id: string): SpeechChannel {
       synthesizing: false,
       playing: false,
       current: null,
+      playingItem: null,
+      currentTurn: null,
+      playingTurn: null,
       chars: 0,
       token: 0,
       since: 0,
@@ -723,7 +842,7 @@ function sweepStale(): void {
     if (isFront(ch.id) || ch.id === backgroundHolder || ch.collapsed || ch.playing || ch.synthesizing) continue
     if (!ch.queue.length && !ch.ready.length) continue
     const waited = now - Math.max(ch.startedAt, ch.spokeAt)
-    const backlog = ch.queue.reduce((sum, part) => sum + part.length, 0)
+    const backlog = ch.queue.reduce((sum, part) => sum + part.text.length, 0)
     if (waited >= BACKGROUND_STALE_MS || backlog >= BACKGROUND_STALE_CHARS) collapse(ch)
     else waiting = true
   }
@@ -740,10 +859,15 @@ function sweepStale(): void {
 function collapse(ch: SpeechChannel): void {
   const title = cleanForSpeech(titleOfSource(ch.id)).slice(0, 24)
   ch.token += 1 // 迟到的合成结果作废（调用方已确认它此刻不在合成、不在说）
-  ch.queue = [title ? `${title} 有新回复。` : '另一个会话有新回复。']
+  // 被作废的句子把 tag 计数退干净：那些气泡不再等，照常收
+  retireAll(ch.queue)
+  retireAll(ch.ready)
+  ch.queue = [{ text: title ? `${title} 有新回复。` : '另一个会话有新回复。' }]
   ch.ready = []
   ch.chars = 0
   ch.collapsed = true
+  ch.currentTurn = null
+  ch.playingTurn = null
 }
 
 function updatePhase(): void {
@@ -783,11 +907,15 @@ function applyOutputGain(): void {
 
 /** 某通道此刻该有的增益与方位：前台居中原声；后台偏到一侧（跟随气泡开着且有过气泡 = 气泡那边，
  *  否则按 id 固定一侧），前台出声时压到后台音量、前台安静时抬回 BACKGROUND_IDLE_GAIN。
- *  elevation 只在 HRTF 下有用（立体声像表现不了高低） */
+ *  elevation 只在 HRTF 下有用（立体声像表现不了高低）。
+ *  正在出声的那句属于老轮次（同会话已有新回复入队）时整体再乘 STALE_TURN_GAIN：
+ *  老的压成背景音念完、新的原声，前后台都适用。 */
 function mixFor(ch: SpeechChannel): { gain: number; pan: number; elevation: number } {
-  if (isFront(ch.id)) return { gain: 1, pan: 0, elevation: 0 }
+  const stale = ch.playingTurn !== null && ch.currentTurn !== null && ch.playingTurn !== ch.currentTurn
+  const damp = stale ? STALE_TURN_GAIN : 1
+  if (isFront(ch.id)) return { gain: damp, pan: 0, elevation: 0 }
   const low = ttsBackgroundVolume.value
-  const gain = ducking || low === 0 ? low : Math.max(low, BACKGROUND_IDLE_GAIN)
+  const gain = (ducking || low === 0 ? low : Math.max(low, BACKGROUND_IDLE_GAIN)) * damp
   if (ttsFollowBubble.value && ch.position) {
     return { gain, pan: bubblePan(ch.position.x, ch.id), elevation: -ch.position.y * BUBBLE_ELEVATION_MAX }
   }
@@ -981,6 +1109,38 @@ function playSamples(ch: SpeechChannel, token: number, samples: Float32Array, sa
   })
 }
 
+/** 句末标点：中日韩句读 + 换行。ASCII 句点不在这里——它得带上下文才判得出来，见 isSentenceEnd */
+const SENTENCE_END = '。！？!?；;：\n'
+
+/**
+ * 句末判定（流式游标 feed 与整条分句 splitForSpeech 共用同一套，两边不会切得不一样）。
+ * 中日韩句读和换行直接算句末；ASCII 句点只在「后面已经跟着空白」时才算——
+ * `1.5`、`file.ts`、`v0.5.110` 里的点和真正的句末点在字符上完全一样，只有后文能区分。
+ * 流式增量常在句中截断：片尾那个点后面还没有字符，这时不判定，留给下一片或收尾 flush。
+ * 宁可英文晚一句开口，也不要把小数点、文件名、版本号剁成两段分别合成。
+ */
+export function isSentenceEnd(text: string, index: number): boolean {
+  const char = text[index]
+  if (char === undefined) return false
+  if (SENTENCE_END.includes(char)) return true
+  if (char !== '.') return false
+  const next = text[index + 1]
+  return next !== undefined && /\s/.test(next)
+}
+
+/** 按句末把一段切成句子（末尾不满句的尾巴也作为一段返回） */
+function splitSentences(text: string): string[] {
+  const sentences: string[] = []
+  let start = 0
+  for (let index = 0; index < text.length; index++) {
+    if (!isSentenceEnd(text, index)) continue
+    sentences.push(text.slice(start, index + 1))
+    start = index + 1
+  }
+  if (start < text.length) sentences.push(text.slice(start))
+  return sentences
+}
+
 /** 分句：按句末标点/换行切，超长句再按逗号顿号切；返回非空片段（首句短、首音快）。
  *  片段逐句送主进程合成（串行队列保序），播放与下一句的合成并行——女声 RTF 0.52-0.74
  *  （Vulkan 实测）< 1，播放追得上合成。firstLimit：首句上限——引擎整句合成完才返回，
@@ -997,7 +1157,7 @@ export function splitForSpeech(clean: string, firstLimit = 16): string[] {
   for (const paragraph of clean.split(/\n+/)) {
     const trimmed = paragraph.trim()
     if (!trimmed) continue
-    for (const sentence of trimmed.split(/(?<=[。！？!?；;])/)) {
+    for (const sentence of splitSentences(trimmed)) {
       const s = sentence.trim()
       if (!s) continue
       const limit = parts.length === 0 ? firstLimit : 60
@@ -1046,10 +1206,19 @@ export function dynamicSpeedFor(length: number, min: number, max: number): numbe
  *  整条播报（默认）：停掉并清空所有正在播的再入队（试听优先）。
  *  流式增量（append: true）：只把片段接到这一路的队尾不打断——回复气泡边显示边念，
  *  别的会话同时在念也不互相打断（前台居中、后台压低偏到一侧）。
+ *  tag：这些句子属于哪条桌面气泡——全部念完（或被丢）时通知气泡可以渐隐。
+ *  turn：属于哪一轮回复——同会话来了新轮次，老轮次还在念的句子压低成背景音。
  *  开关关着时不播（试听用 force 跳过）；后台音量调到 0 时后台会话不播。 */
 export function speakText(
   text: string,
-  options?: { voice?: VoiceOption; force?: boolean; append?: boolean; source?: string }
+  options?: {
+    voice?: VoiceOption
+    force?: boolean
+    append?: boolean
+    source?: string
+    tag?: string
+    turn?: string
+  }
 ): void {
   // 首句上限只对非流式的整条播报生效（一次性给全文时首句切短、快开口）。
   // 流式 append 的句子已在 SpeechIncrement 攒到自然句边界，一律整句送合成——
@@ -1091,7 +1260,20 @@ export function speakText(
     holderTimer = null
   }
   failed = false
-  ch.queue.push(...parts)
+  const tag = options?.tag
+  const turn = options?.turn
+  // 新轮次的句子入队：正在念的老轮次立刻压低（mixFor 比 playingTurn 和 currentTurn）。
+  // 此刻没在出声就不动：等那句真开口时再算，不会白跑一趋 applyMix
+  if (turn && ch.currentTurn !== turn) {
+    ch.currentTurn = turn
+    if (ch.playingTurn && ch.playingTurn !== turn) applyMix()
+  }
+  for (const part of parts) {
+    ch.queue.push({ text: part, tag, turn })
+    // 先计数再入队：上面那些提前 return 的分支（开关关着 / 后台音量为 0 / 被 collapse 丢）
+    // 根本到不了这里，所以不会出现「计了数但没入队」、气泡干等不来的情况
+    if (tag) tagPending.set(tag, (tagPending.get(tag) ?? 0) + 1)
+  }
   ch.chars += parts.reduce((sum, part) => sum + part.length, 0)
   schedule()
   sweepStale() // 后台一下攒了太多字：当场压成提示，别等下一轮检查
@@ -1116,32 +1298,43 @@ function schedule(): void {
   if (inFlight) return
   const ch = nextToSynthesize()
   if (!ch) return
-  const text = ch.queue.shift()!
+  const item = ch.queue.shift()!
   const gen = engineGen
   const token = ch.token
-  inFlight = { channel: ch.id, gen }
+  inFlight = { channel: ch.id, gen, item }
   ch.synthesizing = true
   const done = (audio: SynthAudio | null, error?: unknown) => {
-    if (gen !== engineGen) return // 全停过：这句作废，名额早已放出
+    // 这句已经从 queue 里 shift 出来了：停播 / 清队列那些路径碰不到它，
+    // 所以下面每条「这句没了」的分支都得自己 retire，否则气泡永远等不到通知
+    if (gen !== engineGen) {
+      retire(item) // 全停过：这句作废，名额早已放出
+      return
+    }
     inFlight = null
     ch.synthesizing = false
-    if (token === ch.token) {
-      if (audio && audio.samples.length) ch.ready.push(audio)
-      if (error !== undefined) {
-        // 失败时清掉这一路没播到的句子：不清的话下一轮 append 会先播这些旧句（串台），
-        // 而引擎故障时它们也只会再失败一遍。新回复的句子照常入队重试——serve 死亡由
-        // 主进程回收句柄，下次合成会重新拉起引擎，自动恢复。
-        ch.queue = []
-        failed = true
-        ttsDetail.value = error instanceof Error ? error.message : String(error)
-      }
+    if (token !== ch.token) {
+      retire(item) // 这一路被停过：迟到的合成结果作废
+    } else if (error !== undefined) {
+      // 失败时清掉这一路没播到的句子：不清的话下一轮 append 会先播这些旧句（串台），
+      // 而引擎故障时它们也只会再失败一遍。新回复的句子照常入队重试——serve 死亡由
+      // 主进程回收句柄，下次合成会重新拉起引擎，自动恢复。
+      retire(item)
+      retireAll(ch.queue)
+      ch.queue = []
+      failed = true
+      ttsDetail.value = error instanceof Error ? error.message : String(error)
+    } else if (audio && audio.samples.length) {
+      // 合成成功：tag / turn 跟着音频进待播队列（计数不改，由播完那句时 retire 一次）
+      ch.ready.push({ audio, tag: item.tag, turn: item.turn })
+    } else {
+      retire(item) // 空音频（纯标点片段）：这句没了，不会有声音
     }
     if (ch.ready.length && !ch.playing) void runPlayback(ch)
     settle(ch)
     schedule()
     updatePhase()
   }
-  void synthesize(ch, text).then(
+  void synthesize(ch, item.text).then(
     (audio) => done(audio),
     (error: unknown) => done(null, error ?? new Error('合成失败'))
   )
@@ -1182,16 +1375,33 @@ async function runPlayback(ch: SpeechChannel): Promise<void> {
   ch.playing = true
   try {
     while (ch.ready.length && token === ch.token && mayPlay(ch)) {
-      const audio = ch.ready.shift()!
+      const item = ch.ready.shift()!
+      ch.playingItem = item
+      // 这句属于哪一轮：老轮次（同会话已有新回复入队）压低念完，新轮次原声。
+      // 只在轮次真变了时推一次 applyMix，句间不白跑
+      const turn = item.turn ?? null
+      if (ch.playingTurn !== turn) {
+        ch.playingTurn = turn
+        applyMix()
+      }
       ch.spokeAt = Date.now()
       schedule() // 垫着的少了一句：空着的合成名额可以给这一路补上
-      await playSamples(ch, token, audio.samples, audio.sampleRate)
+      await playSamples(ch, token, item.audio.samples, item.audio.sampleRate)
+      // 这句念完了（或被打断）：tag 计数减一，归零就通知等它的气泡可以收了。
+      // 被打断时 stopSpeaking 已经 retire 过同一个 item，retire 幂等不会减两次
+      retire(item)
+      if (ch.playingItem === item) ch.playingItem = null
     }
   } finally {
     // 自然播完 / 让麦才归还；被打断的（token 失配）不动——stopSpeaking 已复位，
     // 免得迟到的 finally 把新一轮的标志清掉（那会让后续增量只排队不出声）
     if (token === ch.token) {
       ch.playing = false
+      ch.playingItem = null
+      if (ch.playingTurn !== null) {
+        ch.playingTurn = null
+        applyMix() // 老轮次压低着念完了：把这一路的增益抬回该有的值
+      }
       settle(ch)
       kick()
     }
@@ -1217,16 +1427,25 @@ export interface SpeechIncrement {
   flush(): void
 }
 
-const SENTENCE_END = '。！？!?；;：\n'
 /** 跨行结构的围栏（开闭同一个记号）：里面的内容不念 */
 const SPEECH_FENCES = ['```', '$$']
 
-/** source：这个游标的句子送哪一路（会话 id / ASSISTANT_SPEECH_SOURCE；不给 = 前台默认路） */
-export function createSpeechIncrement(source: string = DEFAULT_SOURCE): SpeechIncrement {
+/** source：这个游标的句子送哪一路（会话 id / ASSISTANT_SPEECH_SOURCE；不给 = 前台默认路）。
+ *  meta.tag：句子属于哪条桌面气泡（全部念完时通知气泡可以渐隐）；
+ *  meta.turn：属于哪一轮回复（同会话来了新轮次，老轮次还在念的压低）。 */
+export function createSpeechIncrement(
+  source: string = DEFAULT_SOURCE,
+  meta?: { tag?: string; turn?: string }
+): SpeechIncrement {
   let buffer = '' // 围栏外、还没成句的文本
   let pending = '' // 还没判定的原始增量（可能卡着半个围栏记号，如片尾的「``」）
   let muted = 0 // pending 开头有几个字来自 skip：只参与围栏判定，不进句缓冲
   let fence: string | null = null // 当前所在围栏的记号；null = 在围栏外
+
+  /** 送一句去播：带上这个游标的 tag / turn（三处出口共用，不会漏带） */
+  const emit = (text: string): void => {
+    speakText(text, { append: true, source, tag: meta?.tag, turn: meta?.turn })
+  }
 
   /** 从 pending 头上取走 n 个字，返回其中可念的部分（skip 来的那段不算） */
   const take = (n: number): string => {
@@ -1241,15 +1460,16 @@ export function createSpeechIncrement(source: string = DEFAULT_SOURCE): SpeechIn
   const feed = (text: string) => {
     if (!text) return
     buffer += text
+    // 从后往前找最后一个句末：一次把攒着的整句都送出去（英文的 ASCII 句点也算，见 isSentenceEnd）
     for (let i = buffer.length - 1; i >= 0; i--) {
-      if (SENTENCE_END.includes(buffer[i])) {
-        speakText(buffer.slice(0, i + 1), { append: true, source })
+      if (isSentenceEnd(buffer, i)) {
+        emit(buffer.slice(0, i + 1))
         buffer = buffer.slice(i + 1)
         break
       }
     }
     if (buffer.length >= 120) {
-      speakText(buffer, { append: true, source })
+      emit(buffer)
       buffer = ''
     }
   }
@@ -1305,13 +1525,18 @@ export function createSpeechIncrement(source: string = DEFAULT_SOURCE): SpeechIn
       muted = pending.length
       drain()
     },
+    /** 收尾：把还没等到句末标点的尾巴整段播完。
+     *  幂等——buffer 空了再调什么都不做。所以调用方可以在「这条消息已完结」期间每帧都调，
+     *  不必去捕捉那个只出现一次的完结边沿：边沿一旦漏掉（收尾帧没触发回调、收尾后又补了
+     *  文本、断线重连补拉），整条尾巴就永久静音，而这正是「有的回复不播」的一类根因。
+     *  fence 不重置：收尾之后同一条消息又长出文本时围栏状态要接着算，否则补来的那个
+     *  闭合 ``` 会被当成开启围栏、把它后面的正文当代码整段丢掉。 */
     flush() {
       // 扣住的半个记号到收尾也没凑成围栏：当普通字符；还在围栏里：未闭合部分整段丢
       if (!fence) buffer += pending.slice(muted)
       pending = ''
       muted = 0
-      fence = null
-      if (buffer.trim()) speakText(buffer, { append: true, source })
+      if (buffer.trim()) emit(buffer)
       buffer = ''
     }
   }

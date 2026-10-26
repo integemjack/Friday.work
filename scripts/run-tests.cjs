@@ -2,7 +2,7 @@
 // 用法：npm test
 
 const { spawnSync } = require('node:child_process')
-const { mkdirSync, rmSync } = require('node:fs')
+const { mkdirSync, rmSync, writeFileSync } = require('node:fs')
 const { join } = require('node:path')
 
 const root = join(__dirname, '..')
@@ -27,6 +27,10 @@ run('npx', ['esbuild', 'src/protocol/session/TargetParse.ts', '--bundle', '--pla
 run('npx', ['esbuild', 'src/renderer/src/lib/voiceMedia.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/voicemedia.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/speechInput.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--outfile=.tmp/speechinput.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/speechOutput.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--outfile=.tmp/speechoutput.cjs'])
+// replySpeech 复用同一份 speechOutput 实例（播报队列/开关是模块级单例，两份副本会各播各的）：
+// 把 speechOutput 留成 external，再用 .tmp/speechOutput.js 这个一行 shim 转回 speechoutput.cjs
+run('npx', ['esbuild', 'src/renderer/src/lib/replySpeech.ts', '--bundle', '--platform=node', '--format=cjs', '--external:electron', '--external:./speechOutput.js', '--outfile=.tmp/replyspeech.cjs'])
+writeFileSync(join(tmp, 'speechOutput.js'), "module.exports = require('./speechoutput.cjs')\n")
 run('npx', ['esbuild', 'src/renderer/src/lib/askUser.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/askuser.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/agentTree.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/agenttree.cjs'])
 run('npx', ['esbuild', 'src/renderer/src/lib/serviceUsage.ts', '--bundle', '--platform=node', '--format=cjs', '--outfile=.tmp/serviceusage.cjs'])

@@ -17,6 +17,8 @@ import {
 import { applyMessagePatch } from '../../../protocol/rpc/MessagePatcher.js'
 import { conversationPath, type BranchInfo } from '../../../protocol/rpc/ConversationPath.js'
 import { parseAskQuestions } from '../lib/askUser.js'
+// 气泡收尾要等 TTS 念完（长回复念到一半气泡就没了的话，听着声音找不到对应的字）
+import { isSpeechTagPending, onSpeechTagDrained } from '../lib/speechOutput.js'
 import {
   canQueryUsage,
   usageKey,
@@ -135,6 +137,8 @@ export interface DesktopBubble {
   activeAt: number
   fading: boolean
   timer: number
+  /** 到点了但 TTS 还在念这条气泡的内容：等念完再渐隐。pushBubble 又来新内容时清掉、重新计时 */
+  waitingSpeech?: boolean
 }
 
 export interface DesktopOp {
@@ -2383,6 +2387,7 @@ export const useAppStore = defineStore('app', {
     /** 投一条气泡（思考/文本）：同一个内容块续在同一条气泡里（一个块一条，多段不并泡），5 秒无新内容渐隐。
      *  渐隐删除只是「看不见」，全文记在 castTexts；断流超过 5 秒后再来增量时按全文重建，
      *  不能只投增量那截（流式间隔一大就会变成「内容只剩一小段」）。
+     *  text 气泡到点时若 TTS 还在念它，fadeBubble 会等念完再收（见那里）。
      *  agentName：子 Agent 的输出（主会话自己的气泡不传） */
     pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string, blockID: string, agentName?: string) {
       if (!chunk.trim()) return
@@ -2412,6 +2417,8 @@ export const useAppStore = defineStore('app', {
         existing.activeAt = Date.now()
         window.clearTimeout(existing.timer)
         existing.fading = false
+        // 又来内容了：之前「等念完再收」的登记作废，按新内容重新计时（到点时再重新判一次）
+        existing.waitingSpeech = false
         existing.timer = window.setTimeout(() => this.fadeBubble(id), 5000)
         return
       }
@@ -2439,10 +2446,26 @@ export const useAppStore = defineStore('app', {
       bubble.y += dy
     },
 
-    /** 气泡渐隐（先加渐隐类，动画完了再从数组里删） */
-    fadeBubble(id: string) {
+    /** 气泡渐隐（先加渐隐类，动画完了再从数组里删）。
+     *  到点自动收时，如果 TTS 还在念这条气泡的内容就等念完再收——长回复念到一半气泡就没了，
+     *  用户听着声音却找不到对应的字。用户点气泡关闭（user: true）不等，立即收。
+     *  只有 text 气泡会等：thinking 块根本不送播报（replySpeech 只取 text 块），等也等不到通知。 */
+    fadeBubble(id: string, options?: { user?: boolean }) {
       const bubble = this.bubbles.find((item) => item.id === id)
       if (!bubble || bubble.fading) return
+      if (!options?.user && bubble.kind === 'text' && isSpeechTagPending(id)) {
+        if (bubble.waitingSpeech) return // 已经在等了：别重复挂监听
+        bubble.waitingSpeech = true
+        onSpeechTagDrained(id, () => {
+          // 等的期间可能又来了新内容（pushBubble 清掉 waitingSpeech 并重新计时），
+          // 也可能用户已经手动关了：都按当下的状态来，不硬收
+          const current = this.bubbles.find((item) => item.id === id)
+          if (!current || !current.waitingSpeech) return
+          current.waitingSpeech = false
+          this.fadeBubble(id, { user: true })
+        })
+        return
+      }
       bubble.fading = true
       window.clearTimeout(bubble.timer)
       bubble.timer = window.setTimeout(() => {

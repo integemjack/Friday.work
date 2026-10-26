@@ -12,8 +12,15 @@ const assert = require('node:assert')
 const { reactive, computed, watch, nextTick } = require('vue')
 
 const speech = require('../.tmp/speechoutput.cjs')
-const { blockCase, blockPayload } = require('../.tmp/protocol.cjs')
-const { createSpeechIncrement, setSpeechForeground } = speech
+const { blockPayload } = require('../.tmp/protocol.cjs')
+const { setSpeechForeground } = speech
+// 真代码：AssistantChat.vue 挂的就是这两个函数。此前这里复刻了一份 watch，
+// 而复刻件已经和产品代码漂移（验的还是修复前的旧行为），改成直接用真的
+const {
+  conversationSpeechSnapshot,
+  createConversationSpeechState,
+  speakConversationSnapshot
+} = require('../.tmp/replyspeech.cjs')
 
 // ---- mock 桥：记录每次合成调用、手动放行（空 samples 让泵跳过播放，不碰 AudioContext） ----
 function mockBridge() {
@@ -53,101 +60,15 @@ function mockBridge() {
   return { calls, release, fail, flushMicro, drain, restore }
 }
 
-// ---- 复刻 AssistantChat.vue 会话模式 watch（与产品代码保持一致，仅替换依赖名） ----
+// ---- 挂上产品代码那份 watch（与 AssistantChat.vue 完全同一实现，不再复刻） ----
 function setupWatch(store) {
   const conversationID = computed(() => store.activeConversationID)
   // 前台跟当前会话（产品里还看助手模式，这里只有会话模式）
   const stopForeground = watch(conversationID, (conv) => setSpeechForeground(conv ?? ''), { immediate: true })
-  const seenConversations = new Set()
-  const seenMessageFinish = new Map()
-  const blockStreams = new Map()
+  const state = createConversationSpeechState()
   const stop = watch(
-    () => {
-      const snapshot = []
-      // 会话清单项：本帧监听范围内有哪些会话（含没有任何消息的），豁免判定的单位
-      snapshot.push({ key: '__convs__', convs: Object.keys(store.details) })
-      for (const conv of Object.keys(store.details)) {
-        const current = conv === conversationID.value
-        for (const { message } of store.details[conv]?.messages ?? []) {
-          if (message.role === 'user') {
-            if (current) snapshot.push({ key: `u:${conv}:${message.id}`, user: true })
-            continue
-          }
-          if (message.role !== 'assistant') continue
-          const lens = (message.blocks ?? [])
-            .map((block) =>
-              blockCase(block) === 'text' ? `${block.id}:${String(blockPayload(block, 'text') ?? '').length}` : ''
-            )
-            .join('|')
-          snapshot.push({
-            key: `a:${conv}:${message.id}`,
-            conv,
-            msgID: message.id,
-            history: !!store.historyMessages[message.id],
-            finishedAt: message.finishedAt,
-            stoppedByUser: message.stoppedByUser,
-            error: message.error,
-            notice: message.notice,
-            lens
-          })
-        }
-      }
-      return snapshot
-    },
-    (list, prev) => {
-      const initial = prev === undefined
-      const freshConvs = new Set()
-      for (const conv of list.find((item) => item.key === '__convs__')?.convs ?? []) {
-        if (!seenConversations.has(conv)) freshConvs.add(conv)
-      }
-      for (const conv of freshConvs) seenConversations.add(conv)
-      const entryIndex = new Map()
-      for (const conv of Object.keys(store.details)) {
-        for (const candidate of store.details[conv]?.messages ?? []) {
-          const key = `${conv}:${candidate.message.id}`
-          if (!entryIndex.has(key)) entryIndex.set(key, candidate)
-        }
-      }
-      for (const item of list) {
-        if (item.key === '__convs__') continue
-        if (item.user) {
-          seenMessageFinish.set(item.key, undefined)
-          continue
-        }
-        if (item.conv === undefined || item.msgID === undefined) continue
-        const entry = entryIndex.get(`${item.conv}:${item.msgID}`)
-        if (!entry) continue
-        const before = seenMessageFinish.get(item.key)
-        const done = !!item.finishedAt
-        const historical = initial || freshConvs.has(item.conv) || !!item.history
-        const justFinished = !initial && done && !before && !historical
-        const speakable = !item.stoppedByUser && !item.error && !item.notice
-        for (const block of entry.message.blocks ?? []) {
-          if (blockCase(block) !== 'text') continue
-          const full = String(blockPayload(block, 'text') ?? '')
-          const key = `${item.conv}:${item.msgID}:${block.id}`
-          let stream = blockStreams.get(key)
-          if (!stream) {
-            // 完结消息里「新出现的块」= 服务端重推历史换了块 id：念过了，不重播
-            stream = { inc: createSpeechIncrement(item.conv), len: 0 }
-            blockStreams.set(key, stream)
-            if (historical || done) {
-              stream.inc.skip(full)
-              stream.len = full.length
-            }
-          }
-          // 不播的那段也过一遍游标（skip）：历史停在代码块中间时，后面长出来的代码下半截不念
-          if (full.length > stream.len) {
-            const grown = full.slice(stream.len)
-            if (!historical && speakable) stream.inc.push(grown)
-            else stream.inc.skip(grown)
-          }
-          if (full.length !== stream.len) stream.len = full.length
-          if (justFinished && speakable) stream.inc.flush()
-        }
-        seenMessageFinish.set(item.key, item.finishedAt)
-      }
-    },
+    () => conversationSpeechSnapshot(store, conversationID.value),
+    (list, prev) => speakConversationSnapshot(list, store, state, prev === undefined),
     { immediate: true }
   )
   return {
@@ -155,9 +76,7 @@ function setupWatch(store) {
       stop()
       stopForeground()
     },
-    seenConversations,
-    blockStreams,
-    seenMessageFinish
+    state
   }
 }
 

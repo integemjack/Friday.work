@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 桌面气泡（2026-10 布局改版）：会话的思考 / 文本输出直接投在桌面随机位置，
 // 随流式增长，5 秒无新内容渐隐消失。数据与定时全在 store（pushBubble / fadeBubble）。
+// text 气泡到点时如果 TTS 还在念它，会等念完再渐隐（store.fadeBubble）——长回复念到一半
+// 气泡就没了的话，用户听着声音却找不到对应的字；点气泡关闭则不等，立即收。
 // 高度规则：底边不出桌面——长到底就整体上移；高到顶就内部滚动，自动滚到最新一条。
 // 面板基础（定位/毛玻璃/标题行渐隐/滚动条/进出场动画）与操作卡共用 styles/cast.css。
 import { nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
@@ -101,7 +103,7 @@ function titleOf(conversationID: string): string {
         class="bubble cast"
         :class="[bubble.kind, { fading: bubble.fading }]"
         :style="{ left: `${bubble.x}px`, top: `${bubble.y}px`, zIndex: bubble.z }"
-        @click="store.fadeBubble(bubble.id)"
+        @click="store.fadeBubble(bubble.id, { user: true })"
       >
         <span class="tag cast-head">{{ bubble.kind === 'thinking' ? '思考' : '回复' }} · {{ titleOf(bubble.conversationID) }}{{ bubble.agentName ? ` · ${bubble.agentName}` : '' }}</span>
         <!-- 思考/回复气泡统一 Markdown 渲染（renderMarkdown 已禁透传 HTML、breaks 保换行） -->
