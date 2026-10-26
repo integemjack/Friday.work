@@ -34,6 +34,15 @@ html {
   overflow: clip;
 }
 
+/* 标题栏是无边框窗口的拖拽区（.titlebar 上 -webkit-app-region: drag），里面的按钮必须显式
+   no-drag 才收得到点击。这条放全局而不是 TitleBar 的 scoped 样式里：scoped 规则编译成
+   带父 scope 属性的选择器，而挂在标题栏里的子组件（多根组件如 AttachmentsPop：button + teleport）
+   拿不到父 scope 属性，匹配不到那条规则 → 按钮继承 drag → 真机上按下是拖窗口、click 根本不
+   派发（CDP 合成事件绕过原生 hit-test，探针测不出这类问题） */
+.titlebar button {
+  -webkit-app-region: no-drag;
+}
+
 body {
   font-family: var(--font-body);
   font-size: 14px;

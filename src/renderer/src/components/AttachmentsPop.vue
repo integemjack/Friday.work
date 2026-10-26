@@ -180,8 +180,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* 按钮照标题栏启动器同款（28px 圆角钮、悬停点亮、点亮态青色描底）——
-   TitleBar 的 .launch-btn 是 scoped 样式，这里自己带一份 */
+   TitleBar 的 .launch-btn 是 scoped 样式，这里自己带一份。
+   ★ -webkit-app-region: no-drag 必须自己写：TitleBar 的 `.titlebar button { no-drag }` 编译成
+   带父 scope 属性的选择器，而本组件是多根（button + teleport），Vue 不会把父 scope 属性传下来，
+   那条规则根本作用不到这颗钮——不写就继承 .titlebar 的 drag，真机上按下是拖窗口、
+   click 根本不派发（CDP 合成事件绕过原生 hit-test，测不出这个坑） */
 .launch-btn {
+  -webkit-app-region: no-drag;
   width: 28px;
   height: 28px;
   position: relative;
@@ -229,8 +234,10 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-/* ---- 浮窗：贴在按钮正下方（teleport 到 body，left 由脚本按按钮位置给出） ---- */
+/* ---- 浮窗：贴在按钮正下方（teleport 到 body，left 由脚本按按钮位置给出） ----
+   也显式标 no-drag：浮窗紧挨标题栏的 drag 区，不标出来的话边缘一碰就把整个窗口拖走 */
 .attachments-pop {
+  -webkit-app-region: no-drag;
   position: fixed;
   top: 48px;
   z-index: 60; /* 盖过标题栏机器菜单（50），不压灯箱（9500） */
