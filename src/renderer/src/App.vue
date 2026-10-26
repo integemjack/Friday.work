@@ -30,7 +30,6 @@ import Composer from './components/Composer.vue'
 import ComposerContext from './components/ComposerContext.vue'
 import DesktopBubbles from './components/DesktopBubbles.vue'
 import DesktopOps from './components/DesktopOps.vue'
-import DesktopMediaStacks from './components/DesktopMediaStacks.vue'
 import MediaLightbox from './components/MediaLightbox.vue'
 import UpdateOverlay from './components/UpdateOverlay.vue'
 import DeviceOverlay from './components/DeviceOverlay.vue'
@@ -296,7 +295,7 @@ const chatIdle = computed(() => !conversationID.value && !store.assistantChat)
       <!-- 中间：3D 场景铺在背景上（网格地面 + 自转陀螺环，纯 CSS 不挡交互），气泡/操作卡投在它上面；
            只属于默认（跟随系统）主题——贾维斯有自己的装饰层（深空星野 + HUD + 扫描线），
            3D 场景混进去会跟它们叠影打架；
-           媒体叠（看图/看视频成功归档，图片一叠视频一叠）压在最底层，被气泡/卡/窗口盖住就点不到；
+           看过的媒体归档收在顶部导航栏的附件钮里（TitleBar 的 AttachmentsPop）；
            底部居中悬浮输入台（盖过投层气泡，别被随机投下的气泡挡住打字） -->
       <section class="main-area">
         <!-- 贾维斯 HUD 挂在主区里（不挂桌面）：左右栏宽不对称（248/352），
@@ -305,7 +304,6 @@ const chatIdle = computed(() => !conversationID.value && !store.assistantChat)
         <CenterScene v-if="!jarvis" />
         <!-- 语音 HUD：TTS 实时波形 + 静音 + 音量，顶部居中（功能件，两主题都挂，不是装饰） -->
         <VoiceHud />
-        <DesktopMediaStacks />
         <!-- 选中会话的上下文背景条：标题/状态 + 任务目标、步骤、在跑子 Agent + 模型、目录等详细配置，
              贴在输入台上方（无壳半透明水印；没选会话或「和助手说」时不出现）。z 35 压在投层气泡（40）
              之下——气泡投下来直接盖住它，它只当背景不挡气泡；高度由 ResizeObserver 记进

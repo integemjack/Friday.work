@@ -1,16 +1,17 @@
 <script setup lang="ts">
-// 内嵌媒体（看图 / 看视频共用的展示块）：图片直接显示；视频静音循环自动播放（带控件，可点开声音）。
+// 内嵌媒体（看图 / 看视频 / 听录音共用的展示块）：图片直接显示；视频静音循环自动播放
+// （带控件，可点开声音）；音频给原生 <audio> 控件。
 // 只传工具名 + 参数 JSON：useToolMedia 负责 http(s)/data URL 直连、本地文件 fs.read 拉 Blob、
-// 滚进视口才拉的懒加载与重试。不是看图/看视频（或参数还没流完整）就整体不渲染。
+// 滚进视口才拉的懒加载与重试。不是这三类媒体工具（或参数还没流完整）就整体不渲染。
 // 聊天面板的工具卡（ToolCard）与桌面投层的操作卡（DesktopOps）都用这一份。
 import { computed } from 'vue'
 import type { ToolEvent } from '../../../protocol/rpc/protocol.js'
 import { useToolMedia } from '../lib/toolMedia.js'
 
 const props = defineProps<{
-  /** 工具名（analyze_image / analyze_video） */
+  /** 工具名（analyze_image / analyze_video / transcribe_audio） */
   name: string
-  /** 参数 JSON 文本（媒体路径在 image / video 字段里） */
+  /** 参数 JSON 文本（媒体路径在 image / video / audio 字段里） */
   args: string
   /** 相对路径按哪段会话的工作目录解析（桌面操作卡可能不属于活动会话）；不给按活动会话 */
   conversationID?: string
@@ -53,6 +54,7 @@ const { source, url, state, note, setMediaEl } = useToolMedia(tool, {
       playsinline
       controls
     />
+    <audio v-else-if="source.kind === 'audio' && url" class="media-audio" :src="url" controls />
     <div v-if="state === 'loading'" class="media-note">媒体加载中…</div>
     <div v-else-if="state === 'error' || state === 'skipped'" class="media-note">{{ note }}</div>
   </div>
@@ -90,6 +92,14 @@ const { source, url, state, note, setMediaEl } = useToolMedia(tool, {
 
 .media-video.compact {
   max-height: 220px;
+}
+
+/* 音频：原生 <audio> 控件自带高度，限个宽不撑卡 */
+.media-audio {
+  width: 100%;
+  max-width: 420px;
+  height: 36px;
+  display: block;
 }
 
 .media-note {

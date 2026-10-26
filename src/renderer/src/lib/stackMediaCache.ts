@@ -1,6 +1,6 @@
-// 媒体叠本地缓存（渲染层一头）：看图/看视频成功归档时把媒体文件下载一份到本机
+// 媒体叠本地缓存（渲染层一头）：看图/看视频/听录音成功归档时把媒体文件下载一份到本机
 // （userData/MediaStack，主进程管），会话结束、远端文件被清理、重启软件后，
-// 图片叠/视频叠和消息里的内嵌媒体都改从 friday-media:// 本地协议加载。
+// 附件面板和消息里的内嵌媒体都改从 friday-media:// 本地协议加载。
 // 文件名按「会话:类型:媒体源」确定性哈希——同一个媒体不管从哪个组件看（消息内嵌
 // ToolCard / 叠缩略图 StackThumb / 灯箱 MediaLightbox）算出的名字都一样，存过就直接
 // 走本地，不再 fs.read 拉远端。点「清空」时主进程把这些文件一起删掉。
@@ -10,15 +10,16 @@ import { ref } from 'vue'
 import type { FsReadResult } from '../../../protocol/rpc/protocol.js'
 import { rpc } from './host.js'
 
-export type MediaKind = 'image' | 'video'
+export type MediaKind = 'image' | 'video' | 'audio'
 
 export const MEDIA_EXT: Record<MediaKind, ReadonlySet<string>> = {
   image: new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico']),
-  video: new Set(['mp4', 'm4v', 'webm', 'mov', 'ogv', 'ogg', 'mkv'])
+  video: new Set(['mp4', 'm4v', 'webm', 'mov', 'ogv', 'ogg', 'mkv']),
+  audio: new Set(['mp3', 'wav', 'flac', 'ogg', 'opus', 'm4a', 'aac', 'wma'])
 }
 
-/** 内嵌与缓存共用的拉取上限：图片 24 MB、视频 64 MB（超过的不内嵌也不缓存） */
-export const CAP_BYTES: Record<MediaKind, number> = { image: 24 * 1024 * 1024, video: 64 * 1024 * 1024 }
+/** 内嵌与缓存共用的拉取上限：图片 24 MB、视频 64 MB、音频 32 MB（超过的不内嵌也不缓存） */
+export const CAP_BYTES: Record<MediaKind, number> = { image: 24 * 1024 * 1024, video: 64 * 1024 * 1024, audio: 32 * 1024 * 1024 }
 
 export function extOf(path: string): string {
   const clean = (path.split(/[?#]/, 1)[0] ?? '').split(/[\\/]/).pop() ?? ''
@@ -57,7 +58,7 @@ export function stackCacheName(conversationID: string, kind: MediaKind, src: str
     }
     return x.toString(16).padStart(8, '0')
   }
-  const ext = extOf(src) || (kind === 'image' ? 'png' : 'mp4')
+  const ext = extOf(src) || (kind === 'image' ? 'png' : kind === 'audio' ? 'mp3' : 'mp4')
   return `${hash(0x811c9dc5)}${hash(0x01000193)}.${ext}`
 }
 

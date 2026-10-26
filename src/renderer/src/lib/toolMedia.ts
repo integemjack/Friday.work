@@ -1,10 +1,11 @@
-// 工具卡片的媒体内嵌（看图 / 看视频）：从 analyze_image / analyze_video 的参数里取出媒体，
-// http(s)/data URL 直接当 src；本地文件走 fs.read 分块拉回来拼 Blob。
+// 工具卡片的媒体内嵌（看图 / 看视频 / 听录音）：从 analyze_image / analyze_video / transcribe_audio
+// 的参数里取出媒体，http(s)/data URL 直接当 src；本地文件走 fs.read 分块拉回来拼 Blob。
 // 看过的媒体归档进桌面媒体叠时会下载一份到本机（stackMediaCache）：只要本地缓存在，
 // 这里优先用 friday-media:// 本地地址——会话结束、远端文件被清理、重启软件后照样能看，
-// 也不再走 fs.read 挤 WebRTC 通道。图片直接显示，视频自动播放（静音循环 + 控件，可点开声音）。
+// 也不再走 fs.read 挤 WebRTC 通道。
 // 本地文件只在卡片滚进视口时才拉（一条长消息里几十张看图卡片不能同时全量拉，会压垮 WebRTC 通道），
-// 失败自动重试一次（通道偶发抖动）。
+// 失败自动重试一次（通道偶发抖动）。图片直接显示，视频自动播放（静音循环 + 控件，可点开声音），
+// 音频给原生 <audio> 控件。
 import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { FsReadResult, ToolEvent } from '../../../protocol/rpc/protocol.js'
 import { rpc } from './host.js'
@@ -42,10 +43,21 @@ const VIDEO_MIME: Record<string, string> = {
   ogg: 'video/ogg',
   mkv: 'video/x-matroska'
 }
+const AUDIO_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  flac: 'audio/flac',
+  ogg: 'audio/ogg',
+  opus: 'audio/opus',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  wma: 'audio/x-ms-wma'
+}
 
 function mimeOf(kind: MediaKind, src: string): string {
   const ext = extOf(src)
   if (kind === 'image') return IMAGE_MIME[ext] ?? 'image/png'
+  if (kind === 'audio') return AUDIO_MIME[ext] ?? 'audio/mpeg'
   return VIDEO_MIME[ext] ?? 'video/mp4'
 }
 

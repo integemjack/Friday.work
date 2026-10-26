@@ -1,9 +1,9 @@
-// 媒体叠本地缓存（userData/MediaStack）：看图/看视频成功归档的媒体文件落一份在本机，
-// 会话结束、远端文件被清理、甚至重启软件后，图片叠/视频叠仍能从本地加载。
+// 媒体叠本地缓存（userData/MediaStack）：看图/看视频/听录音成功归档的媒体文件落一份在本机，
+// 会话结束、远端文件被清理、甚至重启软件后，附件面板仍能从本地加载。
 // 文件名由渲染层按「会话:类型:媒体源」确定性哈希算出，这里只按白名单校验
-// （16 位十六进制 + 图片/视频扩展名），不认任何路径——渲染进程塞不进目录穿越。
+// （16 位十六进制 + 图片/视频/音频扩展名），不认任何路径——渲染进程塞不进目录穿越。
 // 供文件走自定义协议 friday-media://stack/<name>（index.ts 注册 handler），支持
-// Range 请求（视频拖进度），<img>/<video> 直接 src 引用，不走 IPC 传大块字节。
+// Range 请求（媒体拖进度），<img>/<video>/<audio> 直接 src 引用，不走 IPC 传大块字节。
 
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
@@ -13,8 +13,8 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { app, net } from 'electron'
 
-/** 渲染层算出的缓存文件名格式：<16 位十六进制哈希>.<图片/视频扩展名> */
-const NAME_RE = /^[0-9a-f]{16}\.(png|jpg|jpeg|gif|webp|bmp|svg|avif|ico|mp4|m4v|webm|mov|ogv|ogg|mkv)$/
+/** 渲染层算出的缓存文件名格式：<16 位十六进制哈希>.<图片/视频/音频扩展名> */
+const NAME_RE = /^[0-9a-f]{16}\.(png|jpg|jpeg|gif|webp|bmp|svg|avif|ico|mp4|m4v|webm|mov|ogv|ogg|mkv|mp3|wav|flac|opus|m4a|aac|wma)$/
 
 /** 单文件上限（渲染层内嵌上限是图 24 MB / 视频 64 MB，这里兜 128 MB） */
 const MAX_BYTES = 128 * 1024 * 1024
@@ -38,7 +38,14 @@ const MIME: Record<string, string> = {
   mov: 'video/quicktime',
   ogv: 'video/ogg',
   ogg: 'video/ogg',
-  mkv: 'video/x-matroska'
+  mkv: 'video/x-matroska',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  flac: 'audio/flac',
+  opus: 'audio/opus',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  wma: 'audio/x-ms-wma'
 }
 
 export function mediaStackDir(): string {
@@ -156,7 +163,7 @@ export async function deleteStackMediaFiles(names: unknown): Promise<number> {
 }
 
 /** friday-media:// 协议的请求处理：只放行 MediaStack 目录里、名字过白名单的文件。
- *  实现 Range（视频拖进度条要 206 分段），body 用 Node 流转 web 流零拷贝喂给 <img>/<video>。 */
+ *  实现 Range（媒体拖进度条要 206 分段），body 用 Node 流转 web 流零拷贝喂给 <img>/<video>/<audio>。 */
 export async function handleMediaStackRequest(request: Request): Promise<Response> {
   let name = ''
   try {

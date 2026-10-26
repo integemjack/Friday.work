@@ -161,13 +161,13 @@ export interface DesktopOp {
   timer: number
 }
 
-/** 桌面媒体叠里的一条：看图/看视频成功后归档的媒体（图片一叠、视频一叠，压在桌面最底层） */
+/** 附件面板（媒体归档）里的一条：看图/看视频/听录音成功后归档的媒体（图片/视频/音频各一类） */
 export interface StackMediaItem {
   /** 去重键：会话:类型:媒体源（流式补丁重walk历史块不会重复归档） */
   id: string
   /** 相对路径按哪段会话的工作目录解析（拉媒体时用） */
   conversationID: string
-  kind: 'image' | 'video'
+  kind: 'image' | 'video' | 'audio'
   /** 工具参数里的原始媒体源（http(s)/data URL 或本地路径）
    *  重启恢复的条目源会换成 friday-media:// 本地缓存地址（当时的原始源可能已随会话清理） */
   src: string
@@ -348,15 +348,15 @@ interface SavedLayout {
   windows?: SavedWindow[]
   /** 沉浸模式（左右两栏收起，左上角背景式显示在跑会话、右上角显示最近完成的会话，行可点选中）；存着重启后保持收起 */
   panelsHidden?: boolean
-  /** 媒体叠（没清空的重启后自动加载回来；2026-10 媒体叠本地缓存） */
+  /** 附件（媒体归档；没清空的重启后自动加载回来；本地缓存在 userData/MediaStack） */
   stackMedia?: SavedStackItem[]
 }
 
-/** 媒体叠里一条的持久化形式（StackMediaItem 的可 JSON 化子集） */
+/** 附件里一条的持久化形式（StackMediaItem 的可 JSON 化子集） */
 interface SavedStackItem {
   id: string
   conversationID: string
-  kind: 'image' | 'video'
+  kind: 'image' | 'video' | 'audio'
   src: string
   at: number
   cache?: string
@@ -876,14 +876,14 @@ export const useAppStore = defineStore('app', {
       return this.windows.length > 0
     },
 
-    /** 媒体叠恢复（saveLayout 存的那份）：幂等，重启/HMR 重入只往空叠里加，不重复 */
+    /** 附件（媒体归档）恢复（saveLayout 存的那份）：幂等，重启/HMR 重入只往空列表里加，不重复 */
     restoreStackMedia(saved: SavedLayout | null) {
       const items = saved?.stackMedia
       if (!Array.isArray(items)) return
       for (const raw of items) {
         if (!raw || typeof raw !== 'object') continue
         if (typeof raw.id !== 'string' || !raw.id) continue
-        if (raw.kind !== 'image' && raw.kind !== 'video') continue
+        if (raw.kind !== 'image' && raw.kind !== 'video' && raw.kind !== 'audio') continue
         if (typeof raw.src !== 'string' || !raw.src) continue
         if (this.stackMedia.some((item) => item.id === raw.id)) continue
         this.stackMedia.push({
@@ -2503,8 +2503,8 @@ export const useAppStore = defineStore('app', {
       if (terminalStatus(card.status)) this.scheduleOpFade(card.id)
     },
 
-    /** 操作到终态：5 秒后开始渐隐。看图/看视频不再例外——成功时媒体已归进
-     *  桌面的图片叠/视频叠（addStackMedia），卡照常 5 秒渐隐，媒体仍留在叠里可查看 */
+    /** 操作到终态：5 秒后开始渐隐。看图/看视频/听录音不再例外——成功时媒体已归进
+     *  顶部附件面板（addStackMedia），卡照常 5 秒渐隐，媒体仍留在附件里可查看 */
     scheduleOpFade(id: string) {
       const card = this.opCards.find((item) => item.id === id)
       if (!card || card.fading || card.timer) return
@@ -2522,10 +2522,10 @@ export const useAppStore = defineStore('app', {
       }, 600)
     },
 
-    /** 看图/看视频成功：把媒体归进桌面的图片叠/视频叠（压在桌面最底层那两叠）。
-     *  同一会话同一路径只归档一次——流式补丁重walk历史块不会把同一张图堆进叠里。
+    /** 看图/看视频/听录音成功：把媒体归进顶部导航栏的附件面板。
+     *  同一会话同一路径只归档一次——流式补丁重walk历史块不会把同一张图堆进附件里。
      *  归档回时顺手把文件下载到本地（userData/MediaStack）：会话结束、远端文件被清理、
-     *  重启软件后叠里和消息里仍能加载（fire-and-forget，失败不影响会话还在时的在线查看） */
+     *  重启软件后附件里和消息里仍能加载（fire-and-forget，失败不影响会话还在时的在线查看） */
     addStackMedia(conversationID: string, toolName: string, args: string) {
       const source = mediaArgSource(toolName, args)
       if (!source) return
@@ -2557,8 +2557,8 @@ export const useAppStore = defineStore('app', {
       this.zoomMedia = null
     },
 
-    /** 清空一叠（展开面板里的「清空」按钮）：叠里的条目和对应的本地缓存文件一起删 */
-    clearStack(kind: 'image' | 'video') {
+    /** 清空一类附件（附件面板标签里的「清空」按钮）：条目和对应的本地缓存文件一起删 */
+    clearStack(kind: 'image' | 'video' | 'audio') {
       const names = [
         ...new Set(
           this.stackMedia

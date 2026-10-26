@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { WindowKind } from '../stores/app.js'
 import { useAppStore } from '../stores/app.js'
 import { wallpaperMode } from '../lib/wallpaperMode.js'
+import AttachmentsPop from './AttachmentsPop.vue'
 
 const store = useAppStore()
 
@@ -101,17 +102,18 @@ async function exitWallpaper(): Promise<void> {
   <header class="titlebar" :class="{ fullscreen: wallpaperMode }">
     <div class="brand">Friday</div>
 
-    <!-- 窗口启动器：点亮=已开；点击开/置顶/还原最小化（没有任务栏后的唯一入口） -->
+    <!-- 窗口启动器：点亮=已开；点击开/置顶/还原最小化（没有任务栏后的唯一入口）。
+         「文件」后面插附件钮（看图/看视频/听录音的归档，点开弹标签浮窗）——
+         和内容类工具一组，随启动器一起摆 -->
     <nav class="launcher">
-      <button
-        v-for="entry in launchers"
-        :key="entry.kind"
-        class="launch-btn"
-        :class="{ open: kindOpen(entry.kind) }"
-        :title="entry.label"
-        :disabled="entry.kind !== 'settings' && entry.kind !== 'devices' && !store.connected"
-        @click="launch(entry.kind)"
-      >
+      <template v-for="entry in launchers" :key="entry.kind">
+        <button
+          class="launch-btn"
+          :class="{ open: kindOpen(entry.kind) }"
+          :title="entry.label"
+          :disabled="entry.kind !== 'settings' && entry.kind !== 'devices' && !store.connected"
+          @click="launch(entry.kind)"
+        >
         <svg v-if="entry.kind === 'terminals'" class="ico" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2" stroke="currentColor" stroke-width="1.3" />
           <path d="m4.6 6.2 2 1.8-2 1.8M8.4 10.2h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
@@ -138,7 +140,9 @@ async function exitWallpaper(): Promise<void> {
           <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" />
         </svg>
         <span v-if="badgeOf(entry.kind)" class="launch-badge">{{ badgeOf(entry.kind) }}</span>
-      </button>
+        </button>
+        <AttachmentsPop v-if="entry.kind === 'files'" />
+      </template>
     </nav>
 
     <!-- 沉浸开关：收起左栏会话列表和右栏聊天栏（通话面板除外），
@@ -326,12 +330,13 @@ async function exitWallpaper(): Promise<void> {
   text-align: center;
 }
 
-/* 工具窗口组（终端/浏览器/文件）和设置类之间留一道细分隔 */
-.launch-btn:nth-child(3) {
+/* 内容工具组（终端/浏览器/文件/附件）和设置类之间留一道细分隔
+   （附件钮是 AttachmentsPop 渲染的第 4 个 child，插在文件后面） */
+.launch-btn:nth-child(4) {
   margin-right: 6px;
 }
 
-.launch-btn:nth-child(3)::after {
+.launch-btn:nth-child(4)::after {
   content: '';
   position: absolute;
   right: -5px;

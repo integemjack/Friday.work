@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 媒体灯箱：桌面媒体叠里点单张图片放大看、点视频大窗播放。
-// 图片再点一下就关；视频里点的是控件不能关，关靠背景/×/Esc。
+// 媒体灯箱：附件面板里点单张图片放大看、点视频大窗播放、点音频弹出播放。
+// 图片再点一下就关；视频/音频里点的是控件不能关，关靠背景/×/Esc。
 // 加载复用 useToolMedia（http(s)/data 直连、本地文件 fs.read 拉 Blob），进来就拉（整屏可见）。
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import type { ToolEvent } from '../../../protocol/rpc/protocol.js'
@@ -9,10 +9,15 @@ import { useAppStore } from '../stores/app.js'
 
 const store = useAppStore()
 
-// 把灯箱里的媒体包成一次已成功的看图/看视频调用
+// 把灯箱里的媒体包成一次已成功的看图/看视频/听录音调用
 const tool = computed<ToolEvent>(() => ({
   id: '',
-  name: store.zoomMedia?.kind === 'video' ? 'analyze_video' : 'analyze_image',
+  name:
+    store.zoomMedia?.kind === 'video'
+      ? 'analyze_video'
+      : store.zoomMedia?.kind === 'audio'
+        ? 'transcribe_audio'
+        : 'analyze_image',
   arguments: store.zoomMedia ? JSON.stringify({ [store.zoomMedia.kind]: store.zoomMedia.src }) : '',
   status: 'succeeded',
   result: ''
@@ -53,6 +58,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           autoplay
           playsinline
         />
+        <audio v-else-if="store.zoomMedia.kind === 'audio' && url" class="zoom-audio" :src="url" controls autoplay />
         <div v-if="state === 'loading'" class="note">媒体加载中…</div>
         <div v-else-if="state === 'error' || state === 'skipped'" class="note">{{ note }}</div>
         <div class="caption" :title="store.zoomMedia.src">{{ store.zoomMedia.src }}</div>
@@ -106,6 +112,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
   background: #000;
   display: block;
+}
+
+/* 音频：胶囊壳里放原生 <audio> 控件 */
+.zoom-audio {
+  width: min(70vw, 560px);
+  height: 40px;
+  display: block;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-a22);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+  background: rgba(4, 8, 14, 0.92);
 }
 
 .note {
