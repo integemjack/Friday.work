@@ -553,8 +553,15 @@ export const useAppStore = defineStore('app', {
     agentSeen: {} as Record<string, Set<string>>,
     /** 已见过的子 Agent 工具事件 id：首次见到的 transcript 视为存量只记不投（打开会话前就在跑的不补投） */
     agentEvents: new Set<string>(),
+    /** 子 Agent 运行记录每帧的指纹（块 id + 状态 + 长度）：整帧一模一样 = 服务端把同一份 transcript
+     *  又下发了一遍（启动 / 重连 / 随新一轮活动重推），存量卡不补弹；内容真推进了指纹就变 */
+    agentFrames: {} as Record<string, string>,
     /** 流式标记：messageID → 块ID → 该块已投过气泡的文本长度（增量从这里算；按块记，多段思考/回复各自成泡） */
     streamMarks: {} as Record<string, Record<string, number>>,
+    /** 工具事件 id → 投卡状态：silent = 见到时就已经在（历史 / 订阅那刻的存量），只记不投，之后只有
+     *  变成「等审批」才破窗。服务端重下/重推时块 id 会换新、客户端这边又只是内存态（重启一定为空），
+     *  只靠「首帧/首见」判断就会把历史里的工具调用整片补弹成操作卡——启动时一次冒出几十张卡的根源 */
+    toolCast: {} as Record<string, { status: string; silent: boolean }>,
     /** 历史消息：打开会话（订阅回执 / 整段快照）那一刻就已在的助手消息 id。服务端随新一轮活动重推历史时
      *  块 id 会换新，旧会话的消息又未必带 finishedAt，所以「是不是历史」由客户端自己记、不靠完结字段：
      *  登记在这里的消息只记下标不投气泡，历史里的工具调用也不再弹成操作卡（等审批的除外），播报同样不念 */
@@ -1281,6 +1288,8 @@ export const useAppStore = defineStore('app', {
       for (const id of castIDs.events) {
         this.agentEvents.delete(id)
         delete this.agentSeen[id]
+        delete this.agentFrames[id]
+        delete this.toolCast[id]
       }
       for (const id of castIDs.marks) delete this.agentMarks[id]
       if (this.agentFocus?.conversationID === conversationID) this.agentFocus = null
@@ -1657,13 +1666,16 @@ export const useAppStore = defineStore('app', {
         if (node.role !== 'assistant' || this.historyMessages[node.id] || this.streamMarks[node.id]) continue
         const done = !!(node.finishedAt || node.error || node.stoppedByUser)
         if (node.id === tail?.id && !done && live !== false) {
-          if (!live) continue
-          const marks: Record<string, number> = {}
-          for (const block of node.blocks ?? []) {
-            const kind = blockCase(block)
-            if (kind === 'thinking' || kind === 'text') marks[block.id] = String(blockPayload<string>(block, kind) ?? '').length
+          if (live) {
+            const marks: Record<string, number> = {}
+            for (const block of node.blocks ?? []) {
+              const kind = blockCase(block)
+              if (kind === 'thinking' || kind === 'text') marks[block.id] = String(blockPayload<string>(block, kind) ?? '').length
+            }
+            this.streamMarks[node.id] = marks
           }
-          this.streamMarks[node.id] = marks
+          // 订阅那刻就在这条消息里的工具调用是存量（多半早跑完了）：记成见过，之后重下/重推不再补投成卡
+          this.markToolsSeen(node.blocks ?? [])
           continue
         }
         this.historyMessages[node.id] = true
@@ -2618,6 +2630,40 @@ export const useAppStore = defineStore('app', {
       castTimer = -1
     },
 
+    /** 把一段块里现存的工具事件全部登记成「见过」（含 transcript 里的嵌套工具）：
+     *  订阅那刻就已在的 = 存量，只记不投；等审批的不登记静默，要处理的事不能藏 */
+    markToolsSeen(blocks: MessageBlock[]) {
+      for (const block of blocks) {
+        if (blockCase(block) !== 'tool') continue
+        const event = blockPayload<ToolEvent>(block, 'tool')
+        if (!event?.id) continue
+        const status = event.status ?? 'running'
+        if (!this.toolCast[event.id] && status !== 'awaitingApproval') this.toolCast[event.id] = { status, silent: true }
+        if (event.transcript?.length) this.markToolsSeen(event.transcript)
+      }
+    },
+
+    /** 这个工具事件要不要投到桌面。silent = 这一帧算历史（历史消息 / 首见即完结 / 子 Agent 首见）。
+     *  首见且 silent → 只登记不投；已见且静默 → 只有变成「等审批」才破窗（要处理的事不能藏），
+     *  重下/重推回来的历史卡不再弹；已见且投过 → 照旧投（running → 终态、结果补丁靠它续写同一张卡）。 */
+    castTool(event: ToolEvent, silent: boolean): boolean {
+      const status = event.status ?? 'running'
+      const known = this.toolCast[event.id]
+      if (!known) {
+        const quiet = silent && status !== 'awaitingApproval'
+        this.toolCast[event.id] = { status, silent: quiet }
+        return !quiet
+      }
+      const changed = known.status !== status
+      known.status = status
+      if (!known.silent) return true
+      if (changed && status === 'awaitingApproval') {
+        known.silent = false
+        return true
+      }
+      return false
+    },
+
     /**
      * 助手消息的流式钩子：按块对比上次已投长度，把新增的思考/文本续到气泡上。
      * 一个块一条气泡——同一条消息里多段思考/多段回复各自成泡，不并进同一条（并泡会把
@@ -2636,22 +2682,36 @@ export const useAppStore = defineStore('app', {
       const done = !!(message.finishedAt || message.error || message.stoppedByUser)
       const history = !!this.historyMessages[message.id]
       const quietTools = history || (!seen && done)
+      // 重放检测：上次见过的文本/思考块这一帧全都不见了 = 服务端重推历史换了全套块 id（没完结的消息
+      // 同样会被重推），只记不投；正常流式只追加，旧块都在，检测不命中
+      const aliveIDs = new Set<string>()
+      for (const block of message.blocks ?? []) {
+        const kind = blockCase(block)
+        if (kind === 'thinking' || kind === 'text') aliveIDs.add(block.id)
+      }
+      const seenIDs = Object.keys(marks)
+      const replayed = !!seen && seenIDs.length > 0 && seenIDs.every((id) => !aliveIDs.has(id))
       for (const block of message.blocks ?? []) {
         const kind = blockCase(block)
         if (kind === 'tool') {
           const event = blockPayload<ToolEvent>(block, 'tool')
+          if (!event?.id) continue
           // 历史过滤的两个豁免：等审批的（要处理的事不藏）+ 子 Agent 还在跑的工具事件
           // （带 transcript、status 还 running：后台 run 在宿主消息完结后仍在推进，它的操作
           // 要继续投上桌面；首见时的存量由 noteAgentTranscript 只记不投）
-          const liveAgent = event?.status === 'running' && !!event.transcript?.length
-          if (quietTools && event?.status !== 'awaitingApproval' && !liveAgent) continue
+          const liveAgent = event.status === 'running' && !!event.transcript?.length
+          // 投不投按「这个工具事件见过没有」定：重下/重推回来的历史工具卡不再补弹
+          if (!this.castTool(event, quietTools && !liveAgent)) {
+            if (liveAgent) this.noteAgentTranscript(conversationID, event)
+            continue
+          }
           this.noteToolBlock(conversationID, event)
           continue
         }
         if (kind !== 'thinking' && kind !== 'text') continue
         const full = String(blockPayload<string>(block, kind) ?? '')
         const mark = marks[block.id] ?? 0
-        if (seen && !done && !history && full.length > mark) {
+        if (seen && !done && !history && !replayed && full.length > mark) {
           this.pushBubble(conversationID, kind, full.slice(mark), block.id)
         }
         marks[block.id] = full.length
@@ -2715,14 +2775,33 @@ export const useAppStore = defineStore('app', {
       for (const b of event.transcript) if (textLike(b)) aliveIDs.add(b.id)
       const replayed = !first && seen.size > 0 && [...seen].every((id) => !aliveIDs.has(id))
       this.agentSeen[event.id] = aliveIDs
+      // 帧指纹：块 id + 状态 + 长度（带着嵌套的孙层一起算）。整帧和上一帧一模一样 = 服务端把同一份
+      // transcript 又下发了一遍（启动 / 重连 / 随新一轮活动重推历史都会），里头的存量卡不补弹；
+      // 内容真推进了指纹就变
+      const sign = (b: MessageBlock): string => {
+        const k = blockCase(b)
+        if (k !== 'tool') return `${b.id}:${k}:${String(blockPayload<string>(b, k) ?? '').length}`
+        const inner = blockPayload<ToolEvent>(b, 'tool')
+        const nested = inner?.transcript?.length ? `{${inner.transcript.map(sign).join(',')}}` : ''
+        return `${b.id}:${k}:${inner?.status ?? ''}:${(inner?.result ?? '').length}${nested}`
+      }
+      const signature = event.transcript.map(sign).join('|')
+      const same = this.agentFrames[event.id] === signature
+      this.agentFrames[event.id] = signature
       for (const block of event.transcript) {
         const kind = blockCase(block)
         if (kind === 'tool') {
           const inner = blockPayload<ToolEvent>(block, 'tool')
           if (!inner?.id) continue
           this.noteAgentTranscript(conversationID, inner)
-          // 首见事件里的存量卡不补弹（等审批的除外）；之后的补丁/快照会重到这里续写终态
-          if (first && inner.status !== 'awaitingApproval') continue
+          // 订阅那刻就在的存量卡永久静默（markToolsSeen 登记），只有变成「等审批」才破窗
+          const frozen = this.toolCast[inner.id]
+          if (frozen?.silent) {
+            if (inner.status !== 'awaitingApproval') continue
+            frozen.silent = false
+          }
+          // 首见事件里的存量卡、整帧原样重下的、换全套块 id 重放的，都不补弹（等审批的除外）
+          if ((first || same || replayed) && inner.status !== 'awaitingApproval') continue
           const parsed = inner.name === 'ask_user' && inner.status === 'awaitingApproval' ? parseAskQuestions(inner.arguments ?? '') : []
           this.pushOp({
             id: inner.id,
