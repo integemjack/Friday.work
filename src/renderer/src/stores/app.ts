@@ -2402,10 +2402,12 @@ export const useAppStore = defineStore('app', {
      *  text 气泡到点时若 TTS 还在念它，fadeBubble 会等念完再收（见那里）。
      *  agentName：子 Agent 的输出（主会话自己的气泡不传） */
     pushBubble(conversationID: string, kind: 'thinking' | 'text', chunk: string, blockID: string, agentName?: string) {
-      if (!chunk.trim()) return
       // 空白归一但保留换行：行内空白压成单个空格、连续换行压成单个换行（全压成空格会把整段思考挤成一行）。
-      // 流式切片的分隔空白可能落在上一片尾部或本片开头，trim 掉再硬拼会粘连，所以不 trim——
-      // 追加时接在已有内容后面，只在两边都无空白时补一个空格，不强制加换行
+      // 归一只改空白形态、不丢空白本身：增量是块全文的无损尾切片，全文（castTexts/气泡）首尾空白
+      // 原样保留——之前「纯空白片直接丢弃 + 拼完结尾 trim」会把原文的分隔空白吃掉，下一片来时分不清
+      // 「空格刚被吃了」还是「原文本来就没空格」，只能两边无空白就猜着补一个；中文连续文本被流式
+      // 切片从词中间切开时每个接缝都凭空多一个空格。不丢就不用猜：直接相接，拼出来严格等于
+      // 整段一次到达时归一后的样子
       const add = chunk
         .replace(/\r\n?/g, '\n')
         .replace(/[^\S\n]+/g, ' ')
@@ -2414,12 +2416,17 @@ export const useAppStore = defineStore('app', {
       const existing = this.bubbles.find((item) => item.id === id)
       // 基底：气泡还在用气泡全文；已渐隐删除用 castTexts 里的全文（断流重建时续上，不丢前文）
       const base = existing ? existing.text : (this.castTexts[id] ?? '')
-      const gap = base && !/\s$/.test(base) && !/^\s/.test(add) ? ' ' : ''
-      // 拼完再归一一次换行：上面的归一只作用于单片，跨片的「\n+\n」接缝会漏成双换行，
-      // 和同一段文本一次到达的显示不一致（castTexts 存归一后的全文，天然收敛）
-      const full = (base + gap + add)
+      // 没基底时纯空白不开泡：块以空白开头的那一小截先记进 castTexts，下一片到了原样拼上（不丢原文）
+      if (!base && !add.trim()) {
+        this.castTexts[id] = add
+        return
+      }
+      // 拼完对全文再归一一遍：单片的归一只作用于片内，跨片接缝的「\n+\n」「空格+空格」要靠
+      // 全文归一收敛（归一幂等，重扫无副作用），否则和整段一次到达的显示不一致
+      // （castTexts 存归一后的全文，天然收敛）
+      const full = (base + add)
+        .replace(/[^\S\n]+/g, ' ')
         .replace(/\n{2,}/g, '\n')
-        .trim()
       this.castTexts[id] = full
       if (existing) {
         // 全量内容不截断（气泡不限高）。内容更新只记活跃时刻（activeAt），不当场抬 z——
