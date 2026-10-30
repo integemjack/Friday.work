@@ -113,11 +113,49 @@ test('对撞合并：质量相加、总动量严格守恒', () => {
   assert.ok(dp < 1e-9, `动量守恒：|Δp|=${dp.toExponential(2)}`)
 })
 
-test('initSolution：三族初值都是零动量束缚系（或已知周期/教科书解）', () => {
+test('合并后 e0 重定基：drift 不因非弹性碰撞虚高', () => {
+  const bodies = [
+    { m: 1, x: -0.4, y: 0, z: 0, vx: 0.1, vy: 0, vz: 0 },
+    { m: 1, x: 0.4, y: 0, z: 0, vx: -0.1, vy: 0, vz: 0 },
+    { m: 0.01, x: 0, y: 6, z: 0, vx: -0.01, vy: 0, vz: 0 }
+  ]
+  const sim = simOf(bodies)
+  let r = { merged: null, drift: 0 }
+  while (!r.merged && sim.t < 50) r = tb.advance(sim, 0.5, 5e-4)
+  assert.ok(r.merged, '前置：发生合并')
+  // 合并是非弹性的（能量真实变化），e0 重定到合并后状态后，
+  // 后续 drift 应回到数值误差量级——不会永久虚高误触发换组
+  const r2 = tb.advance(sim, 10, 5e-4)
+  assert.ok(r2.drift < 0.02, `合并后 drift=${r2.drift.toExponential(2)}（应 <0.02，e0 已重定基）`)
+})
+
+test('批量扫描：随机初值每组都在有限时间到达终局（合并/弹射/数值上限）', () => {
+  const rng = tb.mulberry32(20261030)
+  let events = 0
+  for (let k = 0; k < 30; k++) {
+    const { sim } = tb.initSolution(rng)
+    let r = { merged: null, ejected: null, drift: 0 }
+    let guard = 0
+    while (!r.merged && r.ejected == null && sim.t < 200 && guard++ < 4000) {
+      r = tb.advance(sim, 1, 2e-3)
+      if (r.drift > 0.06) break // 数值失效也算终止（UI 会换组）
+    }
+    if (r.merged || r.ejected != null) events++
+    assert.ok(
+      r.merged || r.ejected != null || r.drift > 0.06 || sim.t >= 200,
+      `第 ${k} 组应到达终局（merged=${r.merged} ejected=${r.ejected} drift=${r.drift.toExponential(1)} t=${sim.t.toFixed(1)}）`
+    )
+  }
+  // 大部分组会在 200 sim 内走到物理终局（合并/弹射）——三体的真实统计行为
+  assert.ok(events >= 15, `30 组里至少 15 组到达合并/弹射（实际 ${events}）`)
+})
+
+test('initSolution：每次都是随机束缚系，三颗星质量互不相等、零总动量', () => {
   const rng = tb.mulberry32(7)
+  const seenMasses = new Set()
   for (let k = 0; k < 30; k++) {
     const { sim, label } = tb.initSolution(rng)
-    assert.ok(['RANDOM IC', 'FIGURE-8', 'BURRAU 3-4-5'].includes(label))
+    assert.equal(label, 'RANDOM IC')
     let px = 0
     let py = 0
     let pz = 0
@@ -126,8 +164,16 @@ test('initSolution：三族初值都是零动量束缚系（或已知周期/教�
       py += b.m * b.vy
       pz += b.m * b.vz
     }
-    // 零动量：figure-8 初值本身严格为 0；Burrau 静止释放也为 0；random 经过 recentre
-    assert.ok(Math.hypot(px, py, pz) < 1e-9, `${label} 总动量应为 0`)
+    // 零动量（recentre 保证）
+    assert.ok(Math.hypot(px, py, pz) < 1e-9, `总动量应为 0`)
     assert.equal(sim.bodies.length, 3)
+    // 束缚系
+    assert.ok(tb.totalEnergy(sim.bodies) < 0, '总能量为负（束缚系）')
+    // 质量互不相等：两两比值 ≥1.2（大小/亮度肉眼可辨）
+    const m = [...sim.bodies.map((b) => b.m)].sort((a, b) => a - b)
+    assert.ok(m[1] / m[0] >= 1.2 && m[2] / m[1] >= 1.2, `质量两两比值应 ≥1.2，实际 [${m.join(', ')}]`)
+    // 每次都不同：30 组的质量签名不全相同
+    seenMasses.add(m.map((x) => x.toFixed(3)).join('|'))
   }
+  assert.ok(seenMasses.size >= 25, `30 组里应几乎每组质量都不同（实际 ${seenMasses.size} 种）`)
 })

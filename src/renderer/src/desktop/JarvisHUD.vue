@@ -16,7 +16,7 @@ import { rpc } from '../lib/host.js'
 import type { FsListResult, FsReadResult } from '../../../protocol/rpc/protocol.js'
 import type { SysStatsSnapshot } from '../../../shared/api.js'
 import { advance, initSolution, mulberry32, type Sim } from '../lib/threebody.js'
-import { drawFrame, drawTrailSeg, fadeTrail, makeView, type Flash, type View } from '../lib/threebodyRender.js'
+import { drawFrame, drawTrailSeg, fadeTrail, makeView, updateCamera, type Flash, type View } from '../lib/threebodyRender.js'
 
 const store = useAppStore()
 
@@ -423,7 +423,7 @@ const triWrap = ref<HTMLDivElement | null>(null)
 const triCanvas = ref<HTMLCanvasElement | null>(null)
 const TRI_RATE = 0.24 // sim 时间 / 秒：figure-8 一圈 ≈ 26 秒，节奏可读
 const TRI_DRIFT_MAX = 0.06 // 相对能量漂移 6% = 数值失效
-const TRI_LIFETIME = 3600 // sim 时间上限：长寿命解也轮换着看
+const TRI_LIFETIME = 180 // sim 时间上限 ≈ 12.5 分钟（速率 0.24）：长寿命束缚系也会轮换，不会一直停在同一个系
 
 let triRaf = 0
 let triLast = 0
@@ -457,6 +457,10 @@ function triNewSolution(): void {
   triResetAt = 0
   triDrift = 0
   if (triTrailCtx && triView) triTrailCtx.clearRect(0, 0, triView.w, triView.h)
+  if (triView) {
+    // 新解相机回到默认视野（上一组的变焦不带到下一组）
+    triView.f = (0.44 * Math.min(triView.w, triView.h) * triView.dist) / 1.6
+  }
   triFade = 0
   triFadeDir = 1
 }
@@ -537,7 +541,8 @@ function triFrame(now: number): void {
     triFadeDir = -1
   }
 
-  // 尾迹层：逐帧衰减 + 新段（淡出时加速抹掉）
+  // 尾迹层：逐帧衰减 + 新段（淡出时加速抹掉）；相机跟踪核心（单星远足不举着全场缩放）
+  updateCamera(view, sim.bodies, dtWall)
   fadeTrail(triTrailCtx, view, triFadeDir < 0 ? 0.12 : 0.013)
   for (let i = 0; i < sim.bodies.length; i++) {
     const b = sim.bodies[i]!

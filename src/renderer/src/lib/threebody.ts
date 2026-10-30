@@ -9,11 +9,9 @@
 //   留下一对双星 + 一颗飞走），由 UI 层延时换下一组初值；
 // · 能量漂移监控：|E−E₀|/|E₀| 超阈值 = 数值失效，UI 静默换组，绝不把假轨道当真演下去。
 //
-// 初值三族（都是三体研究里的真实对象）：
-//   figure-8    Chenciner–Montgomery (2000) 周期解 + 小扰动 → 长寿命混沌；
-//   Pythagorean Burrau (1913)：m=3,4,5 静止释放，经典教科书初值（质点版 t≈60 弹射结局；
-//   恒星有半径，深交会会先撞上——t≈9.2 m4+m5 合并，同样是对初值收敛的真实事件）；
-//   random      随机束缚系（拒绝采样保证总能量为负、间距充足、角动量大致共面）。
+// 初值：每次换组都是全新随机系（用户要求：三颗星质量互不相等、每次随机质量和位置）。
+// 束缚系拒绝采样（总能量为负、间距充足）；figure-8 / Burrau 等已知解保留导出，
+// 仅作积分器正确性的回归基准（test/threebody.test.cjs），不再进初值池。
 //
 // 纯逻辑零 DOM：node --test 直接测（test/threebody.test.cjs 验证周期回归/守恒量/结局事件）。
 
@@ -303,13 +301,26 @@ export function makePythagorean(): Body[] {
   return bodies
 }
 
-/** 随机束缚初值：随机质量、准平面盘内随机位置（保持间距）、切向速度为主，
- *  拒绝采样直到总能量为负（束缚系，不会开局就散）。 */
+/** 随机质量三元组：重采样直到排序后两两比值都 ≥1.2（半径 ∝ m^0.36、亮度 ∝ m，
+ *  差 20% 起步大小/亮度才肉眼可辨）。 */
+function massTriplet(rng: () => number): number[] {
+  for (let k = 0; k < 96; k++) {
+    const m = [0, 0, 0].map(() => 0.4 + rng() * 2.0)
+    const s = [...m].sort((a, b) => a - b)
+    if (s[1]! / s[0]! >= 1.2 && s[2]! / s[1]! >= 1.2) return m
+  }
+  // 理论上到不了；兜底给固定阶梯（仍互不相等）
+  return [0.5, 1.0, 2.0]
+}
+
+/** 随机束缚初值：随机质量（三颗互不相等，两两比值 ≥1.2，大小/亮度肉眼可辨）、
+ *  准平面盘内随机位置（保持间距）、切向速度为主，拒绝采样直到总能量为负（束缚系）。 */
 export function makeRandomIC(rng: () => number): Body[] {
+  const masses = massTriplet(rng)
   for (let tries = 0; tries < 64; tries++) {
     const bodies: Body[] = []
     for (let i = 0; i < 3; i++) {
-      bodies.push({ m: 0.7 + rng() * 1.7, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 })
+      bodies.push({ m: masses[i]!, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 })
     }
     let placed = false
     for (let k = 0; k < 24 && !placed; k++) {
@@ -338,36 +349,26 @@ export function makeRandomIC(rng: () => number): Body[] {
     recentre(bodies)
     if (totalEnergy(bodies) < -0.05) return bodies
   }
-  // 64 次抽不中束缚系几乎不可能；兜底给 figure-8 扰动版
-  return makeFigure8(rng, 0.01)
+  // 兜底：理论上到不了；万一 64 次都抽不中束缚系，再随机一组位置直接返回
+  const fallbackMasses = massTriplet(rng)
+  const bodies: Body[] = []
+  for (let i = 0; i < 3; i++) {
+    bodies.push({ m: fallbackMasses[i]!, x: (rng() * 2 - 1) * 0.8, y: (rng() * 2 - 1) * 0.8, z: 0, vx: 0, vy: 0, vz: 0 })
+  }
+  recentre(bodies)
+  return bodies
 }
 
-export type SolutionKind = 'figure8' | 'pythagorean' | 'random'
+export type SolutionKind = 'random'
 
-/** 挑一组初值建 Sim：random 一半（每组都不同），figure-8 与 Burrau 各约四分之一。
- *  返回的 label 是初值来源（HUD 遥测行显示——这不是随便飞的点，是有出处的三体解）。 */
+/** 挑一组初值建 Sim：每次都是全新随机系（质量互不相等、位置随机）。
+ *  label 显示在 HUD 遥测行。 */
 export function initSolution(rng: () => number): { sim: Sim; label: string; kind: SolutionKind } {
-  const roll = rng()
-  let bodies: Body[]
-  let label: string
-  let kind: SolutionKind
-  if (roll < 0.5) {
-    bodies = makeRandomIC(rng)
-    label = 'RANDOM IC'
-    kind = 'random'
-  } else if (roll < 0.78) {
-    bodies = makeFigure8(rng, 0.004 + rng() * 0.012)
-    label = 'FIGURE-8'
-    kind = 'figure8'
-  } else {
-    bodies = makePythagorean()
-    label = 'BURRAU 3-4-5'
-    kind = 'pythagorean'
-  }
+  const bodies = makeRandomIC(rng)
   return {
     sim: { bodies, t: 0, e0: totalEnergy(bodies), l0: angularMomentum(bodies), eject: null, ejectAt: null },
-    label,
-    kind
+    label: 'RANDOM IC',
+    kind: 'random'
   }
 }
 
@@ -409,6 +410,9 @@ export function advance(sim: Sim, dtTotal: number, dtBase = 4e-3): FrameResult {
     if (pair) {
       mergeInto(sim, pair)
       res.merged = pair
+      // 合并是非弹性的（动能真实变化），之后能量基准重定到合并后的状态——
+      // 否则 drift 永久虚高，数值误差监控就失真了
+      sim.e0 = totalEnergy(sim.bodies)
       break
     }
   }
@@ -421,6 +425,8 @@ export function advance(sim: Sim, dtTotal: number, dtBase = 4e-3): FrameResult {
       res.ejected = i
     }
   }
-  res.drift = Math.abs(totalEnergy(sim.bodies) - sim.e0) / Math.max(Math.abs(sim.e0), 1e-9)
+  // NaN 防御：万一状态被污染，让 drift 变成 ∞（触发上层换组）而不是悄悄通过
+  const d = Math.abs(totalEnergy(sim.bodies) - sim.e0) / Math.max(Math.abs(sim.e0), 1e-9)
+  res.drift = Number.isFinite(d) ? d : Infinity
   return res
 }

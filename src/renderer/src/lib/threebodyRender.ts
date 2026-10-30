@@ -27,8 +27,39 @@ export interface View {
   font: string
 }
 
+const DEFAULT_V = 1.6 // 相机默认/开场视野半径（世界单位）
+const EDGE_FRAC = 0.44 // 视野半径映射到画布短边的比例（留边）
+
 export function makeView(w: number, h: number, accent: string, warn: string, font: string): View {
-  return { w, h, cx: w / 2, cy: h / 2, f: Math.min(w, h) * 1.5, dist: 5.4, accent, warn, font }
+  // 焦距与 updateCamera 的目标公式一致（开场不突变）
+  return {
+    w,
+    h,
+    cx: w / 2,
+    cy: h / 2,
+    f: (EDGE_FRAC * Math.min(w, h) * 5.4) / DEFAULT_V,
+    dist: 5.4,
+    accent,
+    warn,
+    font
+  }
+}
+
+/** 动态相机：跟踪「核心」（半径取中位数——单星远足不牵着相机跑）。
+ *  束缚系互甩到 r 2~4 很常见，固定焦距下三颗星全出画=「都消失了」；
+ *  这里视野 = max(2.2×核心, min(1.25×最远, 3.4×核心))：核心始终好，远足的星出画时
+ *  画边缘指示箭头（drawFrame）。f 平滑逼近日标（防止呼吸抖动），限制在合理焦段。 */
+export function updateCamera(view: View, bodies: Body[], dtWall: number): void {
+  if (bodies.length === 0) return
+  const rs = bodies.map((b) => Math.hypot(b.x, b.y, b.z)).sort((a, b) => a - b)
+  const core = rs[Math.floor((rs.length - 1) / 2)]! // 中位数半径
+  const far = rs[rs.length - 1]!
+  const v = Math.max(core * 2.2, Math.min(far * 1.25, core * 3.4), 0.32)
+  const fTarget = (EDGE_FRAC * Math.min(view.w, view.h) * view.dist) / v
+  const lo = 0.45 * Math.min(view.w, view.h)
+  const hi = 4.2 * Math.min(view.w, view.h)
+  const clamped = Math.min(hi, Math.max(lo, fTarget))
+  view.f += (clamped - view.f) * (1 - Math.exp(-dtWall / 0.9))
 }
 
 export interface Projected {
@@ -155,27 +186,48 @@ export function drawFrame(
   for (const { b, i, p } of order) {
     const col = starColor(b.m)
     const rad = 2.2 * Math.cbrt(b.m) * p.scale * sizeK
-    const glow = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, rad * 5)
-    glow.addColorStop(0, 'rgba(255,255,255,0.95)')
-    glow.addColorStop(0.18, rgba(col, 0.85))
-    glow.addColorStop(0.45, rgba(col, 0.2))
-    glow.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.fillStyle = glow
-    ctx.beginPath()
-    ctx.arc(p.sx, p.sy, rad * 5, 0, 6.2832)
-    ctx.fill()
-    ctx.fillStyle = '#fff'
-    ctx.beginPath()
-    ctx.arc(p.sx, p.sy, Math.max(1.2, rad * 0.7), 0, 6.2832)
-    ctx.fill()
-    // 名称标签：α/β/γ + 质量；远处的（scale 小）淡一些
-    const fade = Math.max(0.25, Math.min(0.9, (p.scale - 0.6) * 1.6))
-    ctx.font = `9px ${view.font}`
-    ctx.textAlign = 'left'
-    ctx.fillStyle = view.accent
-    ctx.globalAlpha = fade
-    ctx.fillText(`${meta.names[i] ?? '?'} m=${b.m.toFixed(2)}`, p.sx + rad * 2 + 4, p.sy - rad * 2 - 2)
-    ctx.globalAlpha = 1
+    const onScreen = p.sx > 4 && p.sx < w - 4 && p.sy > 4 && p.sy < h - 4
+    if (onScreen) {
+      const glow = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, rad * 5)
+      glow.addColorStop(0, 'rgba(255,255,255,0.95)')
+      glow.addColorStop(0.18, rgba(col, 0.85))
+      glow.addColorStop(0.45, rgba(col, 0.2))
+      glow.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = glow
+      ctx.beginPath()
+      ctx.arc(p.sx, p.sy, rad * 5, 0, 6.2832)
+      ctx.fill()
+      ctx.fillStyle = '#fff'
+      ctx.beginPath()
+      ctx.arc(p.sx, p.sy, Math.max(1.4, rad * 0.75), 0, 6.2832)
+      ctx.fill()
+      // 名称标签：α/β/γ + 质量；远处的（scale 小）淡一些
+      const fade = Math.max(0.25, Math.min(0.9, (p.scale - 0.6) * 1.6))
+      ctx.font = `9px ${view.font}`
+      ctx.textAlign = 'left'
+      ctx.fillStyle = view.accent
+      ctx.globalAlpha = fade
+      ctx.fillText(`${meta.names[i] ?? '?'} m=${b.m.toFixed(2)}`, p.sx + rad * 2 + 4, p.sy - rad * 2 - 2)
+      ctx.globalAlpha = 1
+    } else {
+      // 出画指示：贴边的空心箭头（远近颗还在演化，只是暂时离场——相机跟核心）
+      const cxp = Math.min(w - 8, Math.max(8, p.sx))
+      const cyp = Math.min(h - 8, Math.max(8, p.sy))
+      const ang = Math.atan2(p.sy - view.cy, p.sx - view.cx)
+      ctx.save()
+      ctx.translate(cxp, cyp)
+      ctx.rotate(ang)
+      ctx.globalAlpha = 0.6
+      ctx.strokeStyle = rgba(col, 0.9)
+      ctx.lineWidth = 1.2
+      ctx.beginPath()
+      ctx.moveTo(-4, -3.5)
+      ctx.lineTo(3, 0)
+      ctx.lineTo(-4, 3.5)
+      ctx.stroke()
+      ctx.restore()
+      ctx.globalAlpha = 1
+    }
   }
 
   // 合并闪光：扩散环（0.9s）
