@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// 贾维斯 HUD（2026-10 重做：3D 全息舞台）：桌面中央一座纯 CSS 3D 的全息投影台——
-// 透视地面上的投影基座（刻度环 + 环形字带 + 扩散波纹）往上打一道光锥，托起一颗斜轴自转的
-// 线框地球（经线 + 纬线），两条轨道环带卫星点穿过它前后（preserve-3d 真实深度排序），中心是反应堆核。
+// 贾维斯 HUD（2026-11 中央舞台换成三体）：桌面中央一座全息投影台——透视地面上的投影基座
+// （刻度环 + 环形字带 + 扩散波纹）往上打一道光锥，托起一个真实的三体系统：三颗恒星在彼此的
+// 牛顿引力下实时演化（物理在 lib/threebody.ts：velocity Verlet、无 softening、碰撞合并/弹射事件，
+// 不是预设动画），渲染在 lib/threebodyRender.ts（针孔投影/尾迹/遥测）。
 // 内容只留真实且有用的两块，做成两侧向内斜的全息玻璃板（像座舱 HUD）：
 //   左板：时钟 / 日期 / 机器连接状态；右板：当前服务器 CPU/RAM/GPU 条形仪表 + 显存/进程数
 //   （Linux 走 fs.read 读 /proc+/sys，Windows 本机走主进程 IPC，异机走 sysstats.json 桥）。
@@ -14,6 +15,8 @@ import { useAppStore } from '../stores/app.js'
 import { rpc } from '../lib/host.js'
 import type { FsListResult, FsReadResult } from '../../../protocol/rpc/protocol.js'
 import type { SysStatsSnapshot } from '../../../shared/api.js'
+import { advance, initSolution, mulberry32, type Sim } from '../lib/threebody.js'
+import { drawFrame, drawTrailSeg, fadeTrail, makeView, type Flash, type View } from '../lib/threebodyRender.js'
 
 const store = useAppStore()
 
@@ -413,11 +416,157 @@ const gauges = computed(() => [
   { key: 'GPU', text: gpuText.value, ratio: ratioOf(gpuText.value) }
 ])
 
-// 地球纬线：纬度 φ 处的圈半径 = cosφ、离赤道高度 = sinφ（都按球半径归一）
-const latitudes = [0, 35, -35, 65, -65].map((deg) => {
-  const a = (deg * Math.PI) / 180
-  return { k: Math.cos(a).toFixed(3), y: (-Math.sin(a)).toFixed(3) }
-})
+// ---- 三体舞台（中央）：真实牛顿引力实时演化 ----
+// 换组条件（都是三体的真实终局或数值防御）：碰撞合并剩双星/单星 → 欣赏片刻换组；弹射确认 →
+// 看着它飞走再换组；能量漂移超限 = 数值失效，静默换组；跑满一段超长寿命也轮换。
+const triWrap = ref<HTMLDivElement | null>(null)
+const triCanvas = ref<HTMLCanvasElement | null>(null)
+const TRI_RATE = 0.24 // sim 时间 / 秒：figure-8 一圈 ≈ 26 秒，节奏可读
+const TRI_DRIFT_MAX = 0.06 // 相对能量漂移 6% = 数值失效
+const TRI_LIFETIME = 3600 // sim 时间上限：长寿命解也轮换着看
+
+let triRaf = 0
+let triLast = 0
+let triSim: Sim | null = null
+let triView: View | null = null
+let triNames: string[] = []
+let triLabel = ''
+let triSol = 0
+let triDrift = 0
+let triTrail: HTMLCanvasElement | null = null
+let triTrailCtx: CanvasRenderingContext2D | null = null
+let triCtx: CanvasRenderingContext2D | null = null
+let triPrev: { x: number; y: number; z: number }[] = []
+let triFlashes: Flash[] = []
+let triBanner: { text: string; tone: 'warn' | 'info'; until: number } | null = null
+let triFade = 0
+let triFadeDir = 0 // 1 淡入 / -1 淡出 / 0 定格
+let triResetAt = 0 // 计划换组时刻（performance.now ms）；0 = 未计划
+let triRng = mulberry32((Date.now() ^ Math.trunc(Math.random() * 0xffffffff)) >>> 0)
+let triRO: ResizeObserver | null = null
+
+function triNewSolution(): void {
+  const r = initSolution(triRng)
+  triSim = r.sim
+  triLabel = r.label
+  triNames = ['α', 'β', 'γ']
+  triSol += 1
+  triPrev = r.sim.bodies.map((b) => ({ x: b.x, y: b.y, z: b.z }))
+  triFlashes = []
+  triBanner = null
+  triResetAt = 0
+  triDrift = 0
+  if (triTrailCtx && triView) triTrailCtx.clearRect(0, 0, triView.w, triView.h)
+  triFade = 0
+  triFadeDir = 1
+}
+
+function triResize(): void {
+  const wrap = triWrap.value
+  const canvas = triCanvas.value
+  if (!wrap || !canvas) return
+  const w = Math.max(1, Math.round(wrap.clientWidth))
+  const h = Math.max(1, Math.round(wrap.clientHeight))
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  canvas.width = Math.round(w * dpr)
+  canvas.height = Math.round(h * dpr)
+  triCtx = canvas.getContext('2d')
+  triCtx?.setTransform(dpr, 0, 0, dpr, 0, 0)
+  if (!triTrail) triTrail = document.createElement('canvas')
+  triTrail.width = canvas.width
+  triTrail.height = canvas.height
+  triTrailCtx = triTrail.getContext('2d')
+  triTrailCtx?.setTransform(dpr, 0, 0, dpr, 0, 0)
+  const cs = getComputedStyle(canvas)
+  triView = makeView(
+    w,
+    h,
+    cs.getPropertyValue('--accent').trim() || '#22d3ee',
+    cs.getPropertyValue('--warn').trim() || '#fbbf24',
+    cs.getPropertyValue('--font-hud').trim() || 'monospace'
+  )
+  // 尺寸变了尾迹清空、上一帧位置重取（不然会画出一条横穿画面的线）
+  if (triSim) triPrev = triSim.bodies.map((b) => ({ x: b.x, y: b.y, z: b.z }))
+}
+
+function triFrame(now: number): void {
+  triRaf = requestAnimationFrame(triFrame)
+  const sim = triSim
+  const view = triView
+  const wrap = triWrap.value
+  if (!sim || !view || !wrap || !triCtx || !triTrailCtx || !triTrail) return
+  const dtWall = Math.min(0.05, Math.max(0.001, (now - triLast) / 1000))
+  triLast = now
+
+  // 淡入（0.9s）/ 淡出（0.5s）；淡出到 0 → 换新初值，下一帧开始淡入
+  if (triFadeDir !== 0) {
+    triFade = Math.max(0, Math.min(1, triFade + (triFadeDir * dtWall) / (triFadeDir > 0 ? 0.9 : 0.5)))
+    if (triFade === 0) {
+      triNewSolution()
+      wrap.style.opacity = '0'
+      return
+    }
+    if (triFade === 1) triFadeDir = 0
+    wrap.style.opacity = triFade.toFixed(3)
+  }
+
+  // 物理：真实时间 × 速率；事件按三体的真实终局处理
+  const r = advance(sim, dtWall * TRI_RATE)
+  triDrift = r.drift
+  if (r.merged) {
+    const [i, j] = r.merged
+    const merged = sim.bodies[i]!
+    triFlashes.push({ x: merged.x, y: merged.y, z: merged.z, t0: now })
+    triNames[i] = `${triNames[i]!}+${triNames[j]!}`
+    triNames.splice(j, 1)
+    triPrev.splice(j, 1)
+    triBanner = { text: `MERGE → ${triNames[i]!}`, tone: 'info', until: now + 5000 }
+    // 剩双星欣赏 8 秒；只剩单星 3.5 秒
+    triResetAt = now + (sim.bodies.length === 1 ? 3500 : 8000)
+  }
+  if (r.ejected != null) {
+    triBanner = { text: `EJECT ${triNames[r.ejected]!}`, tone: 'warn', until: now + 6000 }
+    triResetAt = now + 6500 // 看着它飞出去再换
+  }
+  if (r.drift > TRI_DRIFT_MAX || sim.t > TRI_LIFETIME) {
+    // 数值失效 / 超长寿命：静默换组（走淡出），不把假轨道演下去
+    if (!triResetAt) triResetAt = now + 100
+  }
+  if (triResetAt && now >= triResetAt && triFadeDir === 0) {
+    triResetAt = 0
+    triFadeDir = -1
+  }
+
+  // 尾迹层：逐帧衰减 + 新段（淡出时加速抹掉）
+  fadeTrail(triTrailCtx, view, triFadeDir < 0 ? 0.12 : 0.013)
+  for (let i = 0; i < sim.bodies.length; i++) {
+    const b = sim.bodies[i]!
+    drawTrailSeg(triTrailCtx, view, b, triPrev[i] ?? { x: b.x, y: b.y, z: b.z })
+    triPrev[i] = { x: b.x, y: b.y, z: b.z }
+  }
+
+  drawFrame(triCtx, triTrail, view, sim, {
+    names: triNames,
+    label: triLabel,
+    sol: triSol,
+    drift: triDrift,
+    flashes: triFlashes,
+    banner: triBanner,
+    now
+  })
+  triFlashes = triFlashes.filter((f) => now - f.t0 < 900)
+  if (triBanner && now > triBanner.until) triBanner = null
+}
+
+function triOnVisibility(): void {
+  if (document.hidden) {
+    window.cancelAnimationFrame(triRaf)
+    triRaf = 0
+  } else if (!triRaf) {
+    triLast = performance.now()
+    triRaf = requestAnimationFrame(triFrame)
+  }
+}
 
 // 基座刻度环：72 根（每 6 根一根长的），几何在这里算好，模板只管画
 const ticks = Array.from({ length: 72 }, (_, i) => {
@@ -437,11 +586,27 @@ onMounted(() => {
   tick()
   timer = window.setInterval(tick, 1000)
   void pollRemote()
+  // 三体舞台：起一组初值、量尺寸、开循环
+  triNewSolution()
+  triResize()
+  triRO = new ResizeObserver(() => triResize())
+  if (triWrap.value) triRO.observe(triWrap.value)
+  document.addEventListener('visibilitychange', triOnVisibility)
+  triLast = performance.now()
+  triRaf = requestAnimationFrame(triFrame)
 })
 onBeforeUnmount(() => {
   disposed = true
   window.clearInterval(timer)
   window.clearTimeout(remoteTimer)
+  if (triRaf) window.cancelAnimationFrame(triRaf)
+  triRO?.disconnect()
+  document.removeEventListener('visibilitychange', triOnVisibility)
+  triTrail = null
+  triTrailCtx = null
+  triCtx = null
+  triView = null
+  triSim = null
 })
 </script>
 
@@ -467,7 +632,7 @@ onBeforeUnmount(() => {
           />
           <text class="ring-text">
             <textPath href="#hud-ring-path" textLength="1000" lengthAdjust="spacing">
-              FRIDAY · HOLOGRAPHIC INTERFACE · SYSTEM ONLINE · FRIDAY · HOLOGRAPHIC INTERFACE · SYSTEM ONLINE ·
+              THREE-BODY · REAL N-BODY · SYSTEM ONLINE · THREE-BODY · REAL N-BODY · SYSTEM ONLINE ·
             </textPath>
           </text>
         </svg>
@@ -480,27 +645,15 @@ onBeforeUnmount(() => {
         <div class="ripple r2" />
       </div>
 
-      <!-- 光锥：从基座往上打到地球，竖向光纹 + 轻微闪烁 -->
+      <!-- 光锥：从基座往上打到三体系统，竖向光纹 + 轻微闪烁 -->
       <div class="beam" />
 
-      <!-- 线框地球（斜轴自转）+ 两条轨道环：同一 3D 空间里互相穿插，前后遮挡由浏览器深度排序 -->
-      <div class="globe-wrap">
-        <div class="globe">
-          <i v-for="n in 6" :key="`lon${n}`" class="lon" :class="{ dash: n % 2 === 0 }" :style="{ '--i': n }" />
-          <i v-for="(l, n) in latitudes" :key="`lat${n}`" class="lat" :style="{ '--k': l.k, '--y': l.y }" />
-        </div>
-        <div class="orbit o1"><div class="orbit-spin"><span class="sat" /></div></div>
-        <div class="orbit o2"><div class="orbit-spin"><span class="sat" /></div></div>
-      </div>
+      <!-- 三体系统：三颗恒星在彼此的牛顿引力下实时演化（物理 lib/threebody.ts，渲染
+           lib/threebodyRender.ts）；碰撞合并 / 弹射 / 能量失效都会淡出换下一组初值——
+           这些就是三体的真实终局。零动量系，质心十字标在系统不动点 -->
+      <div class="tri-wrap" ref="triWrap"><canvas ref="triCanvas" class="tri" /></div>
 
-      <!-- 反应堆核：球心的光核 + 三角徽记（始终正对观察者） -->
-      <div class="nucleus" />
-      <svg class="reactor" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r="30" fill="none" stroke-width="1.5" stroke-dasharray="14 5.7" />
-        <path d="M50 34 L64 58 L36 58 Z" />
-      </svg>
-
-      <!-- 全息扫描纹：盖在地球前面（离观察者更近的一层），细横纹 + 一道上下扫的亮带 -->
+      <!-- 全息扫描纹：盖在三体系统前面（离观察者更近的一层），细横纹 + 一道上下扫的亮带 -->
       <div class="holo-scan" />
 
       <!-- 左板：时间 / 连接（向内斜的全息玻璃） -->
@@ -539,8 +692,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* ============ 舞台尺寸 ============
-   --s：舞台边长（地球直径 = 0.5s、基座直径 = 1.3s），跟主区容器走（App.vue .main-area 是 size 容器）：
-   上让出语音波形屏、下让出输入台；宽主区再让出两侧玻璃板。--R = 地球半径。 */
+   --s：舞台边长（三体全息体积 ≈ 1.3s、基座直径 = 1.3s），跟主区容器走（App.vue .main-area 是 size 容器）：
+   上让出语音波形屏、下让出输入台；宽主区再让出两侧玻璃板。--R = 全息扫描纹的参考半径。 */
 .jarvis-hud {
   position: absolute;
   inset: 0;
@@ -689,149 +842,30 @@ onBeforeUnmount(() => {
   73% { opacity: 0.85; }
 }
 
-/* ============ 线框地球 ============ */
-.globe-wrap {
+/* ============ 三体系统（真实牛顿引力，物理见 lib/threebody.ts） ============
+   canvas 铺在 .stage 的 preserve-3d 空间里，整台转动（鼠标视差）带着它转；
+   内部是固定仰角针孔投影 + 尾迹离屏层（lib/threebodyRender.ts）。
+   透明度由 JS 控：换初值时淡出淡入；边缘径向渐隐（投影中心为圆心）
+   在合成器线程做，不占每帧绘制。 */
+.tri-wrap {
   left: 50%;
   top: 40%;
-  width: calc(var(--R) * 2);
-  height: calc(var(--R) * 2);
-  translate: -50% -50%;
-  transform-style: preserve-3d;
-  /* 斜轴 + 略俯视：北极朝观察者倾一点，纬线圈看得出椭圆 */
-  transform: rotateX(-16deg) rotateZ(-14deg);
-}
-
-.globe {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  animation: hud-spin-y 32s linear infinite;
-}
-
-.globe > i {
-  position: absolute;
-  border-radius: 50%;
-  border: 1px solid var(--accent-a50);
-  box-shadow: 0 0 6px var(--accent-a25);
-}
-
-/* 经线：6 个大圆绕竖轴每 30° 一个（12 条经线） */
-.lon {
-  inset: 0;
-  transform: rotateY(calc(var(--i) * 30deg));
-}
-
-.lon.dash {
-  border-style: dashed;
-  border-color: var(--accent-a35);
-}
-
-/* 纬线：半径 cosφ、高度 sinφ，放平（rotateX 90°）再抬到对应高度 */
-.lat {
-  left: 50%;
-  top: 50%;
-  width: calc(var(--k) * 100%);
+  width: calc(var(--s) * 1.3);
   aspect-ratio: 1;
   translate: -50% -50%;
-  transform: translateY(calc(var(--y) * var(--R))) rotateX(90deg);
-  border-color: var(--accent-a35);
+  opacity: 0;
+  -webkit-mask-image: radial-gradient(circle at 50% 46%, #000 58%, transparent 96%);
+  mask-image: radial-gradient(circle at 50% 46%, #000 58%, transparent 96%);
 }
 
-/* 轨道环：两条不同倾角的环带一颗卫星点，环在自己平面里转 */
-.orbit {
-  position: absolute;
-  border-radius: 50%;
-  border: 1px solid var(--accent-a30);
-}
-
-.orbit.o1 {
-  inset: -24%;
-  transform: rotateX(76deg) rotateY(-12deg);
-}
-
-.orbit.o2 {
-  inset: -42%;
-  border-style: dashed;
-  border-color: var(--accent-a22);
-  transform: rotateX(68deg) rotateY(24deg);
-}
-
-.orbit-spin {
-  position: absolute;
-  inset: 0;
-  animation: hud-spin 10s linear infinite;
-  will-change: transform;
-}
-
-.o2 .orbit-spin {
-  animation: hud-spin-rev 17s linear infinite;
-}
-
-.sat {
-  position: absolute;
-  left: 50%;
-  top: -3px;
-  width: 6px;
-  height: 6px;
-  margin-left: -3px;
-  border-radius: 50%;
-  background: var(--accent-brighter);
-  box-shadow: 0 0 10px var(--accent), 0 0 3px #fff;
-}
-
-/* ============ 反应堆核 ============ */
-.nucleus {
-  left: 50%;
-  top: 40%;
-  width: calc(var(--s) * 0.22);
-  aspect-ratio: 1;
-  translate: -50% -50%;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    #fff 0,
-    var(--accent-brighter) 12%,
-    var(--accent-a55) 30%,
-    var(--accent-a12) 52%,
-    transparent 70%
-  );
-  animation: hud-pulse 3.2s ease-in-out infinite;
-  will-change: transform, opacity;
-}
-
-.reactor {
-  left: 50%;
-  top: 40%;
-  width: calc(var(--s) * 0.13);
-  height: calc(var(--s) * 0.13);
-  translate: -50% -50%;
-  overflow: visible;
-  filter: drop-shadow(0 0 3px var(--accent));
-  animation: hud-spin-rev 14s linear infinite;
-  will-change: transform;
-}
-
-.reactor circle {
-  stroke: var(--accent-brighter);
-  opacity: 0.9;
-}
-
-.reactor path {
-  fill: none;
-  stroke: #fff;
-  stroke-width: 2;
-  opacity: 0.85;
-}
-
-@keyframes hud-pulse {
-  50% {
-    opacity: 0.7;
-    transform: scale(0.88);
-  }
+.tri {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* ============ 全息扫描纹 ============
-   放在地球前方（translateZ 一个半径多），细横纹压暗出全息质感，亮带每 4.5 秒从上扫到下 */
+   放在三体系统前方（translateZ 一个半径多），细横纹压暗出全息质感，亮带每 4.5 秒从上扫到下 */
 .holo-scan {
   left: 50%;
   top: 40%;
@@ -1077,9 +1111,6 @@ onBeforeUnmount(() => {
 }
 @keyframes hud-spin-rev {
   to { transform: rotate(-360deg); }
-}
-@keyframes hud-spin-y {
-  to { transform: rotateY(360deg); }
 }
 
 /* 注：装饰动画不随系统 prefers-reduced-motion 关闭——动效是主题核心体验，
